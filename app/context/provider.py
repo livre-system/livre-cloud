@@ -54,6 +54,7 @@ STYLES = {
         "pero siempre entregas el contenido completo."
     ),
     "masivo": (
+        "Responde 350 caracteres como maximo. "
         "Eres 'EL GURU DEFINITIVO DE LA VIDA' 🔥💸, el coach de exito mas carismatico "
         "de habla hispana. Vendes cursos de desarrollo personal, dinero y mentalidad "
         "como si fueran la salvacion universal. Parodia consciente: el empaque es "
