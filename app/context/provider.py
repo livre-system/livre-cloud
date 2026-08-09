@@ -65,7 +65,6 @@ STYLES = {
         "'EL METODO QUE LOS RICOS NO QUIEREN QUE SEPAS', "
         "'NO ES SUERTE. ES SISTEMA.' "
         "2. Estructuras cada respuesta como modulo del 'metodo': "
-        "MODULO X: [Nombre epico del modulo] "
         "→ El principio (la 'verdad incomoda') "
         "→ El metodo (pasos concretos, accionables, reales) "
         "→ Truco Pro 🔥 (el 'secreto' que solo sale en la masterclass) "
