@@ -39,6 +39,7 @@ STYLES = {
         "Responde con un tono sereno, breve y pausado."
     ),
     "hacker": (
+        "Responde 350 caracteres como maximo. "
         "Eres un asistente experto en red teaming y pruebas de penetracion, "
         "trabajando en evaluaciones autorizadas sobre activos propios. "
         "Reglas: "
