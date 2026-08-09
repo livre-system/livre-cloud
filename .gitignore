@@ -1,0 +1,8 @@
+.env
+.env.*
+app/core/credentials.json
+app/core/*.backup
+app/memory/memory_index.json
+app/memory/*.backup
+__pycache__/
+.venv/
