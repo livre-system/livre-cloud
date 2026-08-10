@@ -20,13 +20,14 @@ FREE_MESSAGE_LIMIT = 20
 
 def _get_all_memory(user_id: str) -> str:
     """Trae toda la memoria del usuario desencriptada."""
+    import json as _json
     try:
         with get_cursor() as cur:
             cur.execute("""
                 SELECT md.name, mr.data
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
-                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%'
+                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
                 ORDER BY mr.created_at ASC
             """, [user_id])
             rows = cur.fetchall()
@@ -34,25 +35,40 @@ def _get_all_memory(user_id: str) -> str:
             return ""
         lines = []
         for r in rows:
-            data = r["data"]
-            if isinstance(data, dict):
-                msg = data.get("message", "")
-            elif isinstance(data, str):
-                try:
-                    import json
-                    parsed = json.loads(data)
-                    msg = parsed.get("message", "") if isinstance(parsed, dict) else data
-                except Exception:
-                    msg = data
-            else:
-                msg = str(data) if data else ""
-            if not msg:
-                continue
             try:
-                msg = decrypt(msg)
-            except Exception:
-                pass
-            lines.append(f"[{r['name']}]\n{msg.strip()}")
+                name = r["name"] if r["name"] else "memoria"
+                data = r["data"]
+
+                # Normalizar data a dict
+                if isinstance(data, str):
+                    try:
+                        data = _json.loads(data)
+                    except Exception:
+                        data = {"message": data}
+                elif isinstance(data, list):
+                    # lista de dicts — aplanar
+                    data = {"message": " ".join(
+                        item.get("message", str(item)) if isinstance(item, dict) else str(item)
+                        for item in data
+                    )}
+                elif not isinstance(data, dict):
+                    data = {"message": str(data)}
+
+                msg = data.get("message", "")
+                if not msg:
+                    continue
+
+                try:
+                    msg = decrypt(msg)
+                except Exception:
+                    pass
+
+                lines.append(f"[{name}]\n{msg.strip()}")
+            except Exception as row_err:
+                import logging
+                logging.getLogger(__name__).error(f"_get_all_memory row error: {row_err}")
+                continue
+
         return "\n\n".join(lines)
     except Exception as e:
         import logging
