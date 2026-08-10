@@ -6,7 +6,6 @@ from app.llm.factory import get_llm_provider
 from app.context.provider import get_hash_sources
 from app.compiler.base_compiler import compile_base_context
 from app.compiler.style_compiler import compile_style_context
-from app.compiler.user_compiler import compile_user_context
 from app.memory.service import read_user_memory, save_message_to_memory
 from app.memory.repository import search_memory_by_embedding
 from app.core.database import get_cursor
@@ -68,8 +67,8 @@ def _search_memory(user_id: str, query: str) -> str:
     return "\n\n".join(lines)
 
 
-def _build_system_prompt(user_id: str, query: str = "", mode: str = "conspiranoico") -> str:
-    sources = get_hash_sources(mode)
+def _build_system_prompt(user_id: str, query: str = "") -> str:
+    sources = get_hash_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
@@ -260,8 +259,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
                 repo.update_chat_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        mode = getattr(body, "mode", "conspiranoico") or "conspiranoico"
-        system_prompt = _build_system_prompt(user["id"], query, mode)
+        system_prompt = _build_system_prompt(user["id"], query)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider()
 
