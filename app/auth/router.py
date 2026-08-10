@@ -25,6 +25,7 @@ _DESTINOS = {
     "ai":       "https://hash-ia.site",
     "job":      "https://hash-ia.site",
     "commerce": "https://hashcommerce.site",
+    "livre":    "https://livre-ia-front.vercel.app",
 }
 
 
