@@ -102,13 +102,17 @@ def _build_system_prompt(user_id: str, query: str = "") -> str:
     memory_text = _get_all_memory(user_id)
 
     print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)
+    memory_block = (
+        f"=== DATOS OPERATIVOS (FUENTE PRIMARIA) ===\n"
+        f"Los siguientes datos son la única fuente de verdad para responder. "
+        f"Usá estos registros directamente. No los ignores ni los contradigas.\n\n"
+        f"{memory_text}\n\n"
+        f"=== FIN DATOS OPERATIVOS ===\n\n"
+    ) if memory_text else ""
     return (
+        f"{style_context['sources']['style']}\n\n"
         f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
-        + (f"Memoria relevante:\n{memory_text}\n\n" if memory_text else "")
-        + f"Identidad de HASH:\n{base_context['sources']['cognitive_base']}\n\n"
-        f"Log personal:\n{base_context['sources']['personal_log']}\n\n"
-        f"Destilador:\n{base_context['sources']['destilador']}\n\n"
-        f"Estilo:\n{style_context['sources']['style']}"
+        + memory_block
     )
 
 
