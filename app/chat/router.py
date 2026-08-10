@@ -72,7 +72,7 @@ def _build_system_prompt(user_id: str, query: str = "") -> str:
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    memory_text = _search_memory(user_id, query) if query else ""
+    memory_text = _get_all_memory(user_id)
 
     print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)
     return (
@@ -316,9 +316,8 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 @router.get("/debug/memory")
 def debug_memory(user: dict = Depends(require_auth)):
     """Muestra cuánto texto de memoria se está mandando al LLM."""
-    test_query = "test"
-    memory_text = _search_memory(user["id"], test_query)
-    system_prompt = _build_system_prompt(user["id"], test_query)
+    memory_text = _get_all_memory(user["id"])
+    system_prompt = _build_system_prompt(user["id"])
     return {
         "memory_chars": len(memory_text),
         "memory_preview": memory_text[:300] if memory_text else "(vacío)",
