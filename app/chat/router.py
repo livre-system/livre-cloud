@@ -34,7 +34,18 @@ def _get_all_memory(user_id: str) -> str:
             return ""
         lines = []
         for r in rows:
-            msg = r["data"].get("message", "")
+            data = r["data"]
+            if isinstance(data, dict):
+                msg = data.get("message", "")
+            elif isinstance(data, str):
+                try:
+                    import json
+                    parsed = json.loads(data)
+                    msg = parsed.get("message", "") if isinstance(parsed, dict) else data
+                except Exception:
+                    msg = data
+            else:
+                msg = str(data) if data else ""
             if not msg:
                 continue
             try:
