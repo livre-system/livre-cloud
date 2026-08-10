@@ -60,6 +60,7 @@ app.add_middleware(
         "https://hash-commerce-inky.vercel.app",
         "https://hashcommerce.site",
         "https://www.hashcommerce.site",
+        "https://livre-ia-front.vercel.app",
     ],
     allow_origin_regex=r"https://.*\.hashcommerce\.site",
     allow_credentials=True,
