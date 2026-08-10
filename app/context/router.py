@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from app.core.jwt import require_auth
-from app.context.provider import get_hash_context
+from app.context.provider import get_hash_sources
 
 router = APIRouter(prefix="/context", tags=["context"])
 
@@ -9,5 +9,5 @@ router = APIRouter(prefix="/context", tags=["context"])
 def get_context(user: dict = Depends(require_auth)):
     return {
         "user": user,
-        "hash": get_hash_context(),
+        "hash": get_hash_sources(),
     }
