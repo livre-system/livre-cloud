@@ -22,7 +22,7 @@ oauth.register(
 
 # Destinos válidos por app
 _DESTINOS = {
-    "livre": "https://livre-ia-front.vercel.app",
+    "livre": "https://livre-chatbot.vercel.app",
 }
 
 
