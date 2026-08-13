@@ -1,9 +1,9 @@
 from datetime import datetime, timezone
 
 
-def compile_hash_context(base: dict, user: dict, style: dict) -> dict:
+def compile_livre_context(base: dict, user: dict, style: dict) -> dict:
     return {
-        "type": "hash",
+        "type": "livre",
         "contexts": {
             "base": base,
             "user": user,

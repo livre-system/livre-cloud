@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse, Response
 from app.core.jwt import require_auth
 from app.voice.factory import get_voice_provider
 from app.llm.factory import get_llm_provider
-from app.context.provider import get_hash_sources
+from app.context.provider import get_livre_sources
 from app.compiler.base_compiler import compile_base_context
 from app.compiler.style_compiler import compile_style_context
 from app.memory.service import read_user_memory, save_message_to_memory
@@ -68,7 +68,7 @@ def _search_memory(user_id: str, query: str) -> str:
 
 
 def _build_system_prompt(user_id: str, query: str = "") -> str:
-    sources = get_hash_sources()
+    sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 

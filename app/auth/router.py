@@ -22,17 +22,14 @@ oauth.register(
 
 # Destinos válidos por app
 _DESTINOS = {
-    "ai":       "https://hash-ia.site",
-    "job":      "https://hash-ia.site",
-    "commerce": "https://hashcommerce.site",
-    "livre":    "https://livre-ia-front.vercel.app",
+    "livre": "https://livre-ia-front.vercel.app",
 }
 
 
 @router.get("/login")
-async def login(request: Request, next: str = "ai"):
+async def login(request: Request, next: str = "livre"):
     # Guardar destino en sesión para recuperarlo en el callback
-    request.session["next"] = next if next in _DESTINOS else "ai"
+    request.session["next"] = next if next in _DESTINOS else "livre"
     return await oauth.google.authorize_redirect(request, GOOGLE_REDIRECT_URI)
 
 
@@ -64,8 +61,8 @@ async def callback(request: Request):
     }
 
     # Leer destino guardado en sesión
-    next_app = request.session.pop("next", "ai")
-    destino = _DESTINOS.get(next_app, _DESTINOS["ai"])
+    next_app = request.session.pop("next", "livre")
+    destino = _DESTINOS.get(next_app, _DESTINOS["livre"])
 
     return RedirectResponse(
         url=f"{destino}?code={code}",

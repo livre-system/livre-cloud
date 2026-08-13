@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.jwt import require_auth
-from app.context.provider import get_hash_sources
+from app.context.provider import get_livre_sources
 from app.compiler.base_compiler import compile_base_context
 from app.compiler.user_compiler import compile_user_context
 from app.compiler.style_compiler import compile_style_context
-from app.compiler.hash_compiler import compile_hash_context
+from app.compiler.livre_compiler import compile_livre_context
 from app.memory.service import read_user_memory
 
 router = APIRouter(prefix="/compiler", tags=["compiler"])
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/compiler", tags=["compiler"])
 
 @router.get("/base")
 def compiler_base(user: dict = Depends(require_auth)):
-    sources = get_hash_sources()
+    sources = get_livre_sources()
     return compile_base_context(sources)
 
 
@@ -28,13 +28,13 @@ def compiler_user(user: dict = Depends(require_auth)):
 
 @router.get("/style")
 def compiler_style(user: dict = Depends(require_auth)):
-    sources = get_hash_sources()
+    sources = get_livre_sources()
     return compile_style_context(sources)
 
 
-@router.get("/hash")
-def compiler_hash(user: dict = Depends(require_auth)):
-    sources = get_hash_sources()
+@router.get("/livre")
+def compiler_livre(user: dict = Depends(require_auth)):
+    sources = get_livre_sources()
     base = compile_base_context(sources)
     style = compile_style_context(sources)
 
@@ -45,4 +45,4 @@ def compiler_hash(user: dict = Depends(require_auth)):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=memory["error"])
     user_ctx = compile_user_context(memory)
 
-    return compile_hash_context(base, user_ctx, style)
+    return compile_livre_context(base, user_ctx, style)

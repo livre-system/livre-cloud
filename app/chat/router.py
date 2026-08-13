@@ -3,7 +3,7 @@ from fastapi.responses import StreamingResponse, Response
 from app.core.jwt import require_auth
 from app.voice.factory import get_voice_provider
 from app.llm.factory import get_llm_provider
-from app.context.provider import get_hash_sources
+from app.context.provider import get_livre_sources
 from app.compiler.base_compiler import compile_base_context
 from app.compiler.style_compiler import compile_style_context
 from app.memory.service import read_user_memory, save_message_to_memory
@@ -20,14 +20,13 @@ FREE_MESSAGE_LIMIT = 20
 
 def _get_all_memory(user_id: str) -> str:
     """Trae toda la memoria del usuario desencriptada."""
-    import json as _json
     try:
         with get_cursor() as cur:
             cur.execute("""
                 SELECT md.name, mr.data
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
-                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
+                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%'
                 ORDER BY mr.created_at ASC
             """, [user_id])
             rows = cur.fetchall()
@@ -35,40 +34,14 @@ def _get_all_memory(user_id: str) -> str:
             return ""
         lines = []
         for r in rows:
-            try:
-                name = r["name"] if r["name"] else "memoria"
-                data = r["data"]
-
-                # Normalizar data a dict
-                if isinstance(data, str):
-                    try:
-                        data = _json.loads(data)
-                    except Exception:
-                        data = {"message": data}
-                elif isinstance(data, list):
-                    # lista de dicts — aplanar
-                    data = {"message": " ".join(
-                        item.get("message", str(item)) if isinstance(item, dict) else str(item)
-                        for item in data
-                    )}
-                elif not isinstance(data, dict):
-                    data = {"message": str(data)}
-
-                msg = data.get("message", "")
-                if not msg:
-                    continue
-
-                try:
-                    msg = decrypt(msg)
-                except Exception:
-                    pass
-
-                lines.append(f"[{name}]\n{msg.strip()}")
-            except Exception as row_err:
-                import logging
-                logging.getLogger(__name__).error(f"_get_all_memory row error: {row_err}")
+            msg = r["data"].get("message", "")
+            if not msg:
                 continue
-
+            try:
+                msg = decrypt(msg)
+            except Exception:
+                pass
+            lines.append(f"[{r['name']}]\n{msg.strip()}")
         return "\n\n".join(lines)
     except Exception as e:
         import logging
@@ -95,24 +68,17 @@ def _search_memory(user_id: str, query: str) -> str:
 
 
 def _build_system_prompt(user_id: str, query: str = "") -> str:
-    sources = get_hash_sources()
+    sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
     memory_text = _get_all_memory(user_id)
 
     print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)
-    memory_block = (
-        f"=== DATOS OPERATIVOS (FUENTE PRIMARIA) ===\n"
-        f"Los siguientes datos son la única fuente de verdad para responder. "
-        f"Usá estos registros directamente. No los ignores ni los contradigas.\n\n"
-        f"{memory_text}\n\n"
-        f"=== FIN DATOS OPERATIVOS ===\n\n"
-    ) if memory_text else ""
     return (
-        f"{style_context['sources']['style']}\n\n"
         f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
-        + memory_block
+        + (f"Contexto operativo:\n{memory_text}\n\n" if memory_text else "")
+        + f"Estilo:\n{style_context['sources']['style']}"
     )
 
 
@@ -347,8 +313,9 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 @router.get("/debug/memory")
 def debug_memory(user: dict = Depends(require_auth)):
     """Muestra cuánto texto de memoria se está mandando al LLM."""
+    test_query = "test"
     memory_text = _get_all_memory(user["id"])
-    system_prompt = _build_system_prompt(user["id"])
+    system_prompt = _build_system_prompt(user["id"], test_query)
     return {
         "memory_chars": len(memory_text),
         "memory_preview": memory_text[:300] if memory_text else "(vacío)",

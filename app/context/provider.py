@@ -19,7 +19,7 @@ DEFAULT_STYLE = (
 )
 
 
-def get_hash_sources() -> dict:
+def get_livre_sources() -> dict:
     return {
         "personal_log": "",
         "cognitive_base": "",

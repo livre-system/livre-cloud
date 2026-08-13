@@ -48,7 +48,7 @@ def memory_export(user: dict = Depends(require_auth)):
     return Response(
         content=text.encode("utf-8"),
         media_type="text/plain",
-        headers={"Content-Disposition": "attachment; filename=memoria_hash.txt"}
+        headers={"Content-Disposition": "attachment; filename=memoria_livre.txt"}
     )
 
 
@@ -222,14 +222,12 @@ async def memory_graph(user: dict = Depends(require_auth)):
     edges = []
     node_ids = {"cerebro"}
 
-    # Nodos de TEMA — van al anillo del medio (sin main ni sub)
     for tema in sections:
         tid = f"tema_{tema}"
         nodes.append({"id": tid, "label": tema.capitalize()})
         edges.append({"from": "cerebro", "to": tid})
         node_ids.add(tid)
 
-    # Subnodos exclusivos de cada tema (no compartidos)
     for tema, kws in tema_keywords.items():
         tid = f"tema_{tema}"
         for kw in kws:
@@ -240,7 +238,6 @@ async def memory_graph(user: dict = Depends(require_auth)):
                     node_ids.add(kid)
                 edges.append({"from": tid, "to": kid})
 
-    # Nodos compartidos — conectados a todos los temas donde aparecen
     for kw, temas in shared_concepts.items():
         kid = f"kw_{kw}"
         if kid not in node_ids:
@@ -249,7 +246,6 @@ async def memory_graph(user: dict = Depends(require_auth)):
         for tema in temas:
             edges.append({"from": f"tema_{tema}", "to": kid})
 
-    # Conectar temas que comparten 3+ keywords
     tema_list = list(sections.keys())
     for i in range(len(tema_list)):
         for j in range(i + 1, len(tema_list)):
