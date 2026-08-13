@@ -30,7 +30,7 @@ app = FastAPI(title="Livre Cloud", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://livre-ia-front.vercel.app",
+        "https://livre-chatbot.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
