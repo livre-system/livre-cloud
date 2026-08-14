@@ -1,58 +1,14 @@
-# HASH Cloud
+# Livre Cloud
 
-Backend del ecosistema HASH.
+Backend del ecosistema Livre.
 
 ## Responsabilidad
 
-HASH Cloud es el núcleo de infraestructura del ecosistema HASH. Concentra los servicios de autenticación, contexto, memoria, compilación de conocimiento y comunicación con servicios externos.
+Livre Cloud es el núcleo de infraestructura del ecosistema Livre. Centraliza los servicios de autenticación, contexto, memoria, compilación de conocimiento y comunicación con servicios externos.
+
+Alimenta el conjunto completo de productos de la plataforma: una aplicación para que los usuarios soliciten viajes, una aplicación e interfaz para conductores, un dashboard CRM que concentra la información operativa de la empresa, y un chatbot multicanal que permite a los administradores consultar en tiempo real el estado de la operación — incluyendo llamadas, conversaciones y eventos — y a los usuarios solicitar viajes tanto por mensaje como por llamada telefónica mediante IA, integrado con WhatsApp.
 
 No implementa el razonamiento del LLM.
-
----
-
-## Estado del proyecto
-
-**Sprint 1.1 — Completado**
-Estructura base del proyecto inicializada.
-
-**Sprint 1.2 — Completado**
-Aplicación FastAPI funcionando localmente con endpoint `/health`.
-
-**Sprint 1.3 — Completado**
-Dockerfile y variables de entorno configurados.
-
-**Sprint 2.1 — Completado**
-Autenticación con Google OAuth implementada.
-
-**Sprint 2.2 — Completado**
-JWT implementado. El callback de Google genera un token. `/auth/me` valida el token y devuelve la identidad del usuario.
-
-**Sprint 2.3 — Completado**
-Autorización de rutas implementada mediante `Depends(require_auth)`.
-
-**Sprint 3.1 — Completado**
-Context API base implementada.
-
-**Sprint 3.2 — Completado**
-ContextProvider implementado. `/context` expone las cuatro fuentes del contexto interno de HASH.
-
-**Sprint 4.1 — Completado**
-Credenciales de usuario cifradas con Fernet y persistidas en Postgres.
-
-**Sprint 4.2 — Completado**
-Persistencia de chats implementada. Los chats y mensajes se guardan en Postgres. Los mensajes se cifran en reposo con Fernet.
-
-**Sprint 5.1 — Completado**
-Base Compiler implementado.
-
-**Sprint 5.2 — Completado**
-User Compiler implementado.
-
-**Sprint 5.3 — Completado**
-Style Compiler implementado.
-
-**Sprint 5.4 — Completado**
-Hash Compiler implementado.
 
 ---
 
@@ -149,8 +105,8 @@ uvicorn app.main:app --reload
 | DELETE | `/chat/{id}` | Bearer JWT | Elimina un chat y todos sus mensajes |
 | POST | `/chat` | Bearer JWT | Genera una respuesta (no-streaming) |
 | POST | `/chat/stream` | Bearer JWT | Genera una respuesta en streaming |
-| GET | `/compiler/base` | Bearer JWT | Construye el BaseContext de HASH |
-| GET | `/compiler/style` | Bearer JWT | Construye el StyleContext de HASH |
+| GET | `/compiler/base` | Bearer JWT | Construye el BaseContext |
+| GET | `/compiler/style` | Bearer JWT | Construye el StyleContext |
 | GET | `/docs` | No | Documentación interactiva |
 
 ---
@@ -193,9 +149,3 @@ app/
     ├── encryption.py
     └── database.py
 ```
-
----
-
-## Desarrollo por Sprints
-
-Este proyecto evoluciona por Sprints. Cada Sprint amplía este documento con información real ya implementada. No se documenta funcionalidad futura.
