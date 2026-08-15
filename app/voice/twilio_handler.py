@@ -27,8 +27,10 @@ def build_gather_response(action_url: str, say_text: str = None) -> str:
         action=action_url,
         method="POST",
         language="es-AR",
-        speech_timeout="auto",
-        timeout=5,
+        speech_timeout=3,
+        timeout=8,
+        speech_model="phone_call",
+        enhanced=True,
     )
 
     if say_text:
@@ -59,8 +61,10 @@ def build_reply_response(reply_text: str, action_url: str) -> str:
         action=action_url,
         method="POST",
         language="es-AR",
-        speech_timeout="auto",
-        timeout=5,
+        speech_timeout=3,
+        timeout=8,
+        speech_model="phone_call",
+        enhanced=True,
     )
 
     gather.say(reply_text, language="es-AR", voice="Polly.Conchita")
