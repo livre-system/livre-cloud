@@ -42,7 +42,7 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 
 
 def _save_audio(key: str, audio_bytes: bytes) -> str:
-    filename = f"{key}.mp3"
+    filename = f"{key}.wav"
     filepath = os.path.join(AUDIO_DIR, filename)
     with open(filepath, "wb") as f:
         f.write(audio_bytes)
@@ -82,10 +82,10 @@ def _build_voice_system_prompt() -> str:
 
 async def _synthesize_speech(text: str) -> bytes:
     response = await openai_client.audio.speech.create(
-        model="tts-1",
+        model="tts-1-hd",
         voice="nova",
         input=text,
-        response_format="mp3",
+        response_format="wav",
     )
     return response.content
 
