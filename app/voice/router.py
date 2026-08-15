@@ -94,7 +94,7 @@ async def _synthesize_speech(text: str) -> bytes:
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "language_code": "es-AR",
+        "language_code": "es",
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.75,
