@@ -1,13 +1,8 @@
 """
 app/voice/router.py
-
-Flujo optimizado para baja latencia:
-  POST /voice/incoming   → saluda con TTS Nova (guardado en disco)
-  POST /voice/respond    → recibe SpeechResult de Gather → GPT-4o → TTS Nova → reproduce
 """
 
 import os
-import io
 import logging
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
@@ -76,23 +71,30 @@ def _build_voice_system_prompt() -> str:
         "- Estás respondiendo una llamada de voz. Sé conciso y claro.\n"
         "- No uses markdown, listas ni asteriscos. Solo texto natural para hablar.\n"
         "- Respondé en máximo 3 oraciones cortas.\n"
-        "- Hablá en español argentino.\n"
+        "- SIEMPRE respondé en español argentino, sin excepción.\n"
+        "- Nunca respondas en inglés ni en otro idioma.\n"
     )
 
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
-
 async def _synthesize_speech(text: str) -> bytes:
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    # Se leen en cada llamada para tomar los valores actuales de Railway
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
+
+    if not api_key or not voice_id:
+        logger.error("ELEVENLABS_API_KEY o ELEVENLABS_VOICE_ID no configurados")
+        raise ValueError("ElevenLabs no configurado")
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
+        "xi-api-key": api_key,
         "Content-Type": "application/json",
         "Accept": "audio/mpeg",
     }
     payload = {
         "text": text,
         "model_id": "eleven_multilingual_v2",
+        "language_code": "es",
         "voice_settings": {
             "stability": 0.5,
             "similarity_boost": 0.75,
@@ -147,10 +149,6 @@ def _build_gather_twiml(action_url: str, audio_url: str) -> str:
     response.redirect(action_url, method="POST")
     return str(response)
 
-
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
 
 @router.post("/incoming")
 async def incoming_call(
@@ -224,10 +222,6 @@ async def respond_to_speech(
         response.hangup()
         return Response(content=str(response), media_type="application/xml")
 
-
-# ---------------------------------------------------------------------------
-# Llamada saliente
-# ---------------------------------------------------------------------------
 
 class OutboundCallRequest(BaseModel):
     to: str
