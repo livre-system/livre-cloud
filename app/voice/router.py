@@ -125,7 +125,7 @@ async def _synthesize_speech(text: str) -> bytes:
     """Sintetiza el texto con OpenAI TTS voz Nova."""
     response = await openai_client.audio.speech.create(
         model="tts-1",
-        voice="sol",
+        voice="nova",
         input=text,
         response_format="mp3",
     )
