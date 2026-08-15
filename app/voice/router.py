@@ -5,6 +5,8 @@ app/voice/router.py
 import os
 import logging
 import httpx
+import io
+from pydub import AudioSegment
 from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -39,8 +41,13 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 def _save_audio(key: str, audio_bytes: bytes) -> str:
     filename = f"{key}.mp3"
     filepath = os.path.join(AUDIO_DIR, filename)
-    with open(filepath, "wb") as f:
-        f.write(audio_bytes)
+    try:
+        audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
+        audio = audio + 6  # +6 dB
+        audio.export(filepath, format="mp3", bitrate="192k")
+    except Exception:
+        with open(filepath, "wb") as f:
+            f.write(audio_bytes)
     return f"{BASE_URL}/uploads/voice_audio/{filename}"
 
 

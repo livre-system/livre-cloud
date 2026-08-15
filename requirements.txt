@@ -19,3 +19,4 @@ Pillow
 boto3
 twilio
 openai
+pydub
