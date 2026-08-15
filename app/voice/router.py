@@ -4,27 +4,25 @@ app/voice/router.py
 Endpoints para el flujo de llamadas entrantes de Twilio.
 
 Twilio webhooks:
-  POST /voice/incoming   → primera respuesta (saludo + Gather)
-  POST /voice/respond    → recibe SpeechResult → procesa → responde
+  POST /voice/incoming   → primera respuesta (saludo + Record)
+  POST /voice/respond    → recibe grabación → Whisper → GPT-4o → TTS Nova → reproduce
 
 Estos endpoints NO requieren JWT porque Twilio los llama directamente.
-La validación se hace con la firma de Twilio (X-Twilio-Signature).
 """
 
 import os
+import io
 import logging
+import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from twilio.rest import Client as TwilioClient
+from twilio.twiml.voice_response import VoiceResponse, Gather, Play, Record
+from openai import AsyncOpenAI
 
 from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
-
-from app.voice.twilio_handler import (
-    build_gather_response,
-    build_reply_response,
-    build_error_response,
-)
+from app.voice.twilio_handler import build_error_response
 from app.llm.groq import GroqProvider
 from app.llm.factory import get_llm_provider
 from app.context.provider import get_livre_sources
@@ -39,17 +37,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/voice", tags=["voice"])
 
 BASE_URL = os.getenv("BASE_URL", "")
-
-# Usuario de sistema para llamadas (las llamadas se guardan bajo este user_id)
-# Podés mapear por número de teléfono del llamante en el futuro.
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 VOICE_SYSTEM_USER = "voice_calls"
+
+openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 
 def _get_or_create_voice_chat(call_sid: str) -> str:
-    """
-    Cada llamada (CallSid) tiene su propio chat.
-    Si ya existe, lo reutiliza. Si no, lo crea.
-    """
     with get_cursor() as cur:
         cur.execute(
             "SELECT chat_id FROM chats WHERE user_id = %s AND title = %s LIMIT 1",
@@ -80,28 +74,67 @@ def _build_voice_system_prompt() -> str:
     )
 
 
-def _generate_reply(transcript: str, chat_id: str) -> str:
-    """Genera la respuesta del LLM dado el transcript del usuario."""
-    # Traer historial del chat para contexto
-    history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
+async def _transcribe_audio(recording_url: str) -> str:
+    """Descarga el audio de Twilio y lo transcribe con Whisper."""
+    auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(f"{recording_url}.mp3", auth=auth, timeout=30)
+        resp.raise_for_status()
+        audio_bytes = resp.content
 
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = "audio.mp3"
+
+    transcription = await openai_client.audio.transcriptions.create(
+        model="whisper-1",
+        file=audio_file,
+        language="es",
+    )
+    return transcription.text.strip()
+
+
+async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
+    """Genera la respuesta con GPT-4o."""
+    history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
     system_prompt = _build_voice_system_prompt()
+
     messages = [{"role": "system", "content": system_prompt}]
-    messages += [{"role": m["role"], "content": m["content"]} for m in history[-10:]]  # últimos 10
+    messages += [{"role": m["role"], "content": m["content"]} for m in history[-10:]]
     messages.append({"role": "user", "content": transcript})
 
-    llm = get_llm_provider()
     try:
-        return llm.generate(messages)
-    except Exception:
-        # Fallback a Groq
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            max_tokens=150,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error(f"Error con GPT-4o, usando fallback: {e}")
+        # Fallback a Gemini/Groq
         try:
+            llm = get_llm_provider()
+            return llm.generate(messages)
+        except Exception:
             groq = GroqProvider()
             return groq.generate(messages)
-        except Exception as e:
-            logger.error(f"Error generando respuesta de voz: {e}")
-            return "Hubo un problema procesando tu consulta. Por favor intentá de nuevo."
 
+
+async def _synthesize_speech(text: str) -> bytes:
+    """Sintetiza el texto con OpenAI TTS voz Nova."""
+    response = await openai_client.audio.speech.create(
+        model="tts-1",
+        voice="nova",
+        input=text,
+        response_format="mp3",
+    )
+    return response.content
+
+
+# ---------------------------------------------------------------------------
+# Endpoints de voz
+# ---------------------------------------------------------------------------
 
 @router.post("/incoming")
 async def incoming_call(
@@ -109,69 +142,129 @@ async def incoming_call(
     CallSid: str = Form(default=""),
     From: str = Form(default=""),
 ):
-    """
-    Webhook inicial de Twilio cuando entra una llamada.
-    Responde con TwiML que saluda y activa el Gather para escuchar.
-    """
+    """Webhook inicial — saluda con TTS Nova y graba la voz del usuario."""
     logger.info(f"Llamada entrante - CallSid: {CallSid}, From: {From}")
 
-    action_url = f"{BASE_URL}/voice/respond?call_sid={CallSid}"
-    twiml = build_gather_response(action_url=action_url)
+    try:
+        # Sintetizar saludo con Nova
+        saludo = "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?"
+        audio_bytes = await _synthesize_speech(saludo)
 
-    return Response(content=twiml, media_type="application/xml")
+        # Guardar audio temporalmente en memoria y servirlo
+        # Twilio necesita una URL para reproducir el audio
+        # Usamos /voice/audio/{call_sid} como endpoint temporal
+        call_sid = CallSid
+
+        # Guardar en caché simple (variable global por proceso)
+        _audio_cache[call_sid] = audio_bytes
+
+        response = VoiceResponse()
+        response.play(f"{BASE_URL}/voice/audio/{call_sid}")
+        response.record(
+            action=f"{BASE_URL}/voice/respond?call_sid={call_sid}",
+            method="POST",
+            max_length=30,
+            timeout=5,
+            finish_on_key="#",
+            play_beep=False,
+        )
+        response.redirect(f"{BASE_URL}/voice/incoming", method="POST")
+
+        return Response(content=str(response), media_type="application/xml")
+
+    except Exception as e:
+        logger.exception(f"Error en incoming: {e}")
+        return Response(content=build_error_response(), media_type="application/xml")
+
+
+# Caché simple para audios TTS (por proceso)
+_audio_cache: dict[str, bytes] = {}
+
+
+@router.get("/audio/{call_sid}")
+async def serve_audio(call_sid: str):
+    """Sirve el audio TTS generado para una llamada."""
+    audio = _audio_cache.get(call_sid)
+    if not audio:
+        raise HTTPException(status_code=404, detail="Audio no encontrado")
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 @router.post("/respond")
 async def respond_to_speech(
     request: Request,
-    SpeechResult: str = Form(default=""),
-    Confidence: str = Form(default="0"),
+    RecordingUrl: str = Form(default=""),
+    RecordingSid: str = Form(default=""),
     call_sid: str = "",
     CallSid: str = Form(default=""),
 ):
-    """
-    Webhook que recibe el texto transcripto por Twilio (SpeechResult).
-    Genera respuesta con el LLM y responde con TwiML.
-    """
-    # call_sid puede venir como query param o como form field
+    """Recibe grabación → Whisper → GPT-4o → TTS Nova → reproduce."""
     effective_call_sid = call_sid or CallSid
-    transcript = SpeechResult.strip()
+    logger.info(f"Grabación recibida - CallSid: {effective_call_sid}, URL: {RecordingUrl}")
 
-    logger.info(f"Transcript recibido - CallSid: {effective_call_sid}, texto: '{transcript}', confianza: {Confidence}")
-
-    if not transcript:
-        action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
-        twiml = build_gather_response(
-            action_url=action_url,
-            say_text="No escuché bien. ¿Podés repetir?",
+    if not RecordingUrl:
+        response = VoiceResponse()
+        audio_bytes = await _synthesize_speech("No escuché bien. ¿Podés repetir?")
+        _audio_cache[f"{effective_call_sid}_retry"] = audio_bytes
+        response.play(f"{BASE_URL}/voice/audio/{effective_call_sid}_retry")
+        response.record(
+            action=f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}",
+            method="POST",
+            max_length=30,
+            timeout=5,
+            finish_on_key="#",
+            play_beep=False,
         )
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=str(response), media_type="application/xml")
 
     try:
-        # Obtener o crear el chat de esta llamada
+        # 1. Transcribir con Whisper
+        transcript = await _transcribe_audio(RecordingUrl)
+        logger.info(f"Transcript Whisper: '{transcript}'")
+
+        if not transcript:
+            raise ValueError("Transcripción vacía")
+
+        # 2. Obtener/crear chat
         chat_id = _get_or_create_voice_chat(effective_call_sid)
 
-        # Guardar mensaje del usuario
+        # 3. Guardar mensaje usuario
         repo.save_message(chat_id, "user", transcript)
         save_message_to_memory(VOICE_SYSTEM_USER, "user", transcript)
 
-        # Generar respuesta
-        reply = _generate_reply(transcript, chat_id)
+        # 4. Generar respuesta con GPT-4o
+        reply = await _generate_reply_gpt(transcript, chat_id)
+        logger.info(f"Respuesta GPT-4o: '{reply}'")
 
-        # Guardar respuesta del asistente
+        # 5. Guardar respuesta
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
 
-        # Construir TwiML con la respuesta y volver a escuchar
-        action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
-        twiml = build_reply_response(reply_text=reply, action_url=action_url)
+        # 6. Sintetizar con Nova
+        audio_key = f"{effective_call_sid}_{RecordingSid}"
+        audio_bytes = await _synthesize_speech(reply)
+        _audio_cache[audio_key] = audio_bytes
 
-        return Response(content=twiml, media_type="application/xml")
+        # 7. Construir TwiML
+        response = VoiceResponse()
+        response.play(f"{BASE_URL}/voice/audio/{audio_key}")
+        response.record(
+            action=f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}",
+            method="POST",
+            max_length=30,
+            timeout=5,
+            finish_on_key="#",
+            play_beep=False,
+        )
+        # Si no habla, colgar
+        response.say("Gracias por contactar a Livre. ¡Hasta luego!", language="es-AR")
+        response.hangup()
+
+        return Response(content=str(response), media_type="application/xml")
 
     except Exception as e:
         logger.exception(f"Error procesando respuesta de voz: {e}")
-        twiml = build_error_response()
-        return Response(content=twiml, media_type="application/xml")
+        return Response(content=build_error_response(), media_type="application/xml")
 
 
 # ---------------------------------------------------------------------------
@@ -179,17 +272,12 @@ async def respond_to_speech(
 # ---------------------------------------------------------------------------
 
 class OutboundCallRequest(BaseModel):
-    to: str  # número destino en formato E.164, ej: +5491112345678
+    to: str
 
 
 @router.post("/call")
 async def make_call(body: OutboundCallRequest):
-    """
-    Origina una llamada saliente desde el número de Twilio al número indicado.
-    Cuando la persona atiende, se conecta al mismo flujo de /voice/incoming.
-    
-    Body: { "to": "+5491112345678" }
-    """
+    """Origina una llamada saliente al número indicado."""
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
         raise HTTPException(status_code=500, detail="Twilio no configurado correctamente.")
 
