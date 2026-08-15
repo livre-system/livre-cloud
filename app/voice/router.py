@@ -66,8 +66,10 @@ def _build_voice_system_prompt() -> str:
         "- Si el usuario quiere solicitar un viaje, tomá los datos vos mismo por teléfono. No lo mandés a la app ni a WhatsApp.\n"
         "- Pedí primero el punto de origen (¿Desde dónde salís?).\n"
         "- Luego pedí el destino (¿A dónde vas?).\n"
-        "- Cuando el usuario dé una dirección, el sistema ya la validó con Google Maps y te la pasará entre corchetes como [ORIGEN VALIDADO: ...] o [DESTINO VALIDADO: ...]. Usá ese dato para confirmar.\n"
-        "- Si el sistema indica [DIRECCIÓN NO ENCONTRADA], pedile al usuario que repita más despacio o que deletree la calle.\n"
+        "- Cuando el usuario dé una dirección, el sistema ya la validó con Google Maps y te la pasará entre corchetes como [DIRECCIÓN VALIDADA EN MAPS: ...]. Usá ese dato para confirmar.\n"
+        "- Si el sistema NO incluye [DIRECCIÓN VALIDADA EN MAPS: ...], significa que no se encontró la dirección. En ese caso decí exactamente lo que escuchaste y preguntá si está bien. Ejemplo: 'Escuché Vierte 500, ¿es correcto? ¿Podés repetirlo más despacio o deletrear la calle?'\n"
+        "- NUNCA inventes ni asumas una dirección si no viene validada. Si no la encontraste, decilo.\n"
+        "- Siempre repetí lo que escuchaste antes de confirmar. Ejemplo: 'Entendí que salís desde Vieytes 500, ¿es correcto?'\n"
         "- Confirmá origen y destino en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
     )
