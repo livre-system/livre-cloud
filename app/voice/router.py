@@ -69,6 +69,11 @@ def _build_voice_system_prompt() -> str:
         "- Confirmá los datos en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
         "- Las direcciones deben ser de Bahía Blanca. Si el usuario dice una dirección que no existe o está fuera de Bahía Blanca, pedile que la repita.\n"
+        "INTERPRETACIÓN DE DIRECCIONES:\n"
+        "- Todas las direcciones que mencione el usuario son calles de Bahía Blanca, Buenos Aires, Argentina.\n"
+        "- La transcripción de voz puede tener errores fonéticos. Interpretá cualquier palabra + número como una dirección de calle. Ejemplos: 'bloquear 500' = 'Colón 500', 'olor 742' = 'Colón 742', 'tres mil setecientos' = '3700'.\n"
+        "- Cuando el usuario diga un número como dirección, guardalo como número (no en palabras).\n"
+        "- Si no entendés la calle, preguntá: ¿Me podés deletrear el nombre de la calle?\n"
     )
 
 
