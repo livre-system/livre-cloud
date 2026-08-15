@@ -74,34 +74,69 @@ def _build_voice_system_prompt() -> str:
 
 
 
+async def _correct_address_phonetic(address: str) -> str:
+    """Usa GPT para corregir errores fonéticos de Twilio antes de buscar en Maps."""
+    try:
+        response = await openai_client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Sos un corrector de direcciones de Bahía Blanca, Buenos Aires, Argentina. "
+                        "Twilio transcribe llamadas telefónicas con errores fonéticos. "
+                        "Tu tarea es corregir el texto recibido a una dirección real de Bahía Blanca. "
+                        "Ejemplos de errores comunes: 'Vierte' → 'Vieytes', 'Donato' → 'Donado', "
+                        "'Urquisa' → 'Urquiza', 'Ayen' → 'Alem'. "
+                        "Respondé SOLO con la dirección corregida, sin explicación. "
+                        "Si no parece una dirección, respondé exactamente con el texto original."
+                    ),
+                },
+                {"role": "user", "content": address},
+            ],
+            max_tokens=50,
+            temperature=0,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning(f"No se pudo corregir fonéticamente la dirección: {e}")
+        return address
+
+
 async def _validate_address(address: str) -> str | None:
     api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
     if not api_key:
         return None
+
+    # Paso 1: corregir errores fonéticos con GPT
+    corrected = await _correct_address_phonetic(address)
+    logger.info(f"Dirección original: '{address}' → corregida: '{corrected}'")
+
+    # Paso 2: buscar con Places Text Search (más tolerante que Geocoding)
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
+            "https://maps.googleapis.com/maps/api/place/textsearch/json",
             params={
-                "address": f"{address}, Bahía Blanca, Buenos Aires, Argentina",
+                "query": f"{corrected}, Bahía Blanca, Buenos Aires, Argentina",
                 "key": api_key,
                 "language": "es",
                 "region": "ar",
             },
         )
         data = resp.json()
-        if data.get("status") == "OK":
+        logger.info(f"Places API status: {data.get('status')} para '{corrected}'")
+
+        if data.get("status") == "OK" and data.get("results"):
             result = data["results"][0]
-            components = result.get("address_components", [])
-            in_bahia = any(
-                "Bahía Blanca" in c.get("long_name", "") or "Bahia Blanca" in c.get("long_name", "")
-                for c in components
-            )
-            if in_bahia:
-                # Retornar solo calle y número
-                street = next((c["long_name"] for c in components if "route" in c["types"]), "")
-                number = next((c["long_name"] for c in components if "street_number" in c["types"]), "")
-                if street:
-                    return f"{street} {number}".strip()
+            formatted = result.get("formatted_address", "")
+            # Verificar que el resultado sea de Bahía Blanca
+            if "Bahía Blanca" in formatted or "Bahia Blanca" in formatted:
+                # Retornar solo la parte relevante (sin país)
+                parts = formatted.split(",")
+                if len(parts) >= 2:
+                    return f"{parts[0].strip()}, {parts[1].strip()}"
+                return parts[0].strip()
+
     return None
 
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
