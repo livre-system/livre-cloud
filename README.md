@@ -28,6 +28,7 @@ No implementa el razonamiento del LLM.
 | google-auth-oauthlib | 1.2.1 |
 | cryptography | >=45.0.1 |
 | psycopg2-binary | 2.9.10 |
+| twilio | latest |
 
 Instalar:
 
@@ -52,6 +53,10 @@ pip install -r requirements.txt
 | `CREDENTIALS_SECRET` | Clave Fernet de 44 caracteres para cifrar mensajes y credenciales |
 | `GEMINI_API_KEY` | API key de Gemini |
 | `GROQ_API_KEY` | API key de Groq (fallback) |
+| `TWILIO_ACCOUNT_SID` | Account SID de Twilio (empieza con `AC`) |
+| `TWILIO_AUTH_TOKEN` | Auth Token de Twilio |
+| `TWILIO_PHONE_NUMBER` | Número de Twilio en formato E.164 (`+16083510209`) |
+| `BASE_URL` | URL pública del backend (`https://livre-cloud-production.up.railway.app`) |
 
 Generar una clave Fernet válida:
 
@@ -107,6 +112,8 @@ uvicorn app.main:app --reload
 | POST | `/chat/stream` | Bearer JWT | Genera una respuesta en streaming |
 | GET | `/compiler/base` | Bearer JWT | Construye el BaseContext |
 | GET | `/compiler/style` | Bearer JWT | Construye el StyleContext |
+| POST | `/voice/incoming` | Twilio | Webhook de llamada entrante — devuelve TwiML de saludo |
+| POST | `/voice/respond` | Twilio | Procesa audio del usuario — transcribe, genera respuesta y guarda en chat |
 | GET | `/docs` | No | Documentación interactiva |
 
 ---
@@ -121,6 +128,14 @@ Usuario → GET /auth/login → Google → GET /auth/callback → { token }
 
 ```
 POST /chat/stream  →  guarda mensaje usuario  →  stream respuesta  →  guarda respuesta  →  devuelve chat_id
+```
+
+## Flujo de llamada
+
+```
+Usuario llama → Twilio → POST /voice/incoming → saludo TwiML →
+usuario habla → POST /voice/respond → Groq transcribe →
+Gemini responde → TTS → guarda en chat como mensajes normales
 ```
 
 ---
@@ -143,6 +158,10 @@ app/
 ├── compiler/
 │   ├── base_compiler.py
 │   └── style_compiler.py
+├── voice/
+│   ├── router.py
+│   ├── twilio_handler.py
+│   └── factory.py
 └── core/
     ├── config.py
     ├── jwt.py

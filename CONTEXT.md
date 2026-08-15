@@ -98,6 +98,10 @@ app/
 ├── compiler/
 │   ├── base_compiler.py
 │   └── style_compiler.py
+├── voice/
+│   ├── router.py
+│   ├── twilio_handler.py
+│   └── factory.py
 └── core/
     ├── config.py
     ├── jwt.py
@@ -126,7 +130,8 @@ Las fases pueden solaparse cuando resulte conveniente técnicamente. El cronogra
 
 - **Livre Cloud** (backend): base completa implementada — autenticación, JWT, cifrado, persistencia de chats, compiladores de contexto, endpoints de chat streaming.
 - **Chatbot**: creado y con branding de Livre.
-- **Próximo paso**: implementación de llamadas telefónicas con IA (Fase 1 del roadmap).
+- **Llamadas telefónicas con IA**: implementadas — Twilio integrado, número activo `+1 (608) 351-0209`, webhook configurado, transcripción vía Groq, respuesta vía Gemini, conversación guardada en chat.
+- **Próximo paso**: Fase 2 — integraciones, memoria y flujo de datos.
 
 ---
 
