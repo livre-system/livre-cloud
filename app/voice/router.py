@@ -66,16 +66,43 @@ def _build_voice_system_prompt() -> str:
         "- Si el usuario quiere solicitar un viaje, tomá los datos vos mismo por teléfono. No lo mandés a la app ni a WhatsApp.\n"
         "- Pedí primero el punto de origen (¿Desde dónde salís?).\n"
         "- Luego pedí el destino (¿A dónde vas?).\n"
-        "- Confirmá los datos en voz alta antes de cerrar.\n"
+        "- Cuando el usuario dé una dirección, el sistema ya la validó con Google Maps y te la pasará entre corchetes como [ORIGEN VALIDADO: ...] o [DESTINO VALIDADO: ...]. Usá ese dato para confirmar.\n"
+        "- Si el sistema indica [DIRECCIÓN NO ENCONTRADA], pedile al usuario que repita más despacio o que deletree la calle.\n"
+        "- Confirmá origen y destino en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
-        "- Las direcciones deben ser de Bahía Blanca. Si el usuario dice una dirección que no existe o está fuera de Bahía Blanca, pedile que la repita.\n"
-        "INTERPRETACIÓN DE DIRECCIONES:\n"
-        "- Todas las direcciones que mencione el usuario son calles de Bahía Blanca, Buenos Aires, Argentina.\n"
-        "- La transcripción de voz puede tener errores fonéticos. Interpretá cualquier palabra + número como una dirección de calle.""Buscalas en google maps las direcciones para identificarlas mas rapido"
-        "- Cuando el usuario diga un número como dirección, guardalo como número (no en palabras).\n"
-        "- Si no entendés la calle, preguntá: ¿Me podés deletrear el nombre de la calle?\n"
     )
 
+
+
+async def _validate_address(address: str) -> str | None:
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        return None
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={
+                "address": f"{address}, Bahía Blanca, Buenos Aires, Argentina",
+                "key": api_key,
+                "language": "es",
+                "region": "ar",
+            },
+        )
+        data = resp.json()
+        if data.get("status") == "OK":
+            result = data["results"][0]
+            components = result.get("address_components", [])
+            in_bahia = any(
+                "Bahía Blanca" in c.get("long_name", "") or "Bahia Blanca" in c.get("long_name", "")
+                for c in components
+            )
+            if in_bahia:
+                # Retornar solo calle y número
+                street = next((c["long_name"] for c in components if "route" in c["types"]), "")
+                number = next((c["long_name"] for c in components if "street_number" in c["types"]), "")
+                if street:
+                    return f"{street} {number}".strip()
+    return None
 
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
     history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
@@ -156,7 +183,14 @@ async def respond_to_speech(
         repo.save_message(chat_id, "user", transcript)
         save_message_to_memory(VOICE_SYSTEM_USER, "user", transcript)
 
-        reply = await _generate_reply_gpt(transcript, chat_id)
+        # Intentar validar si el transcript parece una dirección
+        validated = await _validate_address(transcript)
+        if validated:
+            enriched = f"{transcript} [DIRECCIÓN VALIDADA EN MAPS: {validated}]"
+        else:
+            enriched = transcript
+
+        reply = await _generate_reply_gpt(enriched, chat_id)
         logger.info(f"Respuesta GPT-4o: '{reply}'")
 
         repo.save_message(chat_id, "assistant", reply)
