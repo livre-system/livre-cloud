@@ -168,6 +168,10 @@ async def respond_to_speech(
 
         return Response(content=twiml, media_type="application/xml")
 
+    except Exception as e:
+        logger.exception(f"Error procesando respuesta de voz: {e}")
+        twiml = build_error_response()
+        return Response(content=twiml, media_type="application/xml")
 
 
 # ---------------------------------------------------------------------------
