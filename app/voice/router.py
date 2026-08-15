@@ -5,8 +5,6 @@ app/voice/router.py
 import os
 import logging
 import httpx
-import io
-from pydub import AudioSegment
 from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -33,23 +31,6 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 VOICE_SYSTEM_USER = "voice_calls"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-AUDIO_DIR = "/data/uploads/voice_audio"
-os.makedirs(AUDIO_DIR, exist_ok=True)
-
-
-def _save_audio(key: str, audio_bytes: bytes) -> str:
-    filename = f"{key}.mp3"
-    filepath = os.path.join(AUDIO_DIR, filename)
-    try:
-        audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-        audio = audio + 6  # +6 dB
-        audio = audio.speedup(playback_speed=1.25)
-        audio.export(filepath, format="mp3", bitrate="192k")
-    except Exception:
-        with open(filepath, "wb") as f:
-            f.write(audio_bytes)
-    return f"{BASE_URL}/uploads/voice_audio/{filename}"
 
 
 def _get_or_create_voice_chat(call_sid: str) -> str:
@@ -91,60 +72,6 @@ def _build_voice_system_prompt() -> str:
     )
 
 
-async def _synthesize_speech(text: str) -> bytes:
-    # Se leen en cada llamada para tomar los valores actuales de Railway
-    api_key = os.getenv("ELEVENLABS_API_KEY", "")
-    voice_id = os.getenv("ELEVENLABS_VOICE_ID", "")
-
-    if not api_key or not voice_id:
-        logger.error("ELEVENLABS_API_KEY o ELEVENLABS_VOICE_ID no configurados")
-        raise ValueError("ElevenLabs no configurado")
-
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "xi-api-key": api_key,
-        "Content-Type": "application/json",
-        "Accept": "audio/mpeg",
-    }
-    payload = {
-        "text": text,
-        "model_id": "eleven_multilingual_v2",
-        "language_code": "es",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75,
-        },
-    }
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        return resp.content
-
-
-
-async def _validate_address(address: str) -> str | None:
-    """Valida una dirección en Bahía Blanca con Google Maps. Retorna dirección formateada o None."""
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
-    if not api_key:
-        return address
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
-            params={"address": f"{address}, Bahía Blanca, Buenos Aires, Argentina", "key": api_key, "language": "es"},
-        )
-        data = resp.json()
-        if data.get("status") == "OK":
-            result = data["results"][0]
-            # Verificar que esté en Bahía Blanca
-            components = result.get("address_components", [])
-            in_bahia = any(
-                "Bahía Blanca" in c.get("long_name", "") or "Bahia Blanca" in c.get("long_name", "")
-                for c in components
-            )
-            if in_bahia:
-                return result["formatted_address"].split(",")[0]  # Solo calle y número
-        return None
-
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
     history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
     system_prompt = _build_voice_system_prompt()
@@ -171,7 +98,7 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
             return groq.generate(messages)
 
 
-def _build_gather_twiml(action_url: str, audio_url: str) -> str:
+def _build_gather_twiml(action_url: str, say_text: str) -> str:
     response = VoiceResponse()
     gather = Gather(
         input="speech",
@@ -183,7 +110,7 @@ def _build_gather_twiml(action_url: str, audio_url: str) -> str:
         speech_model="phone_call",
         enhanced=True,
     )
-    gather.play(audio_url)
+    gather.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
     response.append(gather)
     response.redirect(action_url, method="POST")
     return str(response)
@@ -196,19 +123,9 @@ async def incoming_call(
     From: str = Form(default=""),
 ):
     logger.info(f"Llamada entrante - CallSid: {CallSid}, From: {From}")
-    try:
-        saludo = "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?"
-        audio_bytes = await _synthesize_speech(saludo)
-        audio_url = _save_audio(f"{CallSid}_welcome", audio_bytes)
-        action_url = f"{BASE_URL}/voice/respond?call_sid={CallSid}"
-        twiml = _build_gather_twiml(action_url, audio_url)
-        return Response(content=twiml, media_type="application/xml")
-    except Exception as e:
-        logger.exception(f"Error en incoming: {e}")
-        response = VoiceResponse()
-        response.say("Hubo un problema técnico. Por favor intentá de nuevo.", language="es-AR")
-        response.hangup()
-        return Response(content=str(response), media_type="application/xml")
+    action_url = f"{BASE_URL}/voice/respond?call_sid={CallSid}"
+    twiml = _build_gather_twiml(action_url, "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?")
+    return Response(content=twiml, media_type="application/xml")
 
 
 @router.post("/respond")
@@ -226,15 +143,7 @@ async def respond_to_speech(
     action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
 
     if not transcript:
-        try:
-            audio_bytes = await _synthesize_speech("No escuché bien. ¿Podés repetir?")
-            audio_url = _save_audio(f"{effective_call_sid}_retry", audio_bytes)
-            twiml = _build_gather_twiml(action_url, audio_url)
-        except Exception:
-            response = VoiceResponse()
-            response.say("No escuché bien. ¿Podés repetir?", language="es-AR")
-            response.redirect(action_url, method="POST")
-            twiml = str(response)
+        twiml = _build_gather_twiml(action_url, "No escuché bien. ¿Podés repetir?")
         return Response(content=twiml, media_type="application/xml")
 
     try:
@@ -248,10 +157,7 @@ async def respond_to_speech(
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
 
-        audio_bytes = await _synthesize_speech(reply)
-        audio_url = _save_audio(f"{effective_call_sid}_{len(reply)}", audio_bytes)
-
-        twiml = _build_gather_twiml(action_url, audio_url)
+        twiml = _build_gather_twiml(action_url, reply)
         return Response(content=twiml, media_type="application/xml")
 
     except Exception as e:
