@@ -1,13 +1,9 @@
 """
 app/voice/router.py
 
-Endpoints para el flujo de llamadas entrantes de Twilio.
-
-Twilio webhooks:
-  POST /voice/incoming   → primera respuesta (saludo + Record)
-  POST /voice/respond    → recibe grabación → Whisper → GPT-4o → TTS Nova → reproduce
-
-Estos endpoints NO requieren JWT porque Twilio los llama directamente.
+Flujo optimizado para baja latencia:
+  POST /voice/incoming   → saluda con TTS Nova (guardado en disco)
+  POST /voice/respond    → recibe SpeechResult de Gather → GPT-4o → TTS Nova → reproduce
 """
 
 import os
@@ -15,14 +11,13 @@ import io
 import logging
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from twilio.rest import Client as TwilioClient
-from twilio.twiml.voice_response import VoiceResponse, Gather, Play, Record
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import AsyncOpenAI
 
 from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
-from app.voice.twilio_handler import build_error_response
 from app.llm.groq import GroqProvider
 from app.llm.factory import get_llm_provider
 from app.context.provider import get_livre_sources
@@ -41,6 +36,17 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 VOICE_SYSTEM_USER = "voice_calls"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+AUDIO_DIR = "/data/uploads/voice_audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+
+def _save_audio(key: str, audio_bytes: bytes) -> str:
+    filename = f"{key}.mp3"
+    filepath = os.path.join(AUDIO_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(audio_bytes)
+    return f"{BASE_URL}/uploads/voice_audio/{filename}"
 
 
 def _get_or_create_voice_chat(call_sid: str) -> str:
@@ -74,27 +80,17 @@ def _build_voice_system_prompt() -> str:
     )
 
 
-async def _transcribe_audio(recording_url: str) -> str:
-    """Descarga el audio de Twilio y lo transcribe con Whisper."""
-    auth = (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(f"{recording_url}.mp3", auth=auth, timeout=30)
-        resp.raise_for_status()
-        audio_bytes = resp.content
-
-    audio_file = io.BytesIO(audio_bytes)
-    audio_file.name = "audio.mp3"
-
-    transcription = await openai_client.audio.transcriptions.create(
-        model="whisper-1",
-        file=audio_file,
-        language="es",
+async def _synthesize_speech(text: str) -> bytes:
+    response = await openai_client.audio.speech.create(
+        model="tts-1",
+        voice="nova",
+        input=text,
+        response_format="mp3",
     )
-    return transcription.text.strip()
+    return response.content
 
 
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
-    """Genera la respuesta con GPT-4o."""
     history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
     system_prompt = _build_voice_system_prompt()
 
@@ -112,7 +108,6 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
         return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"Error con GPT-4o, usando fallback: {e}")
-        # Fallback a Gemini/Groq
         try:
             llm = get_llm_provider()
             return llm.generate(messages)
@@ -121,32 +116,26 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
             return groq.generate(messages)
 
 
-async def _synthesize_speech(text: str) -> bytes:
-    """Sintetiza el texto con OpenAI TTS voz Nova."""
-    response = await openai_client.audio.speech.create(
-        model="tts-1",
-        voice="nova",
-        input=text,
-        response_format="mp3",
+def _build_gather_twiml(action_url: str, audio_url: str) -> str:
+    response = VoiceResponse()
+    gather = Gather(
+        input="speech",
+        action=action_url,
+        method="POST",
+        language="es-AR",
+        speech_timeout="auto",
+        timeout=8,
+        speech_model="phone_call",
+        enhanced=True,
     )
-    return response.content
-
-
-AUDIO_DIR = "/data/uploads/voice_audio"
-os.makedirs(AUDIO_DIR, exist_ok=True)
-
-
-def _save_audio(key: str, audio_bytes: bytes) -> str:
-    """Guarda el audio en disco y retorna la URL pública."""
-    filename = f"{key}.mp3"
-    filepath = os.path.join(AUDIO_DIR, filename)
-    with open(filepath, "wb") as f:
-        f.write(audio_bytes)
-    return f"{BASE_URL}/uploads/voice_audio/{filename}"
+    gather.play(audio_url)
+    response.append(gather)
+    response.redirect(action_url, method="POST")
+    return str(response)
 
 
 # ---------------------------------------------------------------------------
-# Endpoints de voz
+# Endpoints
 # ---------------------------------------------------------------------------
 
 @router.post("/incoming")
@@ -155,108 +144,71 @@ async def incoming_call(
     CallSid: str = Form(default=""),
     From: str = Form(default=""),
 ):
-    """Webhook inicial — saluda con TTS Nova y graba la voz del usuario."""
     logger.info(f"Llamada entrante - CallSid: {CallSid}, From: {From}")
-
     try:
-        # Sintetizar saludo con Nova
         saludo = "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?"
         audio_bytes = await _synthesize_speech(saludo)
-        audio_url = _save_audio(CallSid, audio_bytes)
-
-        response = VoiceResponse()
-        response.play(audio_url)
-        response.record(
-            action=f"{BASE_URL}/voice/respond?call_sid={CallSid}",
-            method="POST",
-            max_length=30,
-            timeout=5,
-            finish_on_key="#",
-            play_beep=False,
-        )
-
-        return Response(content=str(response), media_type="application/xml")
-
+        audio_url = _save_audio(f"{CallSid}_welcome", audio_bytes)
+        action_url = f"{BASE_URL}/voice/respond?call_sid={CallSid}"
+        twiml = _build_gather_twiml(action_url, audio_url)
+        return Response(content=twiml, media_type="application/xml")
     except Exception as e:
         logger.exception(f"Error en incoming: {e}")
-        return Response(content=build_error_response(), media_type="application/xml")
+        response = VoiceResponse()
+        response.say("Hubo un problema técnico. Por favor intentá de nuevo.", language="es-AR")
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
 
 
 @router.post("/respond")
 async def respond_to_speech(
     request: Request,
-    RecordingUrl: str = Form(default=""),
-    RecordingSid: str = Form(default=""),
+    SpeechResult: str = Form(default=""),
+    Confidence: str = Form(default="0"),
     call_sid: str = "",
     CallSid: str = Form(default=""),
 ):
-    """Recibe grabación → Whisper → GPT-4o → TTS Nova → reproduce."""
     effective_call_sid = call_sid or CallSid
-    logger.info(f"Grabación recibida - CallSid: {effective_call_sid}, URL: {RecordingUrl}")
+    transcript = SpeechResult.strip()
+    logger.info(f"Transcript - CallSid: {effective_call_sid}, texto: '{transcript}'")
 
-    if not RecordingUrl:
-        response = VoiceResponse()
-        audio_bytes = await _synthesize_speech("No escuché bien. ¿Podés repetir?")
-        audio_url = _save_audio(f"{effective_call_sid}_retry", audio_bytes)
-        response.play(audio_url)
-        response.record(
-            action=f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}",
-            method="POST",
-            max_length=30,
-            timeout=5,
-            finish_on_key="#",
-            play_beep=False,
-        )
-        return Response(content=str(response), media_type="application/xml")
+    action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
+
+    if not transcript:
+        try:
+            audio_bytes = await _synthesize_speech("No escuché bien. ¿Podés repetir?")
+            audio_url = _save_audio(f"{effective_call_sid}_retry", audio_bytes)
+            twiml = _build_gather_twiml(action_url, audio_url)
+        except Exception:
+            response = VoiceResponse()
+            response.say("No escuché bien. ¿Podés repetir?", language="es-AR")
+            response.redirect(action_url, method="POST")
+            twiml = str(response)
+        return Response(content=twiml, media_type="application/xml")
 
     try:
-        # 1. Transcribir con Whisper
-        transcript = await _transcribe_audio(RecordingUrl)
-        logger.info(f"Transcript Whisper: '{transcript}'")
-
-        if not transcript:
-            raise ValueError("Transcripción vacía")
-
-        # 2. Obtener/crear chat
         chat_id = _get_or_create_voice_chat(effective_call_sid)
-
-        # 3. Guardar mensaje usuario
         repo.save_message(chat_id, "user", transcript)
         save_message_to_memory(VOICE_SYSTEM_USER, "user", transcript)
 
-        # 4. Generar respuesta con GPT-4o
         reply = await _generate_reply_gpt(transcript, chat_id)
         logger.info(f"Respuesta GPT-4o: '{reply}'")
 
-        # 5. Guardar respuesta
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
 
-        # 6. Sintetizar con Nova y guardar en disco
-        audio_key = f"{effective_call_sid}_{RecordingSid}"
         audio_bytes = await _synthesize_speech(reply)
-        audio_url = _save_audio(audio_key, audio_bytes)
+        audio_url = _save_audio(f"{effective_call_sid}_{len(reply)}", audio_bytes)
 
-        # 7. Construir TwiML
-        response = VoiceResponse()
-        response.play(audio_url)
-        response.record(
-            action=f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}",
-            method="POST",
-            max_length=30,
-            timeout=5,
-            finish_on_key="#",
-            play_beep=False,
-        )
-        # Si no habla, colgar
-        response.say("Gracias por contactar a Livre. ¡Hasta luego!", language="es-AR")
-        response.hangup()
-
-        return Response(content=str(response), media_type="application/xml")
+        twiml = _build_gather_twiml(action_url, audio_url)
+        return Response(content=twiml, media_type="application/xml")
 
     except Exception as e:
-        logger.exception(f"Error procesando respuesta de voz: {e}")
-        return Response(content=build_error_response(), media_type="application/xml")
+        logger.exception(f"Error procesando respuesta: {e}")
+        response = VoiceResponse()
+        response.say("Hubo un problema técnico. Por favor intentá de nuevo.", language="es-AR")
+        response.hangup()
+        return Response(content=str(response), media_type="application/xml")
 
 
 # ---------------------------------------------------------------------------
@@ -269,10 +221,8 @@ class OutboundCallRequest(BaseModel):
 
 @router.post("/call")
 async def make_call(body: OutboundCallRequest):
-    """Origina una llamada saliente al número indicado."""
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
         raise HTTPException(status_code=500, detail="Twilio no configurado correctamente.")
-
     try:
         client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
         call = client.calls.create(
