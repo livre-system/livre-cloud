@@ -13,6 +13,7 @@ from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import AsyncOpenAI
 
 from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
+from app.memory.embeddings import get_embedding
 from app.llm.groq import GroqProvider
 from app.llm.factory import get_llm_provider
 from app.context.provider import get_livre_sources
@@ -76,6 +77,29 @@ def _build_voice_system_prompt() -> str:
 
 
 
+def _search_street_by_embedding(query: str) -> str | None:
+    """Busca la calle más similar en la DB usando embeddings."""
+    embedding = get_embedding(query)
+    if not embedding:
+        return None
+    try:
+        with get_cursor() as cur:
+            cur.execute("""
+                SELECT name, 1 - (embedding <=> %s::vector) AS similarity
+                FROM street_embeddings
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> %s::vector
+                LIMIT 1
+            """, (str(embedding), str(embedding)))
+            row = cur.fetchone()
+            if row and row["similarity"] > 0.75:
+                logger.info(f"Calle encontrada por embedding: '{row['name']}' (similarity={row['similarity']:.2f})")
+                return row["name"]
+    except Exception as e:
+        logger.warning(f"Error buscando calle por embedding: {e}")
+    return None
+
+
 async def _correct_address_phonetic(address: str) -> str:
     """Usa GPT para corregir errores fonéticos de Twilio antes de buscar en Maps."""
     try:
@@ -110,9 +134,18 @@ async def _validate_address(address: str) -> str | None:
     if not api_key:
         return None
 
-    # Paso 1: corregir errores fonéticos con GPT
-    corrected = await _correct_address_phonetic(address)
-    logger.info(f"Dirección original: '{address}' → corregida: '{corrected}'")
+    # Paso 1: buscar calle por embedding (más rápido y preciso para errores fonéticos)
+    import re
+    street_from_embedding = _search_street_by_embedding(address)
+    if street_from_embedding:
+        numbers = re.findall(r'\b\d+\b', address)
+        number = numbers[0] if numbers else ""
+        corrected = f"{street_from_embedding} {number}".strip()
+        logger.info(f"Calle corregida por embedding: '{address}' → '{corrected}'")
+    else:
+        # Fallback: corregir errores fonéticos con GPT
+        corrected = await _correct_address_phonetic(address)
+        logger.info(f"Dirección original: '{address}' → corregida por GPT: '{corrected}'")
 
     # Paso 2: buscar con Places Text Search (más tolerante que Geocoding)
     async with httpx.AsyncClient(timeout=10) as client:
