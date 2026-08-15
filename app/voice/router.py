@@ -13,8 +13,12 @@ La validación se hace con la firma de Twilio (X-Twilio-Signature).
 
 import os
 import logging
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
+from twilio.rest import Client as TwilioClient
+
+from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
 
 from app.voice.twilio_handler import (
     build_gather_response,
@@ -164,7 +168,37 @@ async def respond_to_speech(
 
         return Response(content=twiml, media_type="application/xml")
 
+
+
+# ---------------------------------------------------------------------------
+# Llamada saliente
+# ---------------------------------------------------------------------------
+
+class OutboundCallRequest(BaseModel):
+    to: str  # número destino en formato E.164, ej: +5491112345678
+
+
+@router.post("/call")
+async def make_call(body: OutboundCallRequest):
+    """
+    Origina una llamada saliente desde el número de Twilio al número indicado.
+    Cuando la persona atiende, se conecta al mismo flujo de /voice/incoming.
+    
+    Body: { "to": "+5491112345678" }
+    """
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        raise HTTPException(status_code=500, detail="Twilio no configurado correctamente.")
+
+    try:
+        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        call = client.calls.create(
+            to=body.to,
+            from_=TWILIO_PHONE_NUMBER,
+            url=f"{BASE_URL}/voice/incoming",
+            method="POST",
+        )
+        logger.info(f"Llamada saliente iniciada - SID: {call.sid}, To: {body.to}")
+        return {"call_sid": call.sid, "status": call.status, "to": body.to}
     except Exception as e:
-        logger.exception(f"Error procesando respuesta de voz: {e}")
-        twiml = build_error_response()
-        return Response(content=twiml, media_type="application/xml")
+        logger.exception(f"Error iniciando llamada saliente: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
