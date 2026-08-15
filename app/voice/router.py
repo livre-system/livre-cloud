@@ -44,6 +44,7 @@ def _save_audio(key: str, audio_bytes: bytes) -> str:
     try:
         audio = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
         audio = audio + 6  # +6 dB
+        audio = audio.speedup(playback_speed=1.25)
         audio.export(filepath, format="mp3", bitrate="192k")
     except Exception:
         with open(filepath, "wb") as f:
@@ -86,6 +87,7 @@ def _build_voice_system_prompt() -> str:
         "- Luego pedí el destino (¿A dónde vas?).\n"
         "- Confirmá los datos en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
+        "- Las direcciones deben ser de Bahía Blanca. Si el usuario dice una dirección que no existe o está fuera de Bahía Blanca, pedile que la repita.\n"
     )
 
 
@@ -118,6 +120,30 @@ async def _synthesize_speech(text: str) -> bytes:
         resp.raise_for_status()
         return resp.content
 
+
+
+async def _validate_address(address: str) -> str | None:
+    """Valida una dirección en Bahía Blanca con Google Maps. Retorna dirección formateada o None."""
+    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+    if not api_key:
+        return address
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": f"{address}, Bahía Blanca, Buenos Aires, Argentina", "key": api_key, "language": "es"},
+        )
+        data = resp.json()
+        if data.get("status") == "OK":
+            result = data["results"][0]
+            # Verificar que esté en Bahía Blanca
+            components = result.get("address_components", [])
+            in_bahia = any(
+                "Bahía Blanca" in c.get("long_name", "") or "Bahia Blanca" in c.get("long_name", "")
+                for c in components
+            )
+            if in_bahia:
+                return result["formatted_address"].split(",")[0]  # Solo calle y número
+        return None
 
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
     history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
