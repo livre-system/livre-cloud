@@ -132,6 +132,19 @@ async def _synthesize_speech(text: str) -> bytes:
     return response.content
 
 
+AUDIO_DIR = "/data/uploads/voice_audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
+
+
+def _save_audio(key: str, audio_bytes: bytes) -> str:
+    """Guarda el audio en disco y retorna la URL pública."""
+    filename = f"{key}.mp3"
+    filepath = os.path.join(AUDIO_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(audio_bytes)
+    return f"{BASE_URL}/uploads/voice_audio/{filename}"
+
+
 # ---------------------------------------------------------------------------
 # Endpoints de voz
 # ---------------------------------------------------------------------------
@@ -149,45 +162,24 @@ async def incoming_call(
         # Sintetizar saludo con Nova
         saludo = "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?"
         audio_bytes = await _synthesize_speech(saludo)
-
-        # Guardar audio temporalmente en memoria y servirlo
-        # Twilio necesita una URL para reproducir el audio
-        # Usamos /voice/audio/{call_sid} como endpoint temporal
-        call_sid = CallSid
-
-        # Guardar en caché simple (variable global por proceso)
-        _audio_cache[call_sid] = audio_bytes
+        audio_url = _save_audio(call_sid, audio_bytes)
 
         response = VoiceResponse()
-        response.play(f"{BASE_URL}/voice/audio/{call_sid}")
+        response.play(audio_url)
         response.record(
-            action=f"{BASE_URL}/voice/respond?call_sid={call_sid}",
+            action=f"{BASE_URL}/voice/respond?call_sid={CallSid}",
             method="POST",
             max_length=30,
             timeout=5,
             finish_on_key="#",
             play_beep=False,
         )
-        response.redirect(f"{BASE_URL}/voice/incoming", method="POST")
 
         return Response(content=str(response), media_type="application/xml")
 
     except Exception as e:
         logger.exception(f"Error en incoming: {e}")
         return Response(content=build_error_response(), media_type="application/xml")
-
-
-# Caché simple para audios TTS (por proceso)
-_audio_cache: dict[str, bytes] = {}
-
-
-@router.get("/audio/{call_sid}")
-async def serve_audio(call_sid: str):
-    """Sirve el audio TTS generado para una llamada."""
-    audio = _audio_cache.get(call_sid)
-    if not audio:
-        raise HTTPException(status_code=404, detail="Audio no encontrado")
-    return Response(content=audio, media_type="audio/mpeg")
 
 
 @router.post("/respond")
@@ -205,8 +197,8 @@ async def respond_to_speech(
     if not RecordingUrl:
         response = VoiceResponse()
         audio_bytes = await _synthesize_speech("No escuché bien. ¿Podés repetir?")
-        _audio_cache[f"{effective_call_sid}_retry"] = audio_bytes
-        response.play(f"{BASE_URL}/voice/audio/{effective_call_sid}_retry")
+        audio_url = _save_audio(f"{effective_call_sid}_retry", audio_bytes)
+        response.play(audio_url)
         response.record(
             action=f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}",
             method="POST",
@@ -240,14 +232,14 @@ async def respond_to_speech(
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
 
-        # 6. Sintetizar con Nova
+        # 6. Sintetizar con Nova y guardar en disco
         audio_key = f"{effective_call_sid}_{RecordingSid}"
         audio_bytes = await _synthesize_speech(reply)
-        _audio_cache[audio_key] = audio_bytes
+        audio_url = _save_audio(audio_key, audio_bytes)
 
         # 7. Construir TwiML
         response = VoiceResponse()
-        response.play(f"{BASE_URL}/voice/audio/{audio_key}")
+        response.play(audio_url)
         response.record(
             action=f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}",
             method="POST",
