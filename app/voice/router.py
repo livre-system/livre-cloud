@@ -125,7 +125,7 @@ async def _synthesize_speech(text: str) -> bytes:
     """Sintetiza el texto con OpenAI TTS voz Nova."""
     response = await openai_client.audio.speech.create(
         model="tts-1",
-        voice="nova",
+        voice="sol",
         input=text,
         response_format="mp3",
     )
@@ -162,7 +162,7 @@ async def incoming_call(
         # Sintetizar saludo con Nova
         saludo = "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?"
         audio_bytes = await _synthesize_speech(saludo)
-        audio_url = _save_audio(call_sid, audio_bytes)
+        audio_url = _save_audio(CallSid, audio_bytes)
 
         response = VoiceResponse()
         response.play(audio_url)
