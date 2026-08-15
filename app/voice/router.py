@@ -42,7 +42,7 @@ os.makedirs(AUDIO_DIR, exist_ok=True)
 
 
 def _save_audio(key: str, audio_bytes: bytes) -> str:
-    filename = f"{key}.wav"
+    filename = f"{key}.mp3"
     filepath = os.path.join(AUDIO_DIR, filename)
     with open(filepath, "wb") as f:
         f.write(audio_bytes)
@@ -80,14 +80,28 @@ def _build_voice_system_prompt() -> str:
     )
 
 
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
+
 async def _synthesize_speech(text: str) -> bytes:
-    response = await openai_client.audio.speech.create(
-        model="tts-1-hd",
-        voice="nova",
-        input=text,
-        response_format="wav",
-    )
-    return response.content
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    payload = {
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+        },
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.content
 
 
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
