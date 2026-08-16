@@ -200,8 +200,29 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
             return groq.generate(messages)
 
 
+def _get_street_hints() -> str:
+    """Carga los nombres de calles de la DB para pasarlos como hints a Twilio."""
+    try:
+        with get_cursor() as cur:
+            cur.execute("SELECT name FROM street_embeddings ORDER BY name")
+            rows = cur.fetchall()
+            return ", ".join(r["name"] for r in rows)
+    except Exception as e:
+        logger.warning(f"No se pudieron cargar hints de calles: {e}")
+        return ""
+
+_STREET_HINTS = None
+
+def _get_cached_hints() -> str:
+    global _STREET_HINTS
+    if _STREET_HINTS is None:
+        _STREET_HINTS = _get_street_hints()
+    return _STREET_HINTS
+
+
 def _build_gather_twiml(action_url: str, say_text: str) -> str:
     response = VoiceResponse()
+    hints = _get_cached_hints()
     gather = Gather(
         input="speech",
         action=action_url,
@@ -211,6 +232,7 @@ def _build_gather_twiml(action_url: str, say_text: str) -> str:
         timeout=8,
         speech_model="phone_call",
         enhanced=True,
+        hints=hints if hints else None,
     )
     gather.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
     response.append(gather)
