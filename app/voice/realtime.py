@@ -67,7 +67,7 @@ async def media_stream(websocket: WebSocket):
     try:
         openai_ws = await websockets.connect(
             "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01",
-            extra_headers={
+            additional_headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
                 "OpenAI-Beta": "realtime=v1",
             },
@@ -99,47 +99,72 @@ async def media_stream(websocket: WebSocket):
 
         async def twilio_to_openai():
             nonlocal stream_sid
+            audio_chunks = 0
             try:
                 async for message in websocket.iter_text():
                     data = json.loads(message)
                     event = data.get("event")
                     if event == "start":
                         stream_sid = data["start"]["streamSid"]
-                        logger.info(f"Stream iniciado: {stream_sid}")
+                        logger.info(f"[STREAM START] streamSid={stream_sid}")
                     elif event == "media":
+                        audio_chunks += 1
+                        if audio_chunks % 50 == 0:
+                            logger.info(f"[AUDIO] {audio_chunks} chunks enviados a OpenAI")
                         if openai_ws.open:
                             await openai_ws.send(json.dumps({
                                 "type": "input_audio_buffer.append",
                                 "audio": data["media"]["payload"],
                             }))
                     elif event == "stop":
-                        logger.info("Stream detenido por Twilio")
+                        logger.info(f"[STREAM STOP] Total chunks: {audio_chunks}")
                         break
+                    else:
+                        logger.info(f"[TWILIO EVENT] {event}")
             except WebSocketDisconnect:
-                logger.info("Twilio desconectado")
+                logger.info("[TWILIO] Desconectado")
 
         async def openai_to_twilio():
+            gpt_text = []
             try:
                 async for message in openai_ws:
                     data = json.loads(message)
                     event_type = data.get("type")
-                    if event_type == "response.audio.delta" and data.get("delta"):
+
+                    if event_type == "session.created":
+                        logger.info("[OPENAI] Sesión creada")
+                    elif event_type == "session.updated":
+                        logger.info("[OPENAI] Sesión configurada")
+                    elif event_type == "input_audio_buffer.speech_started":
+                        logger.info("[OPENAI] Usuario empezó a hablar")
+                        await websocket.send_text(json.dumps({
+                            "event": "clear",
+                            "streamSid": stream_sid,
+                        }))
+                    elif event_type == "input_audio_buffer.speech_stopped":
+                        logger.info("[OPENAI] Usuario dejó de hablar")
+                    elif event_type == "conversation.item.input_audio_transcription.completed":
+                        user_text = data.get("transcript", "")
+                        logger.info(f"[USUARIO] '{user_text}'")
+                    elif event_type == "response.created":
+                        logger.info("[OPENAI] Generando respuesta")
+                    elif event_type == "response.audio_transcript.delta":
+                        gpt_text.append(data.get("delta", ""))
+                    elif event_type == "response.audio_transcript.done":
+                        logger.info(f"[GPT] '{''.join(gpt_text)}'")
+                        gpt_text = []
+                    elif event_type == "response.audio.delta" and data.get("delta"):
                         await websocket.send_text(json.dumps({
                             "event": "media",
                             "streamSid": stream_sid,
                             "media": {"payload": data["delta"]},
                         }))
-                    elif event_type == "response.audio_transcript.delta":
-                        logger.info(f"GPT: {data.get('delta', '')}")
-                    elif event_type == "input_audio_buffer.speech_started":
-                        await websocket.send_text(json.dumps({
-                            "event": "clear",
-                            "streamSid": stream_sid,
-                        }))
+                    elif event_type == "response.done":
+                        logger.info("[OPENAI] Respuesta completada")
                     elif event_type == "error":
-                        logger.error(f"OpenAI error: {data}")
+                        logger.error(f"[OPENAI ERROR] {data}")
             except Exception as e:
-                logger.error(f"Error en openai_to_twilio: {e}")
+                logger.error(f"[ERROR] openai_to_twilio: {e}")
 
         await asyncio.gather(twilio_to_openai(), openai_to_twilio())
 
