@@ -3,13 +3,14 @@ app/voice/router.py
 """
 
 import os
+import re
 import logging
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from twilio.rest import Client as TwilioClient
-from twilio.twiml.voice_response import VoiceResponse, Gather
+from twilio.twiml.voice_response import VoiceResponse
 from openai import AsyncOpenAI
 
 from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
@@ -33,6 +34,16 @@ VOICE_SYSTEM_USER = "voice_calls"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
+# ---------------------------------------------------------------------------
+# Estado temporal por llamada: guarda candidatos de calle pendientes
+# { call_sid: { "candidates": [...], "number": "500", "step": "origen"|"destino" } }
+# ---------------------------------------------------------------------------
+_pending_confirmation: dict[str, dict] = {}
+
+
+# ---------------------------------------------------------------------------
+# Chat helpers
+# ---------------------------------------------------------------------------
 
 def _get_or_create_voice_chat(call_sid: str) -> str:
     with get_cursor() as cur:
@@ -43,7 +54,6 @@ def _get_or_create_voice_chat(call_sid: str) -> str:
         row = cur.fetchone()
         if row:
             return row["chat_id"]
-
     chat = repo.create_chat(VOICE_SYSTEM_USER)
     repo.update_chat_title(chat["chat_id"], VOICE_SYSTEM_USER, f"Llamada {call_sid}")
     return chat["chat_id"]
@@ -53,7 +63,6 @@ def _build_voice_system_prompt() -> str:
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
-
     return (
         f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
         f"Contexto:\n{style_context['sources']['style']}\n\n"
@@ -61,27 +70,27 @@ def _build_voice_system_prompt() -> str:
         "- Estás respondiendo una llamada de voz. Sé conciso y claro.\n"
         "- No uses markdown, listas ni asteriscos. Solo texto natural para hablar.\n"
         "- Respondé en máximo 2 oraciones cortas.\n"
-        "- SIEMPRE respondé en español argentino, sin excepción.\n"
-        "- Nunca respondas en inglés ni en otro idioma.\n\n"
+        "- SIEMPRE respondé en español argentino, sin excepción.\n\n"
         "FLUJO DE PEDIDO DE VIAJE:\n"
-        "- Si el usuario quiere solicitar un viaje, tomá los datos vos mismo por teléfono. No lo mandés a la app ni a WhatsApp.\n"
         "- Pedí primero el punto de origen (¿Desde dónde salís?).\n"
         "- Luego pedí el destino (¿A dónde vas?).\n"
-        "- Cuando el usuario dé una dirección, el sistema ya la validó con Google Maps y te la pasará entre corchetes como [DIRECCIÓN VALIDADA EN MAPS: ...]. Usá ese dato para confirmar.\n"
-        "- Si el sistema NO incluye [DIRECCIÓN VALIDADA EN MAPS: ...], significa que no se encontró la dirección. En ese caso decí exactamente lo que escuchaste y preguntá si está bien. Ejemplo: 'Escuché Vierte 500, ¿es correcto? ¿Podés repetirlo más despacio o deletrear la calle?'\n"
-        "- NUNCA inventes ni asumas una dirección si no viene validada. Si no la encontraste, decilo.\n"
-        "- Siempre repetí lo que escuchaste antes de confirmar. Ejemplo: 'Entendí que salís desde Vieytes 500, ¿es correcto?'\n"
+        "- Cuando el usuario confirme una dirección, el sistema te la pasará como [DIRECCIÓN CONFIRMADA: ...]. Usala para confirmar.\n"
         "- Confirmá origen y destino en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
     )
 
 
+# ---------------------------------------------------------------------------
+# Embeddings: buscar top 3 candidatos
+# ---------------------------------------------------------------------------
 
-def _search_street_by_embedding(query: str) -> str | None:
-    """Busca la calle más similar en la DB usando embeddings."""
-    embedding = get_embedding(query)
+def _search_top3_streets(query: str) -> list[str]:
+    street_part = re.sub(r'\b\d+\b', '', query).strip()
+    if not street_part:
+        return []
+    embedding = get_embedding(street_part)
     if not embedding:
-        return None
+        return []
     try:
         with get_cursor() as cur:
             cur.execute("""
@@ -89,99 +98,43 @@ def _search_street_by_embedding(query: str) -> str | None:
                 FROM street_embeddings
                 WHERE embedding IS NOT NULL
                 ORDER BY embedding <=> %s::vector
-                LIMIT 1
+                LIMIT 3
             """, (str(embedding), str(embedding)))
-            row = cur.fetchone()
-            if row and row["similarity"] > 0.75:
-                logger.info(f"Calle encontrada por embedding: '{row['name']}' (similarity={row['similarity']:.2f})")
-                return row["name"]
+            rows = cur.fetchall()
+            return [r["name"] for r in rows if r["similarity"] > 0.5]
     except Exception as e:
-        logger.warning(f"Error buscando calle por embedding: {e}")
+        logger.warning(f"Error buscando calles top3: {e}")
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Selección por número: "la primera", "la segunda", "la tercera", "sí", "no"
+# ---------------------------------------------------------------------------
+
+def _parse_selection(text: str) -> int | None:
+    """Retorna 0, 1 o 2 si el usuario eligió una opción. None si no."""
+    t = text.lower().strip()
+    if any(w in t for w in ["primer", "primera", "uno", "una", "1"]):
+        return 0
+    if any(w in t for w in ["segund", "dos", "2"]):
+        return 1
+    if any(w in t for w in ["tercer", "tercera", "tres", "3"]):
+        return 2
+    if any(w in t for w in ["sí", "si", "correcto", "exacto", "eso"]):
+        return 0  # confirma la primera opción
     return None
 
 
-async def _correct_address_phonetic(address: str) -> str:
-    """Usa GPT para corregir errores fonéticos de Twilio antes de buscar en Maps."""
-    try:
-        response = await openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Sos un corrector de direcciones de Bahía Blanca, Buenos Aires, Argentina. "
-                        "Twilio transcribe llamadas telefónicas con errores fonéticos. "
-                        "Tu tarea es corregir el texto recibido a una dirección real de Bahía Blanca. "
-                        "Ejemplos de errores comunes: 'Vierte' → 'Vieytes', 'Donato' → 'Donado', "
-                        "'Urquisa' → 'Urquiza', 'Ayen' → 'Alem'. "
-                        "Respondé SOLO con la dirección corregida, sin explicación. "
-                        "Si no parece una dirección, respondé exactamente con el texto original."
-                    ),
-                },
-                {"role": "user", "content": address},
-            ],
-            max_tokens=50,
-            temperature=0,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.warning(f"No se pudo corregir fonéticamente la dirección: {e}")
-        return address
-
-
-async def _validate_address(address: str) -> str | None:
-    api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
-    if not api_key:
-        return None
-
-    # Paso 1: buscar calle por embedding (más rápido y preciso para errores fonéticos)
-    import re
-    street_from_embedding = _search_street_by_embedding(address)
-    if street_from_embedding:
-        numbers = re.findall(r'\b\d+\b', address)
-        number = numbers[0] if numbers else ""
-        corrected = f"{street_from_embedding} {number}".strip()
-        logger.info(f"Calle corregida por embedding: '{address}' → '{corrected}'")
-    else:
-        # Fallback: corregir errores fonéticos con GPT
-        corrected = await _correct_address_phonetic(address)
-        logger.info(f"Dirección original: '{address}' → corregida por GPT: '{corrected}'")
-
-    # Paso 2: buscar con Places Text Search (más tolerante que Geocoding)
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(
-            "https://maps.googleapis.com/maps/api/place/textsearch/json",
-            params={
-                "query": f"{corrected}, Bahía Blanca, Buenos Aires, Argentina",
-                "key": api_key,
-                "language": "es",
-                "region": "ar",
-            },
-        )
-        data = resp.json()
-        logger.info(f"Places API status: {data.get('status')} para '{corrected}'")
-
-        if data.get("status") == "OK" and data.get("results"):
-            result = data["results"][0]
-            formatted = result.get("formatted_address", "")
-            # Verificar que el resultado sea de Bahía Blanca
-            if "Bahía Blanca" in formatted or "Bahia Blanca" in formatted:
-                # Retornar solo la parte relevante (sin país)
-                parts = formatted.split(",")
-                if len(parts) >= 2:
-                    return f"{parts[0].strip()}, {parts[1].strip()}"
-                return parts[0].strip()
-
-    return None
+# ---------------------------------------------------------------------------
+# Generación de respuesta GPT
+# ---------------------------------------------------------------------------
 
 async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
     history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
     system_prompt = _build_voice_system_prompt()
-
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history[-10:]]
     messages.append({"role": "user", "content": transcript})
-
     try:
         response = await openai_client.chat.completions.create(
             model="gpt-4o",
@@ -200,8 +153,11 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
             return groq.generate(messages)
 
 
+# ---------------------------------------------------------------------------
+# TwiML
+# ---------------------------------------------------------------------------
+
 def _build_say_and_record_twiml(action_url: str, say_text: str) -> str:
-    """Reproduce un mensaje y graba la respuesta del usuario."""
     response = VoiceResponse()
     response.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
     response.record(
@@ -214,6 +170,10 @@ def _build_say_and_record_twiml(action_url: str, say_text: str) -> str:
     )
     return str(response)
 
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @router.post("/incoming")
 async def incoming_call(
@@ -231,49 +191,92 @@ async def incoming_call(
 async def handle_recording(
     request: Request,
     RecordingUrl: str = Form(default=""),
-    RecordingSid: str = Form(default=""),
     call_sid: str = "",
     CallSid: str = Form(default=""),
 ):
     effective_call_sid = call_sid or CallSid
     action_url = f"{BASE_URL}/voice/recording?call_sid={effective_call_sid}"
-    logger.info(f"Recording recibido - CallSid: {effective_call_sid}, URL: {RecordingUrl}")
 
     if not RecordingUrl:
         twiml = _build_say_and_record_twiml(action_url, "No escuché bien. ¿Podés repetir?")
         return Response(content=twiml, media_type="application/xml")
 
     try:
-        # Descargar el audio desde Twilio
+        # Descargar y transcribir con Groq Whisper
         audio_url = RecordingUrl + ".mp3"
         async with httpx.AsyncClient(timeout=15) as client:
-            audio_resp = await client.get(
-                audio_url,
-                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-            )
+            audio_resp = await client.get(audio_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
             audio_bytes = audio_resp.content
 
-        # Transcribir con Groq Whisper
         groq = GroqProvider()
         transcript = groq.transcribe(audio_bytes, filename="audio.mp3")
-        logger.info(f"Groq Whisper transcript: '{transcript}'")
+        logger.info(f"Whisper transcript: '{transcript}'")
 
         if not transcript:
             twiml = _build_say_and_record_twiml(action_url, "No escuché bien. ¿Podés repetir?")
             return Response(content=twiml, media_type="application/xml")
 
         chat_id = _get_or_create_voice_chat(effective_call_sid)
+
+        # ---- MODO CONFIRMACIÓN: el usuario está eligiendo entre candidatos ----
+        if effective_call_sid in _pending_confirmation:
+            pending = _pending_confirmation[effective_call_sid]
+            candidates = pending["candidates"]
+            number = pending["number"]
+            step = pending["step"]
+
+            selection = _parse_selection(transcript)
+
+            if selection is not None and selection < len(candidates):
+                chosen = candidates[selection]
+                address = f"{chosen} {number}".strip()
+                del _pending_confirmation[effective_call_sid]
+                enriched = f"{transcript} [DIRECCIÓN CONFIRMADA: {address}]"
+                logger.info(f"Dirección confirmada: {address}")
+            else:
+                # No entendió la selección, repetir opciones
+                opciones = ", ".join(
+                    [f"la {'primera' if i==0 else 'segunda' if i==1 else 'tercera'}: {c}"
+                     for i, c in enumerate(candidates)]
+                )
+                reply = f"No entendí. Las opciones son: {opciones}. ¿Cuál es?"
+                twiml = _build_say_and_record_twiml(action_url, reply)
+                return Response(content=twiml, media_type="application/xml")
+
+        else:
+            # ---- MODO NORMAL: buscar candidatos ----
+            candidates = _search_top3_streets(transcript)
+            numbers = re.findall(r'\b\d+\b', transcript)
+            number = numbers[0] if numbers else ""
+
+            if len(candidates) >= 2:
+                # Hay ambigüedad — pedir confirmación
+                _pending_confirmation[effective_call_sid] = {
+                    "candidates": candidates,
+                    "number": number,
+                    "step": "origen",
+                }
+                opciones = ", ".join(
+                    [f"la {'primera' if i==0 else 'segunda' if i==1 else 'tercera'}: {c}"
+                     for i, c in enumerate(candidates)]
+                )
+                reply = f"Encontré estas calles: {opciones}. ¿Cuál es la correcta?"
+                repo.save_message(chat_id, "user", transcript)
+                repo.save_message(chat_id, "assistant", reply)
+                twiml = _build_say_and_record_twiml(action_url, reply)
+                return Response(content=twiml, media_type="application/xml")
+
+            elif len(candidates) == 1:
+                address = f"{candidates[0]} {number}".strip()
+                enriched = f"{transcript} [DIRECCIÓN CONFIRMADA: {address}]"
+            else:
+                enriched = transcript
+
         repo.save_message(chat_id, "user", transcript)
         save_message_to_memory(VOICE_SYSTEM_USER, "user", transcript)
 
-        validated = await _validate_address(transcript)
-        if validated:
-            enriched = f"{transcript} [DIRECCIÓN VALIDADA EN MAPS: {validated}]"
-        else:
-            enriched = transcript
-
         reply = await _generate_reply_gpt(enriched, chat_id)
-        logger.info(f"Respuesta GPT-4o: '{reply}'")
+        logger.info(f"Respuesta GPT: '{reply}'")
 
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
