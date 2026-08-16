@@ -5,6 +5,8 @@ app/voice/router.py
 import os
 import re
 import logging
+import subprocess
+import tempfile
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
@@ -34,11 +36,36 @@ VOICE_SYSTEM_USER = "voice_calls"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# ---------------------------------------------------------------------------
-# Estado temporal por llamada: guarda candidatos de calle pendientes
-# { call_sid: { "candidates": [...], "number": "500", "step": "origen"|"destino" } }
-# ---------------------------------------------------------------------------
+# Estado por llamada: candidatos de calle pendientes de confirmación
+# { call_sid: { "candidates": [...], "index": 0, "number": "500" } }
 _pending_confirmation: dict[str, dict] = {}
+
+
+# ---------------------------------------------------------------------------
+# Audio: boost de volumen con ffmpeg
+# ---------------------------------------------------------------------------
+
+def _boost_audio(audio_bytes: bytes) -> bytes:
+    """Aumenta el volumen del audio 3x con ffmpeg para mejorar transcripción."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as inp:
+            inp.write(audio_bytes)
+            inp_path = inp.name
+        out_path = inp_path.replace(".mp3", "_boosted.mp3")
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", inp_path, "-filter:a", "volume=3.0", out_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        with open(out_path, "rb") as f:
+            result = f.read()
+        os.unlink(inp_path)
+        os.unlink(out_path)
+        return result
+    except Exception as e:
+        logger.warning(f"ffmpeg boost falló, usando audio original: {e}")
+        return audio_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -74,14 +101,14 @@ def _build_voice_system_prompt() -> str:
         "FLUJO DE PEDIDO DE VIAJE:\n"
         "- Pedí primero el punto de origen (¿Desde dónde salís?).\n"
         "- Luego pedí el destino (¿A dónde vas?).\n"
-        "- Cuando el usuario confirme una dirección, el sistema te la pasará como [DIRECCIÓN CONFIRMADA: ...]. Usala para confirmar.\n"
+        "- Cuando el sistema confirme una dirección te la pasará como [DIRECCIÓN CONFIRMADA: ...]. Usala para confirmar con el usuario.\n"
         "- Confirmá origen y destino en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
     )
 
 
 # ---------------------------------------------------------------------------
-# Embeddings: buscar top 3 candidatos
+# Embeddings: top 3 candidatos
 # ---------------------------------------------------------------------------
 
 def _search_top3_streets(query: str) -> list[str]:
@@ -108,21 +135,17 @@ def _search_top3_streets(query: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Selección por número: "la primera", "la segunda", "la tercera", "sí", "no"
+# Detección de sí/no
 # ---------------------------------------------------------------------------
 
-def _parse_selection(text: str) -> int | None:
-    """Retorna 0, 1 o 2 si el usuario eligió una opción. None si no."""
-    t = text.lower().strip()
-    if any(w in t for w in ["primer", "primera", "uno", "una", "1"]):
-        return 0
-    if any(w in t for w in ["segund", "dos", "2"]):
-        return 1
-    if any(w in t for w in ["tercer", "tercera", "tres", "3"]):
-        return 2
-    if any(w in t for w in ["sí", "si", "correcto", "exacto", "eso"]):
-        return 0  # confirma la primera opción
-    return None
+def _is_yes(text: str) -> bool:
+    t = text.lower()
+    return any(w in t for w in ["sí", "si", "correcto", "exacto", "eso", "ese", "esa", "ok", "dale", "claro"])
+
+
+def _is_no(text: str) -> bool:
+    t = text.lower()
+    return any(w in t for w in ["no", "negativo", "otro", "otra", "distinto"])
 
 
 # ---------------------------------------------------------------------------
@@ -154,16 +177,17 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# TwiML
+# TwiML con velocidad 1.25x via SSML
 # ---------------------------------------------------------------------------
 
 def _build_say_and_record_twiml(action_url: str, say_text: str) -> str:
     response = VoiceResponse()
-    response.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
+    ssml = f'<speak><prosody rate="fast">{say_text}</prosody></speak>'
+    response.say(ssml, language="es-AR", voice="Google.es-US-Neural2-A")
     response.record(
         action=action_url,
         method="POST",
-        max_length=15,
+        max_length=10,
         timeout=3,
         play_beep=False,
         trim="trim-silence",
@@ -202,12 +226,16 @@ async def handle_recording(
         return Response(content=twiml, media_type="application/xml")
 
     try:
-        # Descargar y transcribir con Groq Whisper
+        # Descargar audio
         audio_url = RecordingUrl + ".mp3"
         async with httpx.AsyncClient(timeout=15) as client:
             audio_resp = await client.get(audio_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
             audio_bytes = audio_resp.content
 
+        # Boost de volumen
+        audio_bytes = _boost_audio(audio_bytes)
+
+        # Transcribir con Groq Whisper
         groq = GroqProvider()
         transcript = groq.transcribe(audio_bytes, filename="audio.mp3")
         logger.info(f"Whisper transcript: '{transcript}'")
@@ -218,30 +246,34 @@ async def handle_recording(
 
         chat_id = _get_or_create_voice_chat(effective_call_sid)
 
-        # ---- MODO CONFIRMACIÓN: el usuario está eligiendo entre candidatos ----
+        # ---- MODO CONFIRMACIÓN: usuario responde sí/no a una calle ----
         if effective_call_sid in _pending_confirmation:
             pending = _pending_confirmation[effective_call_sid]
             candidates = pending["candidates"]
+            index = pending["index"]
             number = pending["number"]
-            step = pending["step"]
 
-            selection = _parse_selection(transcript)
-
-            if selection is not None and selection < len(candidates):
-                chosen = candidates[selection]
-                address = f"{chosen} {number}".strip()
+            if _is_yes(transcript):
+                chosen = f"{candidates[index]} {number}".strip()
                 del _pending_confirmation[effective_call_sid]
-                enriched = f"{transcript} [DIRECCIÓN CONFIRMADA: {address}]"
-                logger.info(f"Dirección confirmada: {address}")
-            else:
-                # No entendió la selección, repetir opciones
-                opciones = ", ".join(
-                    [f"la {'primera' if i==0 else 'segunda' if i==1 else 'tercera'}: {c}"
-                     for i, c in enumerate(candidates)]
-                )
-                reply = f"No entendí. Las opciones son: {opciones}. ¿Cuál es?"
+                enriched = f"{transcript} [DIRECCIÓN CONFIRMADA: {chosen}]"
+                logger.info(f"Dirección confirmada: {chosen}")
+
+            elif _is_no(transcript) and index + 1 < len(candidates):
+                # Pasar al siguiente candidato
+                next_index = index + 1
+                _pending_confirmation[effective_call_sid]["index"] = next_index
+                next_calle = candidates[next_index]
+                reply = f"¿Es {next_calle} {number}?".strip()
+                repo.save_message(chat_id, "user", transcript)
+                repo.save_message(chat_id, "assistant", reply)
                 twiml = _build_say_and_record_twiml(action_url, reply)
                 return Response(content=twiml, media_type="application/xml")
+
+            else:
+                # No hay más candidatos o no se entendió
+                del _pending_confirmation[effective_call_sid]
+                enriched = transcript
 
         else:
             # ---- MODO NORMAL: buscar candidatos ----
@@ -249,26 +281,18 @@ async def handle_recording(
             numbers = re.findall(r'\b\d+\b', transcript)
             number = numbers[0] if numbers else ""
 
-            if len(candidates) >= 2:
-                # Hay ambigüedad — pedir confirmación
+            if candidates:
+                # Preguntar por el primero
                 _pending_confirmation[effective_call_sid] = {
                     "candidates": candidates,
+                    "index": 0,
                     "number": number,
-                    "step": "origen",
                 }
-                opciones = ", ".join(
-                    [f"la {'primera' if i==0 else 'segunda' if i==1 else 'tercera'}: {c}"
-                     for i, c in enumerate(candidates)]
-                )
-                reply = f"Encontré estas calles: {opciones}. ¿Cuál es la correcta?"
+                reply = f"¿Es {candidates[0]} {number}?".strip()
                 repo.save_message(chat_id, "user", transcript)
                 repo.save_message(chat_id, "assistant", reply)
                 twiml = _build_say_and_record_twiml(action_url, reply)
                 return Response(content=twiml, media_type="application/xml")
-
-            elif len(candidates) == 1:
-                address = f"{candidates[0]} {number}".strip()
-                enriched = f"{transcript} [DIRECCIÓN CONFIRMADA: {address}]"
             else:
                 enriched = transcript
 
