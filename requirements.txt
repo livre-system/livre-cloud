@@ -20,3 +20,5 @@ boto3
 twilio
 openai
 pydub
+rapidfuzz
+websockets
