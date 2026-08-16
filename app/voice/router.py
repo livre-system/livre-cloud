@@ -53,7 +53,7 @@ def _boost_audio(audio_bytes: bytes) -> bytes:
             inp_path = inp.name
         out_path = inp_path.replace(".mp3", "_boosted.mp3")
         subprocess.run(
-            ["ffmpeg", "-y", "-i", inp_path, "-filter:a", "volume=15.0", out_path],
+            ["ffmpeg", "-y", "-i", inp_path, "-filter:a", "volume=10.0", out_path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
