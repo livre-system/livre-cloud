@@ -5,14 +5,12 @@ app/voice/router.py
 import os
 import re
 import logging
-import subprocess
-import tempfile
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 from twilio.rest import Client as TwilioClient
-from twilio.twiml.voice_response import VoiceResponse
+from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import AsyncOpenAI
 
 from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
@@ -36,36 +34,30 @@ VOICE_SYSTEM_USER = "voice_calls"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# Estado por llamada: candidatos de calle pendientes de confirmación
-# { call_sid: { "candidates": [...], "index": 0, "number": "500" } }
+# Estado por llamada para confirmación sí/no
 _pending_confirmation: dict[str, dict] = {}
 
+# Cache de hints
+_STREET_HINTS: str | None = None
+
 
 # ---------------------------------------------------------------------------
-# Audio: boost de volumen con ffmpeg
+# Hints de calles desde DB
 # ---------------------------------------------------------------------------
 
-def _boost_audio(audio_bytes: bytes) -> bytes:
-    """Aumenta el volumen del audio 3x con ffmpeg para mejorar transcripción."""
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as inp:
-            inp.write(audio_bytes)
-            inp_path = inp.name
-        out_path = inp_path.replace(".mp3", "_boosted.mp3")
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", inp_path, "-filter:a", "volume=10.0", out_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
-        with open(out_path, "rb") as f:
-            result = f.read()
-        os.unlink(inp_path)
-        os.unlink(out_path)
-        return result
-    except Exception as e:
-        logger.warning(f"ffmpeg boost falló, usando audio original: {e}")
-        return audio_bytes
+def _get_cached_hints() -> str:
+    global _STREET_HINTS
+    if _STREET_HINTS is None:
+        try:
+            with get_cursor() as cur:
+                cur.execute("SELECT name FROM street_embeddings ORDER BY name")
+                rows = cur.fetchall()
+                _STREET_HINTS = ", ".join(r["name"] for r in rows)
+                logger.info(f"Hints cargados: {len(rows)} calles")
+        except Exception as e:
+            logger.warning(f"No se pudieron cargar hints: {e}")
+            _STREET_HINTS = ""
+    return _STREET_HINTS
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +127,7 @@ def _search_top3_streets(query: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Detección de sí/no
+# Detección sí/no
 # ---------------------------------------------------------------------------
 
 def _is_yes(text: str) -> bool:
@@ -177,21 +169,26 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# TwiML con velocidad 1.25x via SSML
+# TwiML con Gather + hints
 # ---------------------------------------------------------------------------
 
-def _build_say_and_record_twiml(action_url: str, say_text: str) -> str:
+def _build_gather_twiml(action_url: str, say_text: str) -> str:
+    hints = _get_cached_hints()
     response = VoiceResponse()
-    ssml = f'<speak><prosody rate="fast">{say_text}</prosody></speak>'
-    response.say(ssml, language="es-AR", voice="Google.es-US-Neural2-A")
-    response.record(
+    gather = Gather(
+        input="speech",
         action=action_url,
         method="POST",
-        max_length=10,
-        timeout=3,
-        play_beep=False,
-        trim="trim-silence",
+        language="es-AR",
+        speech_timeout="auto",
+        timeout=8,
+        speech_model="phone_call",
+        enhanced=True,
+        hints=hints if hints else None,
     )
+    gather.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
+    response.append(gather)
+    response.redirect(action_url, method="POST")
     return str(response)
 
 
@@ -206,47 +203,32 @@ async def incoming_call(
     From: str = Form(default=""),
 ):
     logger.info(f"Llamada entrante - CallSid: {CallSid}, From: {From}")
-    action_url = f"{BASE_URL}/voice/recording?call_sid={CallSid}"
-    twiml = _build_say_and_record_twiml(action_url, "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?")
+    action_url = f"{BASE_URL}/voice/respond?call_sid={CallSid}"
+    twiml = _build_gather_twiml(action_url, "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?")
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/recording")
-async def handle_recording(
+@router.post("/respond")
+async def respond_to_speech(
     request: Request,
-    RecordingUrl: str = Form(default=""),
+    SpeechResult: str = Form(default=""),
     call_sid: str = "",
     CallSid: str = Form(default=""),
 ):
     effective_call_sid = call_sid or CallSid
-    action_url = f"{BASE_URL}/voice/recording?call_sid={effective_call_sid}"
+    transcript = SpeechResult.strip()
+    logger.info(f"Transcript - CallSid: {effective_call_sid}, texto: '{transcript}'")
 
-    if not RecordingUrl:
-        twiml = _build_say_and_record_twiml(action_url, "No escuché bien. ¿Podés repetir?")
+    action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
+
+    if not transcript:
+        twiml = _build_gather_twiml(action_url, "No escuché bien. ¿Podés repetir?")
         return Response(content=twiml, media_type="application/xml")
 
     try:
-        # Descargar audio
-        audio_url = RecordingUrl + ".mp3"
-        async with httpx.AsyncClient(timeout=15) as client:
-            audio_resp = await client.get(audio_url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
-            audio_bytes = audio_resp.content
-
-        # Boost de volumen
-        audio_bytes = _boost_audio(audio_bytes)
-
-        # Transcribir con Groq Whisper
-        groq = GroqProvider()
-        transcript = groq.transcribe(audio_bytes, filename="audio.mp3")
-        logger.info(f"Whisper transcript: '{transcript}'")
-
-        if not transcript:
-            twiml = _build_say_and_record_twiml(action_url, "No escuché bien. ¿Podés repetir?")
-            return Response(content=twiml, media_type="application/xml")
-
         chat_id = _get_or_create_voice_chat(effective_call_sid)
 
-        # ---- MODO CONFIRMACIÓN: usuario responde sí/no a una calle ----
+        # ---- MODO CONFIRMACIÓN sí/no ----
         if effective_call_sid in _pending_confirmation:
             pending = _pending_confirmation[effective_call_sid]
             candidates = pending["candidates"]
@@ -260,18 +242,16 @@ async def handle_recording(
                 logger.info(f"Dirección confirmada: {chosen}")
 
             elif _is_no(transcript) and index + 1 < len(candidates):
-                # Pasar al siguiente candidato
                 next_index = index + 1
                 _pending_confirmation[effective_call_sid]["index"] = next_index
                 next_calle = candidates[next_index]
                 reply = f"¿Es {next_calle} {number}?".strip()
                 repo.save_message(chat_id, "user", transcript)
                 repo.save_message(chat_id, "assistant", reply)
-                twiml = _build_say_and_record_twiml(action_url, reply)
+                twiml = _build_gather_twiml(action_url, reply)
                 return Response(content=twiml, media_type="application/xml")
 
             else:
-                # No hay más candidatos o no se entendió
                 del _pending_confirmation[effective_call_sid]
                 enriched = transcript
 
@@ -282,7 +262,6 @@ async def handle_recording(
             number = numbers[0] if numbers else ""
 
             if candidates:
-                # Preguntar por el primero
                 _pending_confirmation[effective_call_sid] = {
                     "candidates": candidates,
                     "index": 0,
@@ -291,7 +270,7 @@ async def handle_recording(
                 reply = f"¿Es {candidates[0]} {number}?".strip()
                 repo.save_message(chat_id, "user", transcript)
                 repo.save_message(chat_id, "assistant", reply)
-                twiml = _build_say_and_record_twiml(action_url, reply)
+                twiml = _build_gather_twiml(action_url, reply)
                 return Response(content=twiml, media_type="application/xml")
             else:
                 enriched = transcript
@@ -305,11 +284,11 @@ async def handle_recording(
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
 
-        twiml = _build_say_and_record_twiml(action_url, reply)
+        twiml = _build_gather_twiml(action_url, reply)
         return Response(content=twiml, media_type="application/xml")
 
     except Exception as e:
-        logger.exception(f"Error procesando recording: {e}")
+        logger.exception(f"Error procesando respuesta: {e}")
         response = VoiceResponse()
         response.say("Hubo un problema técnico. Por favor intentá de nuevo.", language="es-AR")
         response.hangup()
