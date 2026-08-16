@@ -200,43 +200,18 @@ async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
             return groq.generate(messages)
 
 
-def _get_street_hints() -> str:
-    """Carga los nombres de calles de la DB para pasarlos como hints a Twilio."""
-    try:
-        with get_cursor() as cur:
-            cur.execute("SELECT name FROM street_embeddings ORDER BY name")
-            rows = cur.fetchall()
-            return ", ".join(r["name"] for r in rows)
-    except Exception as e:
-        logger.warning(f"No se pudieron cargar hints de calles: {e}")
-        return ""
-
-_STREET_HINTS = None
-
-def _get_cached_hints() -> str:
-    global _STREET_HINTS
-    if _STREET_HINTS is None:
-        _STREET_HINTS = _get_street_hints()
-    return _STREET_HINTS
-
-
-def _build_gather_twiml(action_url: str, say_text: str) -> str:
+def _build_say_and_record_twiml(action_url: str, say_text: str) -> str:
+    """Reproduce un mensaje y graba la respuesta del usuario."""
     response = VoiceResponse()
-    hints = _get_cached_hints()
-    gather = Gather(
-        input="speech",
+    response.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
+    response.record(
         action=action_url,
         method="POST",
-        language="es-AR",
-        speech_timeout="auto",
-        timeout=8,
-        speech_model="phone_call",
-        enhanced=True,
-        hints=hints if hints else None,
+        max_length=15,
+        timeout=3,
+        play_beep=False,
+        trim="trim-silence",
     )
-    gather.say(say_text, language="es-AR", voice="Google.es-US-Neural2-A")
-    response.append(gather)
-    response.redirect(action_url, method="POST")
     return str(response)
 
 
@@ -247,35 +222,50 @@ async def incoming_call(
     From: str = Form(default=""),
 ):
     logger.info(f"Llamada entrante - CallSid: {CallSid}, From: {From}")
-    action_url = f"{BASE_URL}/voice/respond?call_sid={CallSid}"
-    twiml = _build_gather_twiml(action_url, "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?")
+    action_url = f"{BASE_URL}/voice/recording?call_sid={CallSid}"
+    twiml = _build_say_and_record_twiml(action_url, "Hola, soy LIVRE IA. ¿En qué te puedo ayudar?")
     return Response(content=twiml, media_type="application/xml")
 
 
-@router.post("/respond")
-async def respond_to_speech(
+@router.post("/recording")
+async def handle_recording(
     request: Request,
-    SpeechResult: str = Form(default=""),
-    Confidence: str = Form(default="0"),
+    RecordingUrl: str = Form(default=""),
+    RecordingSid: str = Form(default=""),
     call_sid: str = "",
     CallSid: str = Form(default=""),
 ):
     effective_call_sid = call_sid or CallSid
-    transcript = SpeechResult.strip()
-    logger.info(f"Transcript - CallSid: {effective_call_sid}, texto: '{transcript}'")
+    action_url = f"{BASE_URL}/voice/recording?call_sid={effective_call_sid}"
+    logger.info(f"Recording recibido - CallSid: {effective_call_sid}, URL: {RecordingUrl}")
 
-    action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
-
-    if not transcript:
-        twiml = _build_gather_twiml(action_url, "No escuché bien. ¿Podés repetir?")
+    if not RecordingUrl:
+        twiml = _build_say_and_record_twiml(action_url, "No escuché bien. ¿Podés repetir?")
         return Response(content=twiml, media_type="application/xml")
 
     try:
+        # Descargar el audio desde Twilio
+        audio_url = RecordingUrl + ".mp3"
+        async with httpx.AsyncClient(timeout=15) as client:
+            audio_resp = await client.get(
+                audio_url,
+                auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+            )
+            audio_bytes = audio_resp.content
+
+        # Transcribir con Groq Whisper
+        groq = GroqProvider()
+        transcript = groq.transcribe(audio_bytes, filename="audio.mp3")
+        logger.info(f"Groq Whisper transcript: '{transcript}'")
+
+        if not transcript:
+            twiml = _build_say_and_record_twiml(action_url, "No escuché bien. ¿Podés repetir?")
+            return Response(content=twiml, media_type="application/xml")
+
         chat_id = _get_or_create_voice_chat(effective_call_sid)
         repo.save_message(chat_id, "user", transcript)
         save_message_to_memory(VOICE_SYSTEM_USER, "user", transcript)
 
-        # Intentar validar si el transcript parece una dirección
         validated = await _validate_address(transcript)
         if validated:
             enriched = f"{transcript} [DIRECCIÓN VALIDADA EN MAPS: {validated}]"
@@ -288,11 +278,11 @@ async def respond_to_speech(
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
 
-        twiml = _build_gather_twiml(action_url, reply)
+        twiml = _build_say_and_record_twiml(action_url, reply)
         return Response(content=twiml, media_type="application/xml")
 
     except Exception as e:
-        logger.exception(f"Error procesando respuesta: {e}")
+        logger.exception(f"Error procesando recording: {e}")
         response = VoiceResponse()
         response.say("Hubo un problema técnico. Por favor intentá de nuevo.", language="es-AR")
         response.hangup()
