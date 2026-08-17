@@ -5,6 +5,7 @@ app/voice/router.py
 import os
 import re
 import logging
+import asyncio
 import httpx
 from fastapi import APIRouter, Form, Request, HTTPException
 from fastapi.responses import Response
@@ -34,15 +35,13 @@ VOICE_SYSTEM_USER = "voice_calls"
 
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-# Estado por llamada para confirmación sí/no
 _pending_confirmation: dict[str, dict] = {}
-
-# Cache de hints
 _STREET_HINTS: str | None = None
+_embedding_cache: dict[str, list[str]] = {}  # cache: texto → top3 calles
 
 
 # ---------------------------------------------------------------------------
-# Hints de calles desde DB
+# Hints
 # ---------------------------------------------------------------------------
 
 def _get_cached_hints() -> str:
@@ -78,11 +77,16 @@ def _get_or_create_voice_chat(call_sid: str) -> str:
     return chat["chat_id"]
 
 
+_system_prompt_cache: str | None = None
+
 def _build_voice_system_prompt() -> str:
+    global _system_prompt_cache
+    if _system_prompt_cache:
+        return _system_prompt_cache
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
-    return (
+    _system_prompt_cache = (
         f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
         f"Contexto:\n{style_context['sources']['style']}\n\n"
         "INSTRUCCIONES PARA LLAMADA TELEFÓNICA:\n"
@@ -97,16 +101,22 @@ def _build_voice_system_prompt() -> str:
         "- Confirmá origen y destino en voz alta antes de cerrar.\n"
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
     )
+    return _system_prompt_cache
 
 
 # ---------------------------------------------------------------------------
-# Embeddings: top 3 candidatos
+# Embeddings con caché
 # ---------------------------------------------------------------------------
 
 def _search_top3_streets(query: str) -> list[str]:
-    street_part = re.sub(r'\b\d+\b', '', query).strip()
+    street_part = re.sub(r'\b\d+\b', '', query).strip().lower()
     if not street_part:
         return []
+
+    if street_part in _embedding_cache:
+        logger.info(f"Cache hit para '{street_part}'")
+        return _embedding_cache[street_part]
+
     embedding = get_embedding(street_part)
     if not embedding:
         return []
@@ -120,7 +130,9 @@ def _search_top3_streets(query: str) -> list[str]:
                 LIMIT 3
             """, (str(embedding), str(embedding)))
             rows = cur.fetchall()
-            return [r["name"] for r in rows if r["similarity"] > 0.5]
+            result = [r["name"] for r in rows if r["similarity"] > 0.5]
+            _embedding_cache[street_part] = result
+            return result
     except Exception as e:
         logger.warning(f"Error buscando calles top3: {e}")
     return []
@@ -141,35 +153,34 @@ def _is_no(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Generación de respuesta GPT
+# Generación con Groq (rápido) + fallback GPT
 # ---------------------------------------------------------------------------
 
-async def _generate_reply_gpt(transcript: str, chat_id: str) -> str:
+def _generate_reply_sync(messages: list[dict]) -> str:
+    try:
+        groq = GroqProvider()
+        return groq.generate(messages)
+    except Exception as e:
+        logger.warning(f"Groq falló, usando GPT-4o: {e}")
+        try:
+            llm = get_llm_provider()
+            return llm.generate(messages)
+        except Exception as e2:
+            logger.error(f"GPT también falló: {e2}")
+            return "Hubo un problema. ¿Podés repetir?"
+
+
+async def _generate_reply(transcript: str, chat_id: str) -> str:
     history = repo.get_messages(chat_id, VOICE_SYSTEM_USER)
     system_prompt = _build_voice_system_prompt()
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history[-10:]]
     messages.append({"role": "user", "content": transcript})
-    try:
-        response = await openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            max_tokens=150,
-            temperature=0.7,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"Error con GPT-4o, usando fallback: {e}")
-        try:
-            llm = get_llm_provider()
-            return llm.generate(messages)
-        except Exception:
-            groq = GroqProvider()
-            return groq.generate(messages)
+    return await asyncio.to_thread(_generate_reply_sync, messages)
 
 
 # ---------------------------------------------------------------------------
-# TwiML con Gather + hints
+# TwiML
 # ---------------------------------------------------------------------------
 
 def _build_gather_twiml(action_url: str, say_text: str) -> str:
@@ -217,7 +228,7 @@ async def respond_to_speech(
 ):
     effective_call_sid = call_sid or CallSid
     transcript = SpeechResult.strip()
-    logger.info(f"Transcript - CallSid: {effective_call_sid}, texto: '{transcript}'")
+    logger.info(f"Transcript: '{transcript}'")
 
     action_url = f"{BASE_URL}/voice/respond?call_sid={effective_call_sid}"
 
@@ -244,8 +255,7 @@ async def respond_to_speech(
             elif _is_no(transcript) and index + 1 < len(candidates):
                 next_index = index + 1
                 _pending_confirmation[effective_call_sid]["index"] = next_index
-                next_calle = candidates[next_index]
-                reply = f"¿Es {next_calle} {number}?".strip()
+                reply = f"¿Es {candidates[next_index]} {number}?".strip()
                 repo.save_message(chat_id, "user", transcript)
                 repo.save_message(chat_id, "assistant", reply)
                 twiml = _build_gather_twiml(action_url, reply)
@@ -256,10 +266,14 @@ async def respond_to_speech(
                 enriched = transcript
 
         else:
-            # ---- MODO NORMAL: buscar candidatos ----
-            candidates = _search_top3_streets(transcript)
+            # ---- MODO NORMAL: embedding y GPT en paralelo ----
             numbers = re.findall(r'\b\d+\b', transcript)
             number = numbers[0] if numbers else ""
+
+            candidates_task = asyncio.to_thread(_search_top3_streets, transcript)
+            history_task = asyncio.to_thread(repo.get_messages, chat_id, VOICE_SYSTEM_USER)
+
+            candidates, _ = await asyncio.gather(candidates_task, history_task)
 
             if candidates:
                 _pending_confirmation[effective_call_sid] = {
@@ -278,8 +292,8 @@ async def respond_to_speech(
         repo.save_message(chat_id, "user", transcript)
         save_message_to_memory(VOICE_SYSTEM_USER, "user", transcript)
 
-        reply = await _generate_reply_gpt(enriched, chat_id)
-        logger.info(f"Respuesta GPT: '{reply}'")
+        reply = await _generate_reply(enriched, chat_id)
+        logger.info(f"Respuesta: '{reply}'")
 
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(VOICE_SYSTEM_USER, "assistant", reply)
@@ -288,7 +302,7 @@ async def respond_to_speech(
         return Response(content=twiml, media_type="application/xml")
 
     except Exception as e:
-        logger.exception(f"Error procesando respuesta: {e}")
+        logger.exception(f"Error: {e}")
         response = VoiceResponse()
         response.say("Hubo un problema técnico. Por favor intentá de nuevo.", language="es-AR")
         response.hangup()
@@ -311,8 +325,8 @@ async def make_call(body: OutboundCallRequest):
             url=f"{BASE_URL}/voice/incoming",
             method="POST",
         )
-        logger.info(f"Llamada saliente iniciada - SID: {call.sid}, To: {body.to}")
+        logger.info(f"Llamada saliente - SID: {call.sid}, To: {body.to}")
         return {"call_sid": call.sid, "status": call.status, "to": body.to}
     except Exception as e:
-        logger.exception(f"Error iniciando llamada saliente: {e}")
+        logger.exception(f"Error iniciando llamada: {e}")
         raise HTTPException(status_code=500, detail=str(e))
