@@ -249,7 +249,7 @@ async def make_call(body: OutboundCallRequest):
         call = client.calls.create(
             to=body.to,
             from_=TWILIO_PHONE_NUMBER,
-            url=f"{BASE_URL}/voice/incoming",
+            url=f"{BASE_URL}/voice-gemini/incoming",
             method="POST",
         )
         logger.info(f"Llamada saliente iniciada - SID: {call.sid}, To: {body.to}")
