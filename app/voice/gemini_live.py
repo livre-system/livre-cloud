@@ -241,17 +241,11 @@ async def gemini_stream(websocket: WebSocket):
                     )
                 )
             ),
-            # VAD automático — atributos verificados en google-genai 2.18.1
+            # VAD automático — configuración mínima probada con gemini-3.1-flash-live-preview
             realtime_input_config=genai_types.RealtimeInputConfig(
                 automatic_activity_detection=genai_types.AutomaticActivityDetection(
                     disabled=False,
-                    start_of_speech_sensitivity=genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
-                    end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    prefix_padding_ms=300,
-                    silence_duration_ms=500,
                 ),
-                activity_handling=genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-                turn_coverage=genai_types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
             ),
             # Transcripción del audio del usuario
             input_audio_transcription=genai_types.AudioTranscriptionConfig(),
@@ -410,9 +404,10 @@ async def gemini_stream(websocket: WebSocket):
 
                         # ----------------------------------------------------------
                         # Interrupción explícita (server_content.interrupted)
+                        # Solo si interrupted es explícitamente True — no truthy vacío
                         # ----------------------------------------------------------
-                        if sc and getattr(sc, "interrupted", False):
-                            logger.info("[GEMINI] Usuario interrumpió (server_content.interrupted)")
+                        if sc and getattr(sc, "interrupted", None) is True:
+                            logger.info("[GEMINI] interrupted real")
                             if stream_sid:
                                 await websocket.send_text(json.dumps({
                                     "event": "clear",
