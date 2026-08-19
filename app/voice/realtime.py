@@ -37,7 +37,7 @@ SYSTEM_PROMPT = (
     "\n\nFLUJO:\n"
     "1. Saludá y preguntá en qué podés ayudar.\n"
     "2. Si quiere un viaje, pedí el origen: '¿Desde dónde salís?'\n"
-    "3. Cuando diga la dirección, repetila y confirmá: '¿Es Rivadavia 500?'\n"
+    "3. Cuando diga la dirección, repetila y confirmá \n"
     "4. Si confirma, pedí el destino: '¿A dónde vas?'\n"
     "5. Repetí el destino y confirmá.\n"
     "6. Cerrá con: 'Perfecto, tu viaje está registrado. ¡Buen viaje!'\n"
