@@ -1,40 +1,29 @@
 """
 app/voice/gemini_live.py
 
-Integración Twilio ↔ Gemini Live API para LIVRE.
-Endpoints paralelos al flujo OpenAI — no toca /voice/incoming ni /voice/respond.
+Integración Twilio Media Streams + Gemini Live API.
+Estructura idéntica a realtime.py — solo cambia el backend de IA.
 
-Flujo:
-  Twilio → POST /voice-gemini/incoming → TwiML con <Connect><Stream>
-         → WS  /voice-gemini/stream   → Gemini Live (audio bidireccional)
-
-Audio:
-  Twilio → PCMU 8kHz → audioop.ulaw2lin + resample → PCM 16-bit 16kHz → Gemini
-  Gemini → PCM 24kHz → resample → PCM 8kHz → audioop.lin2ulaw → Twilio
-
-Function calling:
-  Gemini detecta dirección → llama buscar_calle() → nosotros ejecutamos
-  _search_top3_streets() en PostgreSQL → devolvemos resultados → Gemini confirma
+Twilio → PCMU 8kHz → nosotros convertimos → PCM 16kHz → Gemini Live
+Gemini Live → PCM 24kHz → nosotros convertimos → PCMU 8kHz → Twilio
 """
 
 import os
 import re
 import json
 import base64
-import asyncio
 import audioop
 import logging
-from typing import Any
-
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
+import asyncio
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import Response
-from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
+from pydantic import BaseModel
+from twilio.rest import Client as TwilioClient
+from twilio.twiml.voice_response import VoiceResponse, Connect
 
-# Gemini (SDK nuevo — google-genai)
 import google.genai as genai
 import google.genai.types as genai_types
 
-# DB y embeddings (misma lógica que router.py)
 from app.core.database import get_cursor
 from app.memory.embeddings import get_embedding
 import app.chat.repository as repo
@@ -44,44 +33,105 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice-gemini", tags=["voice-gemini"])
 
+BASE_URL          = os.getenv("BASE_URL", "")
+GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
+TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
+VOICE_SYSTEM_USER  = "voice_calls"
+GEMINI_LIVE_MODEL  = "gemini-3.1-flash-live-preview"
+
+SYSTEM_PROMPT = (
+    "Sos LIVRE, el asistente de voz de Viaja Livre, una empresa de transporte de pasajeros "
+    "en Bahía Blanca, Argentina. Buscá que la dirección coincida con una calle de la ciudad. "
+    "Tu único objetivo es tomar pedidos de viaje por teléfono. "
+    "Hablás en español argentino. Sin excepciones, de forma clara, concisa y amable. "
+    "Nunca usés markdown ni listas. Solo texto natural para hablar. "
+    "Respondé siempre en máximo 2 oraciones cortas.\n\n"
+    "FLUJO:\n"
+    "1. Saludá y preguntá en qué podés ayudar.\n"
+    "2. Si quiere un viaje, pedí el origen: ¿Desde dónde salís?\n"
+    "3. Cuando diga la dirección, llamá buscar_calle() y confirmá con el usuario.\n"
+    "4. Si confirma, pedí el destino: ¿A dónde vas?\n"
+    "5. Repetí el destino y confirmá.\n"
+    "6. Cerrá con: Perfecto, tu viaje está registrado. ¡Buen viaje!\n"
+    "Si no entendés algo, pedí que repitan despacio. Nunca inventes direcciones."
+)
+
 # ---------------------------------------------------------------------------
-# Config
+# Audio — misma lógica que realtime.py para μ-law, más conversión de rate
 # ---------------------------------------------------------------------------
 
-BASE_URL       = os.getenv("BASE_URL", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-VOICE_SYSTEM_USER = "voice_calls"
+TWILIO_RATE = 8000
+GEMINI_IN   = 16000
+GEMINI_OUT  = 24000
 
-# Modelo Live disponible — cambiar a gemini-2.5-flash-live cuando esté GA
-GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
+# Tabla μ-law → linear (igual que realtime.py)
+def _build_ulaw_to_linear() -> list:
+    table = []
+    for u in range(256):
+        u_val = ~u & 0xFF
+        exponent = (u_val >> 4) & 0x07
+        mantissa = u_val & 0x0F
+        linear = ((mantissa << 1) + 33) << exponent
+        linear -= 33
+        if u_val & 0x80:
+            linear = -linear
+        table.append(linear)
+    return table
 
-# El cliente se inicializa con api_key en cada sesión (SDK nuevo)
+_ULAW_TO_LINEAR = _build_ulaw_to_linear()
+_BIAS = 0x84
+_CLIP = 32635
+
+def _linear_to_ulaw(sample: int) -> int:
+    sign = 0
+    if sample < 0:
+        sample = -sample
+        sign = 0x80
+    if sample > _CLIP:
+        sample = _CLIP
+    sample += _BIAS
+    exponent = 7
+    for exp, threshold in enumerate([0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000, 0x4000]):
+        if sample < threshold:
+            exponent = exp
+            break
+    mantissa = (sample >> (exponent + 3)) & 0x0F
+    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+
+VOLUME_BOOST = 5.0
+
+def _boost_pcmu(payload_b64: str, volume: float = VOLUME_BOOST) -> str:
+    """Amplifica audio μ-law igual que realtime.py."""
+    raw = base64.b64decode(payload_b64)
+    boosted = bytearray(len(raw))
+    for i, byte in enumerate(raw):
+        linear = int(_ULAW_TO_LINEAR[byte] * volume)
+        linear = max(-32768, min(32767, linear))
+        boosted[i] = _linear_to_ulaw(linear)
+    return base64.b64encode(bytes(boosted)).decode()
+
+def pcmu_to_pcm16(mulaw_b64: str) -> bytes:
+    """PCMU base64 8kHz → PCM 16-bit 16kHz para Gemini."""
+    raw = base64.b64decode(mulaw_b64)
+    pcm8 = audioop.ulaw2lin(raw, 2)
+    pcm16, _ = audioop.ratecv(pcm8, 2, 1, TWILIO_RATE, GEMINI_IN, None)
+    return pcm16
+
+def pcm24_to_pcmu(pcm24: bytes) -> str:
+    """PCM 16-bit 24kHz de Gemini → PCMU base64 8kHz para Twilio."""
+    pcm8, _ = audioop.ratecv(pcm24, 2, 1, GEMINI_OUT, TWILIO_RATE, None)
+    mulaw = audioop.lin2ulaw(pcm8, 2)
+    return base64.b64encode(mulaw).decode()
 
 # ---------------------------------------------------------------------------
-# Caché de embeddings (igual que router.py)
+# Embeddings (igual que router.py)
 # ---------------------------------------------------------------------------
 
 _embedding_cache: dict[str, list[str]] = {}
-_STREET_HINTS: str | None = None
-
-
-def _get_cached_hints() -> str:
-    global _STREET_HINTS
-    if _STREET_HINTS is None:
-        try:
-            with get_cursor() as cur:
-                cur.execute("SELECT name FROM street_embeddings ORDER BY name")
-                rows = cur.fetchall()
-                _STREET_HINTS = ", ".join(r["name"] for r in rows)
-                logger.info(f"Gemini Live — hints cargados: {len(rows)} calles")
-        except Exception as e:
-            logger.warning(f"No se pudieron cargar hints: {e}")
-            _STREET_HINTS = ""
-    return _STREET_HINTS
-
 
 def _search_top3_streets(query: str) -> list[str]:
-    """Busca las top-3 calles más similares (mismo código que router.py)."""
     street_part = re.sub(r'\b\d+\b', '', query).strip().lower()
     if not street_part:
         return []
@@ -107,7 +157,6 @@ def _search_top3_streets(query: str) -> list[str]:
         logger.warning(f"Error buscando calles: {e}")
     return []
 
-
 # ---------------------------------------------------------------------------
 # Chat helpers
 # ---------------------------------------------------------------------------
@@ -125,140 +174,61 @@ def _get_or_create_voice_chat(call_sid: str) -> str:
     repo.update_chat_title(chat["chat_id"], VOICE_SYSTEM_USER, f"Llamada {call_sid}")
     return chat["chat_id"]
 
-
 # ---------------------------------------------------------------------------
-# Audio helpers
-# ---------------------------------------------------------------------------
-
-TWILIO_RATE  = 8000   # Hz — Twilio media stream
-GEMINI_IN    = 16000  # Hz — Gemini input
-GEMINI_OUT   = 24000  # Hz — Gemini output devuelve PCM 24kHz
-
-
-def twilio_to_gemini(mulaw_b64: str) -> bytes:
-    """PCMU base64 de Twilio → PCM 16-bit 16kHz listo para Gemini.
-    Twilio manda PCMU 8kHz → decodificamos a PCM lineal → upsample a 16kHz.
-    """
-    mulaw_bytes = base64.b64decode(mulaw_b64)
-    # μ-law → PCM 16-bit 8kHz
-    pcm8 = audioop.ulaw2lin(mulaw_bytes, 2)
-    # 8kHz → 16kHz (upsample 2x)
-    pcm16, _ = audioop.ratecv(pcm8, 2, 1, TWILIO_RATE, GEMINI_IN, None)
-    return pcm16
-
-
-def gemini_to_twilio(pcm_bytes: bytes) -> str:
-    """PCM de Gemini (24kHz) → PCMU base64 para Twilio (8kHz)."""
-    # 24kHz → 8kHz
-    pcm8, _ = audioop.ratecv(pcm_bytes, 2, 1, GEMINI_OUT, TWILIO_RATE, None)
-    mulaw = audioop.lin2ulaw(pcm8, 2)
-    return base64.b64encode(mulaw).decode("utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Definición de herramienta para Gemini
+# Tool definition
 # ---------------------------------------------------------------------------
 
-BUSCAR_CALLE_TOOL = {
-    "function_declarations": [
-        {
-            "name": "buscar_calle",
-            "description": (
+BUSCAR_CALLE_TOOL = genai_types.Tool(
+    function_declarations=[
+        genai_types.FunctionDeclaration(
+            name="buscar_calle",
+            description=(
                 "Busca una calle en la base de datos de calles de Bahía Blanca. "
-                "Llamá esta función cada vez que el usuario mencione una dirección "
-                "o nombre de calle. Devuelve las coincidencias más probables."
+                "Llamá esta función cada vez que el usuario mencione una dirección o calle."
             ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "La dirección o nombre de calle tal como la dijo el usuario.",
-                    }
+            parameters=genai_types.Schema(
+                type=genai_types.Type.OBJECT,
+                properties={
+                    "query": genai_types.Schema(
+                        type=genai_types.Type.STRING,
+                        description="La dirección o nombre de calle tal como la dijo el usuario.",
+                    )
                 },
-                "required": ["query"],
-            },
-        }
+                required=["query"],
+            ),
+        )
     ]
-}
-
-# ---------------------------------------------------------------------------
-# System prompt (mismo espíritu que router.py)
-# ---------------------------------------------------------------------------
-
-SYSTEM_PROMPT = (
-    "Sos LIVRE IA, la asistente de voz de Livre Transportes en Bahía Blanca, Argentina.\n"
-    "Respondés llamadas telefónicas de pasajeros que quieren pedir un viaje en taxi.\n\n"
-    "INSTRUCCIONES:\n"
-    "- Hablá en español argentino, de forma natural y concisa.\n"
-    "- No uses markdown, listas ni asteriscos. Solo texto para hablar.\n"
-    "- Máximo 2 oraciones por respuesta.\n"
-    "- Cuando el usuario mencione una dirección, SIEMPRE llamá la función buscar_calle().\n"
-    "- Confirmá la calle encontrada con el usuario antes de continuar.\n"
-    "- Si buscar_calle() no devuelve resultados, pedile que deletree la calle.\n\n"
-    "FLUJO DE PEDIDO:\n"
-    "1. Saludar y preguntar en qué podés ayudar.\n"
-    "2. Preguntar el punto de origen (¿Desde dónde salís?).\n"
-    "3. Confirmar la calle de origen con buscar_calle().\n"
-    "4. Preguntar el destino (¿A dónde vas?).\n"
-    "5. Confirmar la calle de destino con buscar_calle().\n"
-    "6. Repetir origen y destino confirmados, y cerrar la llamada.\n"
 )
 
 # ---------------------------------------------------------------------------
-# Endpoint HTTP — genera TwiML con <Stream>
+# Incoming — TwiML idéntico a realtime.py
 # ---------------------------------------------------------------------------
 
 @router.post("/incoming")
 async def gemini_incoming(request: Request):
-    """
-    Twilio llama a este endpoint cuando entra una llamada.
-    Devuelve TwiML que abre un WebSocket Media Stream hacia /voice-gemini/stream.
-    """
-    form = await request.form()
-    call_sid = form.get("CallSid", "")
-    logger.info(f"Gemini Live — llamada entrante CallSid={call_sid}")
-
-    ws_url = BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
-    stream_url = f"{ws_url}/voice-gemini/stream"
-
+    logger.info("Gemini Live — llamada entrante")
+    host = BASE_URL.replace("https://", "").replace("http://", "")
     response = VoiceResponse()
     connect = Connect()
-    stream = Stream(url=stream_url)
-    stream.parameter(name="CallSid", value=call_sid)
-    connect.append(stream)
+    connect.stream(url=f"wss://{host}/voice-gemini/stream")
     response.append(connect)
-    # Mantener la llamada viva mientras dura el WebSocket (hasta 2hs)
-    response.pause(length=7200)
-
     return Response(content=str(response), media_type="application/xml")
 
-
 # ---------------------------------------------------------------------------
-# Endpoint WebSocket — sesión Gemini Live
+# WebSocket — estructura idéntica a realtime.py
 # ---------------------------------------------------------------------------
 
 @router.websocket("/stream")
 async def gemini_stream(websocket: WebSocket):
-    """
-    WebSocket que Twilio abre para streaming de audio.
-    Conecta con Gemini Live API de forma bidireccional.
-    """
     await websocket.accept()
-    logger.info("Gemini Live — WebSocket abierto")
+    logger.info("[GEMINI] Twilio WebSocket conectado")
 
-    call_sid: str = ""
-    stream_sid: str = ""
-    chat_id: str | None = None
-    greeting_done: bool = False
-
-    # Buffer para acumular texto del modelo (para guardar en chat)
-    model_text_buffer: list[str] = []
-    user_text_buffer: list[str] = []
+    stream_sid = None
+    call_sid   = None
+    chat_id    = None
 
     try:
-        # --- Inicializar sesión Gemini Live ---
-        client = genai.Client(api_key=GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", ""))
+        client = genai.Client(api_key=GEMINI_API_KEY)
 
         live_config = genai_types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -273,183 +243,180 @@ async def gemini_stream(websocket: WebSocket):
             ),
         )
 
-        async with client.aio.live.connect(
-            model=GEMINI_LIVE_MODEL, config=live_config
-        ) as session:
+        async with client.aio.live.connect(model=GEMINI_LIVE_MODEL, config=live_config) as session:
+            logger.info("[GEMINI] Sesión Gemini Live abierta")
 
-            logger.info("Gemini Live — sesión abierta")
+            # Saludo inicial — igual que realtime.py manda "Saluda al usuario brevemente."
+            await session.send(
+                input="Saluda al usuario brevemente.",
+                end_of_turn=True,
+            )
 
-            async def receive_from_twilio():
-                """Lee mensajes de Twilio y los envía a Gemini."""
-                nonlocal call_sid, stream_sid, chat_id, greeting_done
+            async def twilio_to_gemini():
+                nonlocal stream_sid, call_sid, chat_id
+                audio_chunks = 0
+                try:
+                    async for message in websocket.iter_text():
+                        data = json.loads(message)
+                        event = data.get("event")
 
-                async for message in websocket.iter_text():
-                    data = json.loads(message)
-                    event = data.get("event")
+                        if event == "start":
+                            stream_sid = data["start"]["streamSid"]
+                            call_sid   = data["start"].get("callSid", "")
+                            logger.info(f"[STREAM START] streamSid={stream_sid}")
+                            if call_sid:
+                                chat_id = await asyncio.to_thread(
+                                    _get_or_create_voice_chat, call_sid
+                                )
 
-                    if event == "start":
-                        call_sid   = data["start"].get("callSid", "")
-                        stream_sid = data["start"].get("streamSid", "")
-                        logger.info(f"Stream iniciado — call={call_sid}")
-                        chat_id = await asyncio.to_thread(
-                            _get_or_create_voice_chat, call_sid
-                        )
-                        # Mandar saludo inicial a Gemini para que arranque
-                        await session.send(
-                            input="Iniciá la conversación saludando al pasajero.",
-                            end_of_turn=True,
-                        )
+                        elif event == "media":
+                            audio_chunks += 1
+                            if audio_chunks % 50 == 0:
+                                logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
+                            try:
+                                pcm = await asyncio.to_thread(
+                                    pcmu_to_pcm16, data["media"]["payload"]
+                                )
+                                await session.send_realtime_input(
+                                    audio=genai_types.Blob(
+                                        data=pcm,
+                                        mime_type="audio/pcm;rate=16000",
+                                    )
+                                )
+                            except Exception:
+                                break
 
-                    elif event == "media":
-                        # No mandar audio del usuario hasta que Gemini termine el saludo
-                        if not greeting_done:
-                            continue
-                        # Audio del usuario → convertir y enviar a Gemini
-                        mulaw_b64 = data["media"]["payload"]
-                        pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
-                        await session.send_realtime_input(
-                            audio=genai_types.Blob(
-                                data=pcm_bytes,
-                                mime_type="audio/pcm;rate=16000",
-                            )
-                        )
-                        if not hasattr(receive_from_twilio, "_audio_count"):
-                            receive_from_twilio._audio_count = 0
-                        receive_from_twilio._audio_count += 1
-                        if receive_from_twilio._audio_count % 50 == 0:
-                            logger.info(f"[AUDIO] {receive_from_twilio._audio_count} chunks enviados a Gemini")
+                        elif event == "stop":
+                            logger.info(f"[STREAM STOP] Total chunks: {audio_chunks}")
+                            break
+                        else:
+                            logger.info(f"[TWILIO EVENT] {event}")
 
-                    elif event == "stop":
-                        logger.info("Stream detenido por Twilio")
-                        break
+                except WebSocketDisconnect:
+                    logger.info("[TWILIO] Desconectado")
 
-            async def receive_from_gemini():
-                """Lee respuestas de Gemini y las manda a Twilio."""
-                nonlocal model_text_buffer, user_text_buffer
+            async def gemini_to_twilio():
+                model_text: list[str] = []
+                user_text:  list[str] = []
+                try:
+                    async for response in session.receive():
 
-                async for response in session.receive():
-                    logger.info(f"[GEMINI RAW] sc={bool(response.server_content)} tool={bool(response.tool_call)}")
+                        # Interrupción → limpiar buffer de Twilio (igual que realtime.py)
+                        if (
+                            response.server_content
+                            and getattr(response.server_content, "interrupted", False)
+                        ):
+                            logger.info("[GEMINI] Usuario interrumpió")
+                            if stream_sid:
+                                await websocket.send_text(json.dumps({
+                                    "event": "clear",
+                                    "streamSid": stream_sid,
+                                }))
 
-                    # --- Interrupción: usuario empezó a hablar → limpiar buffer Twilio ---
-                    if (
-                        response.server_content
-                        and getattr(response.server_content, "interrupted", False)
-                    ):
-                        logger.info("[GEMINI] Usuario interrumpió — limpiando buffer Twilio")
-                        if stream_sid:
-                            await websocket.send_text(json.dumps({
-                                "event": "clear",
-                                "streamSid": stream_sid,
-                            }))
-
-                    # --- Audio de respuesta (viene como inline_data en las parts) ---
-                    if response.server_content and response.server_content.model_turn:
-                        for part in response.server_content.model_turn.parts:
-                            # Audio
-                            if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
-                                audio_bytes = part.inline_data.data
-                                mime = getattr(part.inline_data, "mime_type", "?")
-                                logger.info(f"[GEMINI AUDIO] {len(audio_bytes)} bytes, mime={mime}")
-                                try:
-                                    mulaw_b64 = await asyncio.to_thread(gemini_to_twilio, audio_bytes)
+                        # Audio de respuesta
+                        if response.server_content and response.server_content.model_turn:
+                            for part in response.server_content.model_turn.parts:
+                                if getattr(part, "inline_data", None) and part.inline_data.data:
+                                    mulaw_b64 = await asyncio.to_thread(
+                                        pcm24_to_pcmu, part.inline_data.data
+                                    )
+                                    # Boost de volumen igual que realtime.py
+                                    mulaw_b64 = _boost_pcmu(mulaw_b64)
                                     if stream_sid:
                                         await websocket.send_text(json.dumps({
                                             "event": "media",
                                             "streamSid": stream_sid,
                                             "media": {"payload": mulaw_b64},
                                         }))
-                                        logger.info(f"[TWILIO] Audio enviado: {len(mulaw_b64)} chars")
+                                if getattr(part, "text", None):
+                                    model_text.append(part.text)
+                                    logger.info(f"[GEMINI] {part.text}")
+
+                        # Transcripción del usuario
+                        if getattr(response, "input_transcription", None):
+                            user_text.append(response.input_transcription)
+                            logger.info(f"[USUARIO] {response.input_transcription}")
+
+                        # Function calling
+                        if response.tool_call:
+                            for fc in response.tool_call.function_calls:
+                                if fc.name == "buscar_calle":
+                                    query = fc.args.get("query", "")
+                                    logger.info(f"[TOOL] buscar_calle({query!r})")
+                                    candidates = await asyncio.to_thread(
+                                        _search_top3_streets, query
+                                    )
+                                    if candidates:
+                                        result = (
+                                            f"Calles encontradas: {', '.join(candidates)}. "
+                                            "Preguntale al usuario cuál es la correcta."
+                                        )
                                     else:
-                                        logger.warning("[TWILIO] stream_sid vacío, audio descartado")
-                                except Exception as e:
-                                    logger.error(f"[AUDIO ERROR] {e}")
-                            # Texto (para guardar en chat)
-                            if hasattr(part, "text") and part.text:
-                                model_text_buffer.append(part.text)
-                                logger.info(f"[GEMINI] {part.text}")
-
-                    # --- Transcripción del usuario ---
-                    if hasattr(response, "input_transcription") and response.input_transcription:
-                        user_text_buffer.append(response.input_transcription)
-                        logger.info(f"[USUARIO] {response.input_transcription}")
-
-                    # --- Function calling ---
-                    if response.tool_call:
-                        for fc in response.tool_call.function_calls:
-                            if fc.name == "buscar_calle":
-                                query = fc.args.get("query", "")
-                                logger.info(f"buscar_calle({query!r})")
-
-                                candidates = await asyncio.to_thread(
-                                    _search_top3_streets, query
-                                )
-
-                                if candidates:
-                                    result_text = (
-                                        f"Calles encontradas: {', '.join(candidates)}. "
-                                        "Preguntale al usuario cuál es la correcta, "
-                                        "empezando por la primera."
-                                    )
-                                else:
-                                    result_text = (
-                                        "No se encontró la calle en la base de datos. "
-                                        "Pedile al usuario que deletree la calle."
+                                        result = (
+                                            "No se encontró la calle. "
+                                            "Pedile al usuario que deletree la calle."
+                                        )
+                                    await session.send(
+                                        input=genai_types.LiveClientToolResponse(
+                                            function_responses=[
+                                                genai_types.FunctionResponse(
+                                                    id=fc.id,
+                                                    name=fc.name,
+                                                    response={"result": result},
+                                                )
+                                            ]
+                                        )
                                     )
 
-                                await session.send(
-                                    input=genai_types.LiveClientToolResponse(
-                                        function_responses=[
-                                            genai_types.FunctionResponse(
-                                                id=fc.id,
-                                                name=fc.name,
-                                                response={"result": result_text},
-                                            )
-                                        ]
-                                    )
-                                )
-                                logger.info(f"buscar_calle → {result_text[:80]}")
-
-                    # --- Fin de turno: guardar en chat ---
-                    if response.server_content and response.server_content.turn_complete:
-                        logger.info("[GEMINI] Turno completo")
-                        if not greeting_done:
-                            greeting_done = True
-                            logger.info("[GEMINI] Saludo completo — activando VAD para el usuario")
-                        if chat_id:
-                            if user_text_buffer:
-                                user_text = " ".join(user_text_buffer).strip()
-                                user_text_buffer.clear()
+                        # Fin de turno → guardar en chat
+                        if response.server_content and response.server_content.turn_complete:
+                            logger.info("[GEMINI] Turno completo")
+                            if chat_id:
                                 if user_text:
-                                    await asyncio.to_thread(
-                                        repo.save_message, chat_id, "user", user_text
-                                    )
-                                    await asyncio.to_thread(
-                                        save_message_to_memory,
-                                        VOICE_SYSTEM_USER, "user", user_text,
-                                    )
-                            if model_text_buffer:
-                                model_text = " ".join(model_text_buffer).strip()
-                                model_text_buffer.clear()
+                                    txt = " ".join(user_text).strip()
+                                    user_text.clear()
+                                    if txt:
+                                        await asyncio.to_thread(repo.save_message, chat_id, "user", txt)
+                                        await asyncio.to_thread(save_message_to_memory, VOICE_SYSTEM_USER, "user", txt)
                                 if model_text:
-                                    await asyncio.to_thread(
-                                        repo.save_message, chat_id, "assistant", model_text
-                                    )
-                                    await asyncio.to_thread(
-                                        save_message_to_memory,
-                                        VOICE_SYSTEM_USER, "assistant", model_text,
-                                    )
+                                    txt = " ".join(model_text).strip()
+                                    model_text.clear()
+                                    if txt:
+                                        await asyncio.to_thread(repo.save_message, chat_id, "assistant", txt)
+                                        await asyncio.to_thread(save_message_to_memory, VOICE_SYSTEM_USER, "assistant", txt)
 
-            # Correr ambos loops en paralelo
-            await asyncio.gather(
-                receive_from_twilio(),
-                receive_from_gemini(),
-            )
+                except Exception as e:
+                    logger.error(f"[ERROR] gemini_to_twilio: {e}")
 
-    except WebSocketDisconnect:
-        logger.info("Gemini Live — WebSocket cerrado por cliente")
+            await asyncio.gather(twilio_to_gemini(), gemini_to_twilio())
+
     except Exception as e:
-        logger.exception(f"Gemini Live — error en sesión: {e}")
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+        logger.exception(f"Error en gemini_stream: {e}")
+    finally:
+        logger.info("[GEMINI] WebSocket cerrado")
+
+
+# ---------------------------------------------------------------------------
+# Outbound call
+# ---------------------------------------------------------------------------
+
+class OutboundCallRequest(BaseModel):
+    to: str
+
+@router.post("/call")
+async def make_call(body: OutboundCallRequest):
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_PHONE_NUMBER:
+        raise HTTPException(status_code=500, detail="Twilio no configurado.")
+    try:
+        client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        call = client.calls.create(
+            to=body.to,
+            from_=TWILIO_PHONE_NUMBER,
+            url=f"{BASE_URL}/voice-gemini/incoming",
+            method="POST",
+        )
+        logger.info(f"Llamada saliente — SID: {call.sid}, To: {body.to}")
+        return {"call_sid": call.sid, "status": call.status, "to": body.to}
+    except Exception as e:
+        logger.exception(f"Error iniciando llamada: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
