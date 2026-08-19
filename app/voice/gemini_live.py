@@ -131,21 +131,26 @@ def _get_or_create_voice_chat(call_sid: str) -> str:
 # ---------------------------------------------------------------------------
 
 TWILIO_RATE  = 8000   # Hz — Twilio media stream
-GEMINI_IN    = 16000  # Hz — Gemini input espera PCM 16kHz
+GEMINI_IN    = 16000  # Hz — Gemini input
 GEMINI_OUT   = 24000  # Hz — Gemini output devuelve PCM 24kHz
 
 
 def twilio_to_gemini(mulaw_b64: str) -> bytes:
-    """PCMU base64 de Twilio → PCM 16-bit 16kHz listo para Gemini."""
+    """PCMU base64 de Twilio → PCM 16-bit 16kHz listo para Gemini.
+    Twilio manda PCMU 8kHz → decodificamos a PCM lineal → upsample a 16kHz.
+    """
     mulaw_bytes = base64.b64decode(mulaw_b64)
-    pcm8 = audioop.ulaw2lin(mulaw_bytes, 2)           # μ-law → PCM 16-bit 8kHz
+    # μ-law → PCM 16-bit 8kHz
+    pcm8 = audioop.ulaw2lin(mulaw_bytes, 2)
+    # 8kHz → 16kHz (upsample 2x)
     pcm16, _ = audioop.ratecv(pcm8, 2, 1, TWILIO_RATE, GEMINI_IN, None)
     return pcm16
 
 
-def gemini_to_twilio(pcm24_bytes: bytes) -> str:
-    """PCM 24kHz de Gemini → PCMU base64 para Twilio."""
-    pcm8, _ = audioop.ratecv(pcm24_bytes, 2, 1, GEMINI_OUT, TWILIO_RATE, None)
+def gemini_to_twilio(pcm_bytes: bytes) -> str:
+    """PCM de Gemini (24kHz) → PCMU base64 para Twilio (8kHz)."""
+    # 24kHz → 8kHz
+    pcm8, _ = audioop.ratecv(pcm_bytes, 2, 1, GEMINI_OUT, TWILIO_RATE, None)
     mulaw = audioop.lin2ulaw(pcm8, 2)
     return base64.b64encode(mulaw).decode("utf-8")
 
@@ -296,12 +301,14 @@ async def gemini_stream(websocket: WebSocket):
                         # Audio del usuario → convertir y enviar a Gemini
                         mulaw_b64 = data["media"]["payload"]
                         pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
-                        await session.send(
-                            input=genai_types.LiveClientRealtimeInput(
-                                audio=genai_types.Blob(
-                                    data=pcm_bytes,
-                                    mime_type="audio/pcm;rate=16000",
-                                )
+                    elif event == "media":
+                        # Audio del usuario → convertir y enviar a Gemini
+                        mulaw_b64 = data["media"]["payload"]
+                        pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
+                        await session.send_realtime_input(
+                            audio=genai_types.Blob(
+                                data=pcm_bytes,
+                                mime_type="audio/pcm;rate=16000",
                             )
                         )
                         if not hasattr(receive_from_twilio, "_audio_count"):
