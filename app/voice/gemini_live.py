@@ -485,18 +485,29 @@ async def gemini_stream(websocket: WebSocket):
                                     )
 
                         # ----------------------------------------------------------
-                        # Fin de turno
+                        # generation_complete → habilitar audio del usuario
+                        # El saludo termina aquí (confirmado en logs), NO en turn_complete
                         # ----------------------------------------------------------
-                        if sc and getattr(sc, "turn_complete", False):
+                        if sc and getattr(sc, "generation_complete", False):
                             if not greeting_done.is_set():
                                 greeting_done.set()
-                                logger.info("[GEMINI] Saludo completo — activando audio del usuario")
+                                logger.info("[GEMINI] Saludo completo (generation_complete) — activando audio del usuario")
+
+                        # ----------------------------------------------------------
+                        # Fin de turno — guardar en chat
+                        # ----------------------------------------------------------
+                        if sc and getattr(sc, "turn_complete", False):
+                            # Fallback: activar saludo también aquí por si llega antes
+                            if not greeting_done.is_set():
+                                greeting_done.set()
+                                logger.info("[GEMINI] Saludo completo (turn_complete) — activando audio del usuario")
 
                             full_user  = "".join(user_text).strip()
                             full_model = "".join(model_text).strip()
-                            logger.info(
-                                f"[GEMINI] turn_complete — usuario: '{full_user}' | modelo: '{full_model}'"
-                            )
+                            if full_user or full_model:
+                                logger.info(
+                                    f"[GEMINI] turn_complete — usuario: '{full_user}' | modelo: '{full_model}'"
+                                )
 
                             if chat_id:
                                 if user_text:
