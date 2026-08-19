@@ -45,7 +45,7 @@ SYSTEM_PROMPT = (
 )
 
 VOICE = "cedar"
-VOLUME_BOOST = 4.0  # subir o bajar este valor
+VOLUME_BOOST = 5.0  # subir o bajar este valor
 
 
 def _build_ulaw_to_linear() -> list:
