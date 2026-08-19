@@ -266,17 +266,14 @@ async def gemini_stream(websocket: WebSocket):
                 end_of_turn=True,
             )
 
-            # Esperar que el saludo termine antes de enviar audio del usuario
-            greeting_done    = asyncio.Event()
-            gemini_speaking  = asyncio.Event()   # True mientras Gemini emite audio
+            greeting_done = asyncio.Event()  # para saber cuándo guardar en chat
 
             # ------------------------------------------------------------------
-            # twilio_to_gemini — audio continuo, VAD automático de Gemini
-            # Igual que OpenAI: mandamos audio siempre, el modelo detecta voz solo.
+            # twilio_to_gemini — audio directo, sin bloqueos
+            # Igual que OpenAI: cada chunk va a Gemini inmediatamente.
             # ------------------------------------------------------------------
             async def twilio_to_gemini():
                 nonlocal stream_sid, call_sid, chat_id
-                audio_chunks = 0
                 try:
                     async for message in websocket.iter_text():
                         data  = json.loads(message)
@@ -292,16 +289,7 @@ async def gemini_stream(websocket: WebSocket):
                                 )
 
                         elif event == "media":
-                            # Esperar saludo
-                            if not greeting_done.is_set():
-                                await greeting_done.wait()
-                            # Descartar mientras Gemini habla
-                            if gemini_speaking.is_set():
-                                continue
-
-                            audio_chunks += 1
-                            if audio_chunks % 50 == 0:
-                                logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
+                            logger.info("[AUDIO IN] chunk recibido")
                             try:
                                 pcm = await asyncio.to_thread(
                                     pcmu_to_pcm16, data["media"]["payload"]
@@ -312,12 +300,13 @@ async def gemini_stream(websocket: WebSocket):
                                         mime_type="audio/pcm;rate=16000",
                                     )
                                 )
+                                logger.info("[AUDIO IN] enviado a Gemini")
                             except Exception as exc:
                                 logger.error(f"[ERROR] twilio_to_gemini send: {exc}")
                                 break
 
                         elif event == "stop":
-                            logger.info(f"[STREAM STOP] Total chunks: {audio_chunks}")
+                            logger.info(f"[STREAM STOP]")
                             break
 
                         else:
@@ -336,6 +325,7 @@ async def gemini_stream(websocket: WebSocket):
                 try:
                     async for response in session.receive():
                         msg_count += 1
+                        logger.info("[GEMINI EVENT] %s", type(response).__name__)
 
                         # ----------------------------------------------------------
                         # DIAGNÓSTICO SEGURO — inspeccionamos cada mensaje
@@ -405,7 +395,7 @@ async def gemini_stream(websocket: WebSocket):
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "interrupted", None) is True:
                             logger.info("[GEMINI] interrupted real — bloqueando audio usuario")
-                            gemini_speaking.set()   # bloquear audio mientras Gemini procesa
+
                             if stream_sid:
                                 await websocket.send_text(json.dumps({
                                     "event": "clear",
@@ -416,7 +406,7 @@ async def gemini_stream(websocket: WebSocket):
                         # Audio de respuesta de Gemini
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "model_turn", None):
-                            gemini_speaking.set()   # Gemini está hablando → bloquear input del usuario
+
                             for part in (getattr(sc.model_turn, "parts", None) or []):
                                 # Audio inline
                                 if getattr(part, "inline_data", None) and part.inline_data.data:
@@ -482,19 +472,19 @@ async def gemini_stream(websocket: WebSocket):
                         # generation_complete → Gemini terminó de hablar, habilitar input
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "generation_complete", False):
-                            gemini_speaking.clear()   # Gemini terminó → aceptar audio del usuario
+
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (generation_complete) — activando audio del usuario")
                             else:
                                 logger.info("[GEMINI] Respuesta completa — escuchando al usuario")
-                                gemini_speaking.clear()  # asegurar que el audio queda habilitado
+    
 
                         # ----------------------------------------------------------
                         # Fin de turno — guardar en chat
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "turn_complete", False):
-                            gemini_speaking.set()     # Gemini va a responder → bloquear audio del usuario
+
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (turn_complete) — activando audio del usuario")
