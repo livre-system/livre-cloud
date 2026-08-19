@@ -300,12 +300,19 @@ async def gemini_stream(websocket: WebSocket):
                                 continue
 
                             audio_chunks += 1
-                            if audio_chunks % 50 == 0:
-                                logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
                             try:
                                 pcm = await asyncio.to_thread(
                                     pcmu_to_pcm16, data["media"]["payload"]
                                 )
+                                if audio_chunks % 50 == 0:
+                                    import struct
+                                    samples = struct.unpack("<" + "h" * (len(pcm) // 2), pcm)
+                                    max_amp = max(abs(x) for x in samples)
+                                    rms = int((sum(x * x for x in samples) / len(samples)) ** 0.5)
+                                    logger.info(
+                                        f"[AUDIO DEBUG] chunk={audio_chunks} "
+                                        f"bytes={len(pcm)} max_amp={max_amp} rms={rms}"
+                                    )
                                 await session.send_realtime_input(
                                     audio=genai_types.Blob(
                                         data=pcm,
@@ -496,10 +503,6 @@ async def gemini_stream(websocket: WebSocket):
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (turn_complete) — activando audio del usuario")
-
-                            logger.info(f"[TURN COMPLETE DEBUG] {repr(sc)}")
-                            for _f in ["input_transcription", "model_turn", "output_transcription", "generation_complete", "interrupted"]:
-                                logger.info(f"[TURN COMPLETE DEBUG] {_f}={repr(getattr(sc, _f, None))}")
 
                             full_user  = "".join(user_text).strip()
                             full_model = "".join(model_text).strip()
