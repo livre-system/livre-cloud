@@ -404,7 +404,8 @@ async def gemini_stream(websocket: WebSocket):
                         # Solo si interrupted es explícitamente True — no truthy vacío
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "interrupted", None) is True:
-                            logger.info("[GEMINI] interrupted real")
+                            logger.info("[GEMINI] interrupted real — bloqueando audio usuario")
+                            gemini_speaking.set()   # bloquear audio mientras Gemini procesa
                             if stream_sid:
                                 await websocket.send_text(json.dumps({
                                     "event": "clear",
@@ -415,7 +416,7 @@ async def gemini_stream(websocket: WebSocket):
                         # Audio de respuesta de Gemini
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "model_turn", None):
-                            gemini_speaking.set()   # Gemini está hablando → bloquear input
+                            gemini_speaking.set()   # Gemini está hablando → bloquear input del usuario
                             for part in (getattr(sc.model_turn, "parts", None) or []):
                                 # Audio inline
                                 if getattr(part, "inline_data", None) and part.inline_data.data:
@@ -485,20 +486,15 @@ async def gemini_stream(websocket: WebSocket):
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (generation_complete) — activando audio del usuario")
-                                # PRUEBA: mandar texto para ver si Gemini responde sin audio
-                                logger.info("[TEST] Mandando mensaje de texto a Gemini para probar sesión")
-                                await session.send(
-                                    input="El usuario dijo: quiero un viaje",
-                                    end_of_turn=True,
-                                )
                             else:
                                 logger.info("[GEMINI] Respuesta completa — escuchando al usuario")
+                                gemini_speaking.clear()  # asegurar que el audio queda habilitado
 
                         # ----------------------------------------------------------
                         # Fin de turno — guardar en chat
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "turn_complete", False):
-                            gemini_speaking.clear()   # fallback por si generation_complete no llegó
+                            gemini_speaking.set()     # Gemini va a responder → bloquear audio del usuario
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (turn_complete) — activando audio del usuario")
