@@ -259,13 +259,9 @@ async def gemini_stream(websocket: WebSocket):
             speech_config=genai_types.SpeechConfig(
                 voice_config=genai_types.VoiceConfig(
                     prebuilt_voice_config=genai_types.PrebuiltVoiceConfig(
-                        voice_name="Aoede"  # Voz femenina disponible en Live
+                        voice_name="Aoede"
                     )
                 )
-            ),
-            # VAD automático — Gemini detecta cuando el usuario termina de hablar
-            realtime_input_config=genai_types.RealtimeInputConfig(
-                turn_coverage=genai_types.TurnCoverage.TURN_INCLUDES_ALL_INPUT,
             ),
         )
 
