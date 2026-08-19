@@ -41,7 +41,7 @@ TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 VOICE_SYSTEM_USER   = "voice_calls"
-GEMINI_LIVE_MODEL   = "gemini-2.0-flash-live-001"   # modelo Live GA estable
+GEMINI_LIVE_MODEL   = os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
 
 SYSTEM_PROMPT = (
     "Sos LIVRE, el asistente de voz de Viaja Livre, una empresa de transporte de pasajeros "
