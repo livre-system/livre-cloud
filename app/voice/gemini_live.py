@@ -481,20 +481,6 @@ async def gemini_stream(websocket: WebSocket):
                                     )
 
                         # ----------------------------------------------------------
-                        # generation_complete → Gemini terminó de hablar, habilitar input
-                        # ----------------------------------------------------------
-                        if sc and getattr(sc, "generation_complete", False):
-                            if not greeting_done.is_set():
-                                greeting_done.set()
-                                logger.info("[GEMINI] Saludo completo (generation_complete)")
-                                await session.send_client_content(
-                                    turns={"role": "user", "parts": [{"text": "Decí solamente: PRUEBA GEMINI"}]},
-                                    turn_complete=True,
-                                )
-                                logger.info("[TEST] Mandé texto a Gemini vía send_client_content — esperando respuesta")
-                            else:
-                                logger.info("[GEMINI] Respuesta completa")
-
                         # ----------------------------------------------------------
                         # Fin de turno — guardar en chat
                         # ----------------------------------------------------------
