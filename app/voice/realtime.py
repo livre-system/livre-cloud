@@ -161,12 +161,15 @@ async def media_stream(websocket: WebSocket):
                     elif event_type == "response.audio_transcript.done":
                         logger.info(f"[GPT] '{''.join(gpt_text)}'")
                         gpt_text = []
-                    elif event_type == "response.audio.delta" and data.get("delta"):
+                    elif event_type == "response.output_audio.delta" and data.get("delta"):
+                        logger.info("[AUDIO OUT] Audio recibido de OpenAI")
                         await websocket.send_text(json.dumps({
                             "event": "media",
                             "streamSid": stream_sid,
                             "media": {"payload": data["delta"]},
                         }))
+                    elif event_type == "response.output_audio.done":
+                        logger.info("[OPENAI] Audio de respuesta terminado")
                     elif event_type == "response.done":
                         logger.info("[OPENAI] Respuesta completada")
                     elif event_type == "error":
