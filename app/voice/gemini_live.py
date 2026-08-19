@@ -334,8 +334,10 @@ async def gemini_stream(websocket: WebSocket):
                 user_text:  list[str] = []
                 msg_count  = 0
                 try:
+                    logger.info("[RECEIVER] Entrando al loop de receive()")
                     async for response in session.receive():
                         msg_count += 1
+                        logger.info(f"[RECEIVER] Mensaje #{msg_count} recibido")
 
                         # ----------------------------------------------------------
                         # DIAGNÓSTICO SEGURO — inspeccionamos cada mensaje
@@ -524,6 +526,8 @@ async def gemini_stream(websocket: WebSocket):
 
                 except Exception as e:
                     logger.error(f"[ERROR] gemini_to_twilio: {e}", exc_info=True)
+                finally:
+                    logger.info("[RECEIVER] Salió del loop de receive()")
 
             # Mismo patrón que realtime.py
             await asyncio.gather(twilio_to_gemini(), gemini_to_twilio())
