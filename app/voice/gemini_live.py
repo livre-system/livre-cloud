@@ -228,6 +228,8 @@ async def gemini_incoming(request: Request):
     stream.parameter(name="CallSid", value=call_sid)
     connect.append(stream)
     response.append(connect)
+    # Mantener la llamada viva mientras dura el WebSocket (hasta 2hs)
+    response.pause(length=7200)
 
     return Response(content=str(response), media_type="application/xml")
 
@@ -248,6 +250,7 @@ async def gemini_stream(websocket: WebSocket):
     call_sid: str = ""
     stream_sid: str = ""
     chat_id: str | None = None
+    greeting_done: bool = False
 
     # Buffer para acumular texto del modelo (para guardar en chat)
     model_text_buffer: list[str] = []
@@ -278,7 +281,7 @@ async def gemini_stream(websocket: WebSocket):
 
             async def receive_from_twilio():
                 """Lee mensajes de Twilio y los envía a Gemini."""
-                nonlocal call_sid, stream_sid, chat_id
+                nonlocal call_sid, stream_sid, chat_id, greeting_done
 
                 async for message in websocket.iter_text():
                     data = json.loads(message)
@@ -298,6 +301,9 @@ async def gemini_stream(websocket: WebSocket):
                         )
 
                     elif event == "media":
+                        # No mandar audio del usuario hasta que Gemini termine el saludo
+                        if not greeting_done:
+                            continue
                         # Audio del usuario → convertir y enviar a Gemini
                         mulaw_b64 = data["media"]["payload"]
                         pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
@@ -406,6 +412,9 @@ async def gemini_stream(websocket: WebSocket):
                     # --- Fin de turno: guardar en chat ---
                     if response.server_content and response.server_content.turn_complete:
                         logger.info("[GEMINI] Turno completo")
+                        if not greeting_done:
+                            greeting_done = True
+                            logger.info("[GEMINI] Saludo completo — activando VAD para el usuario")
                         if chat_id:
                             if user_text_buffer:
                                 user_text = " ".join(user_text_buffer).strip()
