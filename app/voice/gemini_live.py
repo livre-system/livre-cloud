@@ -301,10 +301,6 @@ async def gemini_stream(websocket: WebSocket):
                         # Audio del usuario → convertir y enviar a Gemini
                         mulaw_b64 = data["media"]["payload"]
                         pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
-                    elif event == "media":
-                        # Audio del usuario → convertir y enviar a Gemini
-                        mulaw_b64 = data["media"]["payload"]
-                        pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
                         await session.send_realtime_input(
                             audio=genai_types.Blob(
                                 data=pcm_bytes,
