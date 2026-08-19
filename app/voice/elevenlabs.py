@@ -13,6 +13,7 @@ Endpoints:
 import os
 import json
 import base64
+import audioop
 import logging
 import asyncio
 import websockets
@@ -26,13 +27,37 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice-eleven", tags=["voice-elevenlabs"])
 
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_API_KEY  = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
 
-BASE_URL = os.getenv("BASE_URL", "")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "")
+BASE_URL            = os.getenv("BASE_URL", "")
+TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
+
+
+# ---------------------------------------------------------------------------
+# Helpers de conversión de audio
+# ElevenLabs manda/recibe PCM 16kHz — Twilio necesita ulaw 8kHz
+# ---------------------------------------------------------------------------
+
+def pcm16k_to_ulaw8k_b64(pcm16k_bytes: bytes) -> str:
+    """PCM 16-bit 16kHz → ulaw 8kHz → base64"""
+    # Resample 16000 → 8000 (factor 2)
+    pcm8k, _ = audioop.ratecv(pcm16k_bytes, 2, 1, 16000, 8000, None)
+    # Convertir a ulaw
+    ulaw = audioop.lin2ulaw(pcm8k, 2)
+    return base64.b64encode(ulaw).decode()
+
+
+def ulaw8k_b64_to_pcm16k(payload_b64: str) -> bytes:
+    """base64 ulaw 8kHz → PCM 16-bit 16kHz"""
+    ulaw = base64.b64decode(payload_b64)
+    # ulaw → PCM 16-bit 8kHz
+    pcm8k = audioop.ulaw2lin(ulaw, 2)
+    # Resample 8000 → 16000
+    pcm16k, _ = audioop.ratecv(pcm8k, 2, 1, 8000, 16000, None)
+    return pcm16k
 
 
 # ---------------------------------------------------------------------------
@@ -54,20 +79,20 @@ async def media_stream(websocket: WebSocket):
     await websocket.accept()
     logger.info("[ELEVEN] Twilio WebSocket conectado")
 
-    eleven_ws = None
+    eleven_ws  = None
     stream_sid = None
+    eleven_ready = asyncio.Event()  # se activa cuando ElevenLabs confirma la sesión
 
     try:
         # Conectar a ElevenLabs Conversational AI
+        # ElevenLabs espera PCM 16kHz — nosotros convertimos en ambas direcciones
         eleven_ws = await websockets.connect(
             f"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={ELEVENLABS_AGENT_ID}",
-            additional_headers={
-                "xi-api-key": ELEVENLABS_API_KEY,
-            },
+            additional_headers={"xi-api-key": ELEVENLABS_API_KEY},
         )
         logger.info("[ELEVEN] ElevenLabs WebSocket conectado")
 
-        # Configurar formato de audio compatible con Twilio Media Streams (ulaw 8kHz)
+        # Inicialización: nivel raíz del mensaje, NO dentro de conversation_config_override
         await eleven_ws.send(json.dumps({
             "type": "conversation_initiation_client_data",
             "conversation_config_override": {
@@ -77,26 +102,19 @@ async def media_stream(websocket: WebSocket):
                 "tts": {
                     "optimize_streaming_latency": 3,
                 },
-                "audio": {
-                    "input": {
-                        "encoding": "ulaw",
-                        "sample_rate": 8000,
-                    },
-                    "output": {
-                        "encoding": "ulaw",
-                        "sample_rate": 8000,
-                        "chunk_length_schedule": [50],
-                    },
-                },
             },
         }))
 
+        # ----------------------------------------------------------------
+        # Twilio → ElevenLabs
+        # Recibimos ulaw 8kHz de Twilio, convertimos a PCM 16kHz para ElevenLabs
+        # ----------------------------------------------------------------
         async def twilio_to_eleven():
             nonlocal stream_sid
             audio_chunks = 0
             try:
                 async for message in websocket.iter_text():
-                    data = json.loads(message)
+                    data  = json.loads(message)
                     event = data.get("event")
 
                     if event == "start":
@@ -104,15 +122,23 @@ async def media_stream(websocket: WebSocket):
                         logger.info(f"[ELEVEN] streamSid={stream_sid}")
 
                     elif event == "media":
+                        # Esperar a que ElevenLabs esté listo antes de mandar audio
+                        await eleven_ready.wait()
+
                         audio_chunks += 1
                         if audio_chunks % 50 == 0:
-                            logger.info(f"[ELEVEN] {audio_chunks} chunks enviados a ElevenLabs")
+                            logger.info(f"[ELEVEN] {audio_chunks} chunks enviados")
+
                         try:
-                            # ElevenLabs espera audio en base64 ulaw 8kHz
+                            # Convertir ulaw 8kHz → PCM 16kHz → base64
+                            pcm16k = ulaw8k_b64_to_pcm16k(data["media"]["payload"])
+                            pcm_b64 = base64.b64encode(pcm16k).decode()
+
                             await eleven_ws.send(json.dumps({
-                                "user_audio_chunk": data["media"]["payload"],
+                                "user_audio_chunk": pcm_b64,
                             }))
-                        except Exception:
+                        except Exception as e:
+                            logger.error(f"[ELEVEN] Error convirtiendo audio Twilio→EL: {e}")
                             break
 
                     elif event == "stop":
@@ -125,40 +151,49 @@ async def media_stream(websocket: WebSocket):
             except WebSocketDisconnect:
                 logger.info("[ELEVEN] Twilio desconectado")
 
+        # ----------------------------------------------------------------
+        # ElevenLabs → Twilio
+        # Recibimos PCM 16kHz de ElevenLabs, convertimos a ulaw 8kHz para Twilio
+        # ----------------------------------------------------------------
         async def eleven_to_twilio():
             try:
                 async for message in eleven_ws:
-                    data = json.loads(message)
+                    data       = json.loads(message)
                     event_type = data.get("type")
 
                     if event_type == "conversation_initiation_metadata":
-                        logger.info(f"[ELEVEN] Conversación iniciada: {data}")
+                        logger.info(f"[ELEVEN] Sesión iniciada: {data}")
+                        eleven_ready.set()  # ahora sí podemos mandar audio
 
                     elif event_type == "audio":
-                        # Audio de ElevenLabs → Twilio
                         audio_b64 = data.get("audio_event", {}).get("audio_base_64", "")
                         if audio_b64 and stream_sid:
-                            await websocket.send_text(json.dumps({
-                                "event": "media",
-                                "streamSid": stream_sid,
-                                "media": {"payload": audio_b64},
-                            }))
+                            try:
+                                # PCM 16kHz de ElevenLabs → ulaw 8kHz para Twilio
+                                pcm16k_bytes = base64.b64decode(audio_b64)
+                                ulaw_b64     = pcm16k_to_ulaw8k_b64(pcm16k_bytes)
+
+                                await websocket.send_text(json.dumps({
+                                    "event":     "media",
+                                    "streamSid": stream_sid,
+                                    "media":     {"payload": ulaw_b64},
+                                }))
+                            except Exception as e:
+                                logger.error(f"[ELEVEN] Error convirtiendo audio EL→Twilio: {e}")
 
                     elif event_type == "interruption":
-                        # Usuario interrumpió → limpiar audio en cola
                         logger.info("[ELEVEN] Interrupción detectada")
                         if stream_sid:
                             await websocket.send_text(json.dumps({
-                                "event": "clear",
+                                "event":     "clear",
                                 "streamSid": stream_sid,
                             }))
 
                     elif event_type == "ping":
-                        # Responder ping para mantener conexión viva
                         event_id = data.get("ping_event", {}).get("event_id")
                         if event_id:
                             await eleven_ws.send(json.dumps({
-                                "type": "pong",
+                                "type":     "pong",
                                 "event_id": event_id,
                             }))
 
