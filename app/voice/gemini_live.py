@@ -241,10 +241,13 @@ async def gemini_stream(websocket: WebSocket):
                     )
                 )
             ),
-            # VAD automático — configuración mínima probada con gemini-3.1-flash-live-preview
+            # VAD manual — deshabilitamos el VAD automático de Gemini y controlamos
+            # nosotros cuándo empieza y termina el turno del usuario, igual que
+            # OpenAI usa input_audio_buffer.commit. Evita que Gemini se interrumpa
+            # a sí mismo con el eco de la línea telefónica.
             realtime_input_config=genai_types.RealtimeInputConfig(
                 automatic_activity_detection=genai_types.AutomaticActivityDetection(
-                    disabled=False,
+                    disabled=True,
                 ),
             ),
             # Transcripción del audio del usuario
@@ -265,11 +268,18 @@ async def gemini_stream(websocket: WebSocket):
             gemini_speaking  = asyncio.Event()   # True mientras Gemini emite audio
 
             # ------------------------------------------------------------------
-            # twilio_to_gemini — igual que twilio_to_openai en realtime.py
+            # twilio_to_gemini — VAD manual con detección de silencio
+            # Con VAD automático deshabilitado, nosotros mandamos activity_start
+            # y activity_end según si el chunk tiene señal o no, igual que
+            # OpenAI usa input_audio_buffer.commit.
             # ------------------------------------------------------------------
             async def twilio_to_gemini():
                 nonlocal stream_sid, call_sid, chat_id
-                audio_chunks = 0
+                audio_chunks   = 0
+                silent_chunks  = 0
+                speaking       = False          # el usuario está hablando
+                SILENCE_THRESHOLD  = 200        # amplitud mínima para considerar voz
+                SILENCE_CHUNKS_END = 20         # ~400ms de silencio para cerrar turno
                 try:
                     async for message in websocket.iter_text():
                         data  = json.loads(message)
@@ -285,33 +295,53 @@ async def gemini_stream(websocket: WebSocket):
                                 )
 
                         elif event == "media":
-                            # No enviar audio hasta que el saludo terminó
+                            # Esperar saludo
                             if not greeting_done.is_set():
                                 await greeting_done.wait()
-                            # No enviar audio mientras Gemini está hablando (evita eco/auto-interrupción)
+                            # Descartar mientras Gemini habla
                             if gemini_speaking.is_set():
+                                speaking = False
+                                silent_chunks = 0
                                 continue
+
                             audio_chunks += 1
                             try:
                                 pcm = await asyncio.to_thread(
                                     pcmu_to_pcm16, data["media"]["payload"]
                                 )
-                                # --- DIAGNÓSTICO DE ENVÍO ---
-                                if audio_chunks <= 3:
-                                    # Primeros 3 chunks: logueamos todo
-                                    frames    = len(pcm) // 2          # PCM16 = 2 bytes/frame
-                                    secs      = frames / GEMINI_IN
-                                    nonzero   = sum(1 for i in range(0, len(pcm), 2)
-                                                    if int.from_bytes(pcm[i:i+2], "little", signed=True) != 0)
-                                    logger.info(
-                                        f"[AUDIO DIAG #{audio_chunks}] "
-                                        f"bytes={len(pcm)} frames={frames} "
-                                        f"duracion={secs:.3f}s "
-                                        f"frames_nonzero={nonzero} "
-                                        f"mime=audio/pcm;rate=16000"
-                                    )
-                                elif audio_chunks % 50 == 0:
-                                    logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
+
+                                # Detectar si hay voz en el chunk
+                                max_amp = max(
+                                    abs(int.from_bytes(pcm[i:i+2], "little", signed=True))
+                                    for i in range(0, len(pcm), 2)
+                                ) if pcm else 0
+                                has_voice = max_amp > SILENCE_THRESHOLD
+
+                                if has_voice:
+                                    silent_chunks = 0
+                                    if not speaking:
+                                        speaking = True
+                                        logger.info("[VAD] Usuario empezó a hablar → activity_start")
+                                        await session.send(
+                                            input=genai_types.LiveClientRealtimeInput(
+                                                activity_start=genai_types.ActivityStart()
+                                            )
+                                        )
+                                else:
+                                    if speaking:
+                                        silent_chunks += 1
+                                        if silent_chunks >= SILENCE_CHUNKS_END:
+                                            speaking = False
+                                            silent_chunks = 0
+                                            logger.info("[VAD] Usuario dejó de hablar → activity_end")
+                                            await session.send(
+                                                input=genai_types.LiveClientRealtimeInput(
+                                                    activity_end=genai_types.ActivityEnd()
+                                                )
+                                            )
+
+                                if audio_chunks % 50 == 0:
+                                    logger.info(f"[AUDIO] {audio_chunks} chunks | speaking={speaking} max_amp={max_amp}")
 
                                 await session.send_realtime_input(
                                     audio=genai_types.Blob(
