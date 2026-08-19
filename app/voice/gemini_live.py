@@ -334,10 +334,8 @@ async def gemini_stream(websocket: WebSocket):
                 user_text:  list[str] = []
                 msg_count  = 0
                 try:
-                    logger.info("[RECEIVER] Entrando al loop de receive()")
                     async for response in session.receive():
                         msg_count += 1
-                        logger.info(f"[RECEIVER] Mensaje #{msg_count} recibido")
 
                         # ----------------------------------------------------------
                         # DIAGNÓSTICO SEGURO — inspeccionamos cada mensaje
@@ -487,6 +485,12 @@ async def gemini_stream(websocket: WebSocket):
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (generation_complete) — activando audio del usuario")
+                                # PRUEBA: mandar texto para ver si Gemini responde sin audio
+                                logger.info("[TEST] Mandando mensaje de texto a Gemini para probar sesión")
+                                await session.send(
+                                    input="El usuario dijo: quiero un viaje",
+                                    end_of_turn=True,
+                                )
                             else:
                                 logger.info("[GEMINI] Respuesta completa — escuchando al usuario")
 
@@ -526,8 +530,6 @@ async def gemini_stream(websocket: WebSocket):
 
                 except Exception as e:
                     logger.error(f"[ERROR] gemini_to_twilio: {e}", exc_info=True)
-                finally:
-                    logger.info("[RECEIVER] Salió del loop de receive()")
 
             # Mismo patrón que realtime.py
             await asyncio.gather(twilio_to_gemini(), gemini_to_twilio())
