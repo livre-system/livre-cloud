@@ -261,7 +261,8 @@ async def gemini_stream(websocket: WebSocket):
             )
 
             # Esperar que el saludo termine antes de enviar audio del usuario
-            greeting_done = asyncio.Event()
+            greeting_done    = asyncio.Event()
+            gemini_speaking  = asyncio.Event()   # True mientras Gemini emite audio
 
             # ------------------------------------------------------------------
             # twilio_to_gemini — igual que twilio_to_openai en realtime.py
@@ -287,6 +288,9 @@ async def gemini_stream(websocket: WebSocket):
                             # No enviar audio hasta que el saludo terminó
                             if not greeting_done.is_set():
                                 await greeting_done.wait()
+                            # No enviar audio mientras Gemini está hablando (evita eco/auto-interrupción)
+                            if gemini_speaking.is_set():
+                                continue
                             audio_chunks += 1
                             try:
                                 pcm = await asyncio.to_thread(
@@ -418,6 +422,7 @@ async def gemini_stream(websocket: WebSocket):
                         # Audio de respuesta de Gemini
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "model_turn", None):
+                            gemini_speaking.set()   # Gemini está hablando → bloquear input
                             for part in (getattr(sc.model_turn, "parts", None) or []):
                                 # Audio inline
                                 if getattr(part, "inline_data", None) and part.inline_data.data:
@@ -480,19 +485,21 @@ async def gemini_stream(websocket: WebSocket):
                                     )
 
                         # ----------------------------------------------------------
-                        # generation_complete → habilitar audio del usuario
-                        # El saludo termina aquí (confirmado en logs), NO en turn_complete
+                        # generation_complete → Gemini terminó de hablar, habilitar input
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "generation_complete", False):
+                            gemini_speaking.clear()   # Gemini terminó → aceptar audio del usuario
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (generation_complete) — activando audio del usuario")
+                            else:
+                                logger.info("[GEMINI] Respuesta completa — escuchando al usuario")
 
                         # ----------------------------------------------------------
                         # Fin de turno — guardar en chat
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "turn_complete", False):
-                            # Fallback: activar saludo también aquí por si llega antes
+                            gemini_speaking.clear()   # fallback por si generation_complete no llegó
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (turn_complete) — activando audio del usuario")
