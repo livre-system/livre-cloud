@@ -403,7 +403,6 @@ async def gemini_stream(websocket: WebSocket):
                         # Interrupción explícita (server_content.interrupted)
                         # [TEST] Solo logueamos — NO bloqueamos gemini_speaking,
                         # NO descartamos audio, NO enviamos clear a Twilio.
-                        # Queremos ver si Gemini responde al texto sin esta interferencia.
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "interrupted", None) is True:
                             logger.info("[GEMINI] interrupted recibido — IGNORADO para test (no bloqueamos ni limpiamos)")
@@ -481,11 +480,11 @@ async def gemini_stream(websocket: WebSocket):
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo (generation_complete)")
-                                await session.send(
-                                    input="Decí solamente: PRUEBA GEMINI",
-                                    end_of_turn=True,
+                                await session.send_client_content(
+                                    turns={"role": "user", "parts": [{"text": "Decí solamente: PRUEBA GEMINI"}]},
+                                    turn_complete=True,
                                 )
-                                logger.info("[TEST] Mandé texto a Gemini — esperando respuesta")
+                                logger.info("[TEST] Mandé texto a Gemini vía send_client_content — esperando respuesta")
                             else:
                                 logger.info("[GEMINI] Respuesta completa")
 
