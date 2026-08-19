@@ -30,9 +30,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import Response
 from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 
-# Gemini
-import google.generativeai as genai
-from google.generativeai import types as genai_types
+# Gemini (SDK nuevo — google-genai)
+from google import genai
+from google.genai import types as genai_types
 
 # DB y embeddings (misma lógica que router.py)
 from app.core.database import get_cursor
@@ -53,9 +53,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 VOICE_SYSTEM_USER = "voice_calls"
 
 # Modelo Live disponible — cambiar a gemini-2.5-flash-live cuando esté GA
-GEMINI_LIVE_MODEL = "gemini-2.0-flash-live-001"
+GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
 
-genai.configure(api_key=GEMINI_API_KEY)
+# El cliente se inicializa con api_key en cada sesión (SDK nuevo)
 
 # ---------------------------------------------------------------------------
 # Caché de embeddings (igual que router.py)
@@ -250,7 +250,7 @@ async def gemini_stream(websocket: WebSocket):
 
     try:
         # --- Inicializar sesión Gemini Live ---
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        client = genai.Client(api_key=GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", ""))
 
         live_config = genai_types.LiveConnectConfig(
             response_modalities=["AUDIO"],
