@@ -76,23 +76,12 @@ async def media_stream(websocket: WebSocket):
         await openai_ws.send(json.dumps({
             "type": "session.update",
             "session": {
-                "type": "realtime",
-                "model": "gpt-realtime-2.1",
+                "turn_detection": {"type": "server_vad"},
+                "input_audio_format": "g711_ulaw",
+                "output_audio_format": "g711_ulaw",
+                "voice": VOICE,
                 "instructions": SYSTEM_PROMPT,
-                "output_modalities": ["audio"],
-                "audio": {
-                    "input": {
-                        "format": {"type": "audio/g711-ulaw"},
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "interrupt_response": True,
-                        }
-                    },
-                    "output": {
-                        "format": {"type": "audio/g711-ulaw"},
-                        "voice": VOICE,
-                    }
-                }
+                "modalities": ["audio"],
             }
         }))
 
