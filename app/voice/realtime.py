@@ -190,12 +190,10 @@ async def media_stream(websocket: WebSocket):
                         logger.info(f"[GPT] '{''.join(gpt_text)}'")
                         gpt_text = []
                     elif event_type == "response.output_audio.delta" and data.get("delta"):
-                        logger.info("[AUDIO OUT] Audio recibido de OpenAI")
-                        boosted = _boost_pcmu(data["delta"])
                         await websocket.send_text(json.dumps({
                             "event": "media",
                             "streamSid": stream_sid,
-                            "media": {"payload": boosted},
+                            "media": {"payload": data["delta"]},
                         }))
                     elif event_type == "response.output_audio.done":
                         logger.info("[OPENAI] Audio de respuesta terminado")
