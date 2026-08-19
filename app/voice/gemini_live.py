@@ -241,13 +241,11 @@ async def gemini_stream(websocket: WebSocket):
                     )
                 )
             ),
-            # VAD manual — deshabilitamos el VAD automático de Gemini y controlamos
-            # nosotros cuándo empieza y termina el turno del usuario, igual que
-            # OpenAI usa input_audio_buffer.commit. Evita que Gemini se interrumpa
-            # a sí mismo con el eco de la línea telefónica.
+            # VAD automático de Gemini — igual que OpenAI maneja su VAD internamente.
+            # Gemini detecta voz y silencio solo, sin que nosotros mandemos activity_start/end.
             realtime_input_config=genai_types.RealtimeInputConfig(
                 automatic_activity_detection=genai_types.AutomaticActivityDetection(
-                    disabled=True,
+                    disabled=False,
                 ),
             ),
             # Transcripción del audio del usuario
@@ -268,18 +266,12 @@ async def gemini_stream(websocket: WebSocket):
             gemini_speaking  = asyncio.Event()   # True mientras Gemini emite audio
 
             # ------------------------------------------------------------------
-            # twilio_to_gemini — VAD manual con detección de silencio
-            # Con VAD automático deshabilitado, nosotros mandamos activity_start
-            # y activity_end según si el chunk tiene señal o no, igual que
-            # OpenAI usa input_audio_buffer.commit.
+            # twilio_to_gemini — audio continuo, VAD automático de Gemini
+            # Igual que OpenAI: mandamos audio siempre, el modelo detecta voz solo.
             # ------------------------------------------------------------------
             async def twilio_to_gemini():
                 nonlocal stream_sid, call_sid, chat_id
-                audio_chunks   = 0
-                silent_chunks  = 0
-                speaking       = False          # el usuario está hablando
-                SILENCE_THRESHOLD  = 200        # amplitud mínima para considerar voz
-                SILENCE_CHUNKS_END = 20         # ~400ms de silencio para cerrar turno
+                audio_chunks = 0
                 try:
                     async for message in websocket.iter_text():
                         data  = json.loads(message)
@@ -300,61 +292,19 @@ async def gemini_stream(websocket: WebSocket):
                                 await greeting_done.wait()
                             # Descartar mientras Gemini habla
                             if gemini_speaking.is_set():
-                                speaking = False
-                                silent_chunks = 0
                                 continue
 
                             audio_chunks += 1
+                            if audio_chunks % 50 == 0:
+                                logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
                             try:
                                 pcm = await asyncio.to_thread(
                                     pcmu_to_pcm16, data["media"]["payload"]
                                 )
-
-                                # Detectar si hay voz en el chunk
-                                max_amp = max(
-                                    abs(int.from_bytes(pcm[i:i+2], "little", signed=True))
-                                    for i in range(0, len(pcm), 2)
-                                ) if pcm else 0
-                                has_voice = max_amp > SILENCE_THRESHOLD
-
-                                if has_voice:
-                                    silent_chunks = 0
-                                    if not speaking:
-                                        speaking = True
-                                        logger.info("[VAD] Usuario empezó a hablar → activity_start")
-                                        # Mandamos activity_start + primer chunk de audio
-                                        # en el MISMO send — mismo canal, Gemini los correlaciona
-                                        await session.send(
-                                            input=genai_types.LiveClientRealtimeInput(
-                                                activity_start=genai_types.ActivityStart()
-                                            )
-                                        )
-                                else:
-                                    if speaking:
-                                        silent_chunks += 1
-                                        if silent_chunks >= SILENCE_CHUNKS_END:
-                                            speaking = False
-                                            silent_chunks = 0
-                                            logger.info("[VAD] Usuario dejó de hablar → activity_end")
-                                            await session.send(
-                                                input=genai_types.LiveClientRealtimeInput(
-                                                    activity_end=genai_types.ActivityEnd()
-                                                )
-                                            )
-
-                                if audio_chunks % 50 == 0:
-                                    logger.info(f"[AUDIO] {audio_chunks} chunks | speaking={speaking} max_amp={max_amp}")
-
-                                # Audio siempre por session.send() con LiveClientRealtimeInput
-                                # — mismo canal que activity_start/activity_end.
-                                # Con VAD deshabilitado, send_realtime_input va por un canal
-                                # distinto que Gemini no correlaciona con los eventos VAD.
-                                await session.send(
-                                    input=genai_types.LiveClientRealtimeInput(
-                                        audio=genai_types.Blob(
-                                            data=pcm,
-                                            mime_type="audio/pcm;rate=16000",
-                                        )
+                                await session.send_realtime_input(
+                                    audio=genai_types.Blob(
+                                        data=pcm,
+                                        mime_type="audio/pcm;rate=16000",
                                     )
                                 )
                             except Exception as exc:
