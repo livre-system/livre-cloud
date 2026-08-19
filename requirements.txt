@@ -22,3 +22,4 @@ openai
 pydub
 rapidfuzz
 websockets
+google-generativeai>=0.8.0
