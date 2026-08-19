@@ -101,7 +101,7 @@ async def incoming_call(request: Request):
     host = BASE_URL.replace("https://", "").replace("http://", "")
     response = VoiceResponse()
     connect = Connect()
-    connect.stream(url=f"wss://{host}/voice/stream")
+    connect.stream(url=f"wss://{host}/voice-eleven/stream")
     response.append(connect)
     return Response(content=str(response), media_type="application/xml")
 
