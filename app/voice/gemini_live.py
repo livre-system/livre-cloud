@@ -241,6 +241,20 @@ async def gemini_stream(websocket: WebSocket):
                     )
                 )
             ),
+            # VAD automático: Gemini detecta inicio/fin de habla del usuario
+            realtime_input_config=genai_types.RealtimeInputConfig(
+                automatic_activity_detection=genai_types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    prefix_padding_ms=300,
+                    silence_duration_ms=500,
+                ),
+                activity_handling=genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                turn_coverage=genai_types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+            ),
+            # Transcripción del audio de entrada (usuario)
+            input_audio_transcription=genai_types.AudioTranscriptionConfig(),
         )
 
         async with client.aio.live.connect(model=GEMINI_LIVE_MODEL, config=live_config) as session:
@@ -307,12 +321,26 @@ async def gemini_stream(websocket: WebSocket):
                 try:
                     async for response in session.receive():
 
-                        # Interrupción → limpiar buffer de Twilio (igual que realtime.py)
+                        # ---- VAD events (speech_started / speech_stopped) ----
+                        if response.voice_activity:
+                            vtype = response.voice_activity.voice_activity_type
+                            if vtype == genai_types.VoiceActivityType.ACTIVITY_START:
+                                logger.info("[GEMINI] speech_started")
+                                # Interrupción: limpiar buffer de Twilio
+                                if stream_sid:
+                                    await websocket.send_text(json.dumps({
+                                        "event": "clear",
+                                        "streamSid": stream_sid,
+                                    }))
+                            elif vtype == genai_types.VoiceActivityType.ACTIVITY_END:
+                                logger.info("[GEMINI] speech_stopped")
+
+                        # Interrupción explícita desde server_content
                         if (
                             response.server_content
                             and getattr(response.server_content, "interrupted", False)
                         ):
-                            logger.info("[GEMINI] Usuario interrumpió")
+                            logger.info("[GEMINI] Usuario interrumpió (server_content.interrupted)")
                             if stream_sid:
                                 await websocket.send_text(json.dumps({
                                     "event": "clear",
@@ -336,12 +364,15 @@ async def gemini_stream(websocket: WebSocket):
                                         }))
                                 if getattr(part, "text", None):
                                     model_text.append(part.text)
-                                    logger.info(f"[GEMINI] {part.text}")
+                                    logger.info(f"[GEMINI] texto: {part.text}")
 
-                        # Transcripción del usuario
-                        if getattr(response, "input_transcription", None):
-                            user_text.append(response.input_transcription)
-                            logger.info(f"[USUARIO] {response.input_transcription}")
+                        # Transcripción del usuario — viene en server_content.input_transcription
+                        if response.server_content and response.server_content.input_transcription:
+                            tr = response.server_content.input_transcription
+                            if tr.text:
+                                user_text.append(tr.text)
+                                if tr.finished:
+                                    logger.info(f"[USUARIO] {''.join(user_text)}")
 
                         # Function calling
                         if response.tool_call:
@@ -379,7 +410,8 @@ async def gemini_stream(websocket: WebSocket):
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo — activando audio del usuario")
-                            logger.info("[GEMINI] Turno completo")
+                            full_user = "".join(user_text).strip()
+                            logger.info(f"[GEMINI] turn_complete — usuario: '{full_user}' | modelo: {''.join(model_text).strip()!r}")
                             if chat_id:
                                 if user_text:
                                     txt = " ".join(user_text).strip()
