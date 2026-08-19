@@ -82,14 +82,14 @@ async def media_stream(websocket: WebSocket):
                 "output_modalities": ["audio"],
                 "audio": {
                     "input": {
-                        "format": {"type": "audio/pcmu"},
+                        "format": {"type": "audio/g711-ulaw"},
                         "turn_detection": {
                             "type": "server_vad",
                             "interrupt_response": True,
                         }
                     },
                     "output": {
-                        "format": {"type": "audio/pcmu"},
+                        "format": {"type": "audio/g711-ulaw"},
                         "voice": VOICE,
                     }
                 }
