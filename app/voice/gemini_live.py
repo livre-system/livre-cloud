@@ -308,6 +308,11 @@ async def gemini_stream(websocket: WebSocket):
                                 )
                             )
                         )
+                        if not hasattr(receive_from_twilio, "_audio_count"):
+                            receive_from_twilio._audio_count = 0
+                        receive_from_twilio._audio_count += 1
+                        if receive_from_twilio._audio_count % 50 == 0:
+                            logger.info(f"[AUDIO] {receive_from_twilio._audio_count} chunks enviados a Gemini")
 
                     elif event == "stop":
                         logger.info("Stream detenido por Twilio")
@@ -318,6 +323,7 @@ async def gemini_stream(websocket: WebSocket):
                 nonlocal model_text_buffer, user_text_buffer
 
                 async for response in session.receive():
+                    logger.info(f"[GEMINI RAW] sc={bool(response.server_content)} tool={bool(response.tool_call)}")
 
                     # --- Interrupción: usuario empezó a hablar → limpiar buffer Twilio ---
                     if (
@@ -337,12 +343,21 @@ async def gemini_stream(websocket: WebSocket):
                             # Audio
                             if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
                                 audio_bytes = part.inline_data.data
-                                mulaw_b64 = await asyncio.to_thread(gemini_to_twilio, audio_bytes)
-                                await websocket.send_text(json.dumps({
-                                    "event": "media",
-                                    "streamSid": stream_sid,
-                                    "media": {"payload": mulaw_b64},
-                                }))
+                                mime = getattr(part.inline_data, "mime_type", "?")
+                                logger.info(f"[GEMINI AUDIO] {len(audio_bytes)} bytes, mime={mime}")
+                                try:
+                                    mulaw_b64 = await asyncio.to_thread(gemini_to_twilio, audio_bytes)
+                                    if stream_sid:
+                                        await websocket.send_text(json.dumps({
+                                            "event": "media",
+                                            "streamSid": stream_sid,
+                                            "media": {"payload": mulaw_b64},
+                                        }))
+                                        logger.info(f"[TWILIO] Audio enviado: {len(mulaw_b64)} chars")
+                                    else:
+                                        logger.warning("[TWILIO] stream_sid vacío, audio descartado")
+                                except Exception as e:
+                                    logger.error(f"[AUDIO ERROR] {e}")
                             # Texto (para guardar en chat)
                             if hasattr(part, "text") and part.text:
                                 model_text_buffer.append(part.text)
