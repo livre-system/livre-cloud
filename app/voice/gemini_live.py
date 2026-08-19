@@ -6,6 +6,8 @@ Estructura idéntica a realtime.py — solo cambia el backend de IA.
 
 Twilio → PCMU 8kHz → nosotros convertimos → PCM 16kHz → Gemini Live
 Gemini Live → PCM 24kHz → nosotros convertimos → PCMU 8kHz → Twilio
+
+SDK probado: google-genai 2.18.1
 """
 
 import os
@@ -33,13 +35,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice-gemini", tags=["voice-gemini"])
 
-BASE_URL          = os.getenv("BASE_URL", "")
-GEMINI_API_KEY    = os.getenv("GEMINI_API_KEY", "")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
+BASE_URL            = os.getenv("BASE_URL", "")
+GEMINI_API_KEY      = os.getenv("GEMINI_API_KEY", "")
+TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
-VOICE_SYSTEM_USER  = "voice_calls"
-GEMINI_LIVE_MODEL  = "gemini-3.1-flash-live-preview"
+VOICE_SYSTEM_USER   = "voice_calls"
+GEMINI_LIVE_MODEL   = "gemini-2.0-flash-live-001"   # modelo Live GA estable
 
 SYSTEM_PROMPT = (
     "Sos LIVRE, el asistente de voz de Viaja Livre, una empresa de transporte de pasajeros "
@@ -59,14 +61,14 @@ SYSTEM_PROMPT = (
 )
 
 # ---------------------------------------------------------------------------
-# Audio — misma lógica que realtime.py para μ-law, más conversión de rate
+# Audio — igual que realtime.py + conversión de sample rate
 # ---------------------------------------------------------------------------
 
-TWILIO_RATE = 8000
-GEMINI_IN   = 16000
-GEMINI_OUT  = 24000
+TWILIO_RATE  = 8000
+GEMINI_IN    = 16000
+GEMINI_OUT   = 24000
+VOLUME_BOOST = 5.0
 
-# Tabla μ-law → linear (igual que realtime.py)
 def _build_ulaw_to_linear() -> list:
     table = []
     for u in range(256):
@@ -100,10 +102,8 @@ def _linear_to_ulaw(sample: int) -> int:
     mantissa = (sample >> (exponent + 3)) & 0x0F
     return ~(sign | (exponent << 4) | mantissa) & 0xFF
 
-VOLUME_BOOST = 5.0
-
 def _boost_pcmu(payload_b64: str, volume: float = VOLUME_BOOST) -> str:
-    """Amplifica audio μ-law igual que realtime.py."""
+    """Amplifica audio G.711 μ-law en Python puro — igual que realtime.py."""
     raw = base64.b64decode(payload_b64)
     boosted = bytearray(len(raw))
     for i, byte in enumerate(raw):
@@ -113,20 +113,20 @@ def _boost_pcmu(payload_b64: str, volume: float = VOLUME_BOOST) -> str:
     return base64.b64encode(bytes(boosted)).decode()
 
 def pcmu_to_pcm16(mulaw_b64: str) -> bytes:
-    """PCMU base64 8kHz → PCM 16-bit 16kHz para Gemini."""
-    raw = base64.b64decode(mulaw_b64)
+    """PCMU base64 8 kHz → PCM16 16 kHz para Gemini."""
+    raw  = base64.b64decode(mulaw_b64)
     pcm8 = audioop.ulaw2lin(raw, 2)
     pcm16, _ = audioop.ratecv(pcm8, 2, 1, TWILIO_RATE, GEMINI_IN, None)
     return pcm16
 
 def pcm24_to_pcmu(pcm24: bytes) -> str:
-    """PCM 16-bit 24kHz de Gemini → PCMU base64 8kHz para Twilio."""
+    """PCM16 24 kHz de Gemini → PCMU base64 8 kHz para Twilio."""
     pcm8, _ = audioop.ratecv(pcm24, 2, 1, GEMINI_OUT, TWILIO_RATE, None)
-    mulaw = audioop.lin2ulaw(pcm8, 2)
+    mulaw   = audioop.lin2ulaw(pcm8, 2)
     return base64.b64encode(mulaw).decode()
 
 # ---------------------------------------------------------------------------
-# Embeddings (igual que router.py)
+# Embeddings / buscar_calle
 # ---------------------------------------------------------------------------
 
 _embedding_cache: dict[str, list[str]] = {}
@@ -149,7 +149,7 @@ def _search_top3_streets(query: str) -> list[str]:
                 ORDER BY embedding <=> %s::vector
                 LIMIT 3
             """, (str(embedding), str(embedding)))
-            rows = cur.fetchall()
+            rows   = cur.fetchall()
             result = [r["name"] for r in rows if r["similarity"] > 0.5]
             _embedding_cache[street_part] = result
             return result
@@ -175,7 +175,7 @@ def _get_or_create_voice_chat(call_sid: str) -> str:
     return chat["chat_id"]
 
 # ---------------------------------------------------------------------------
-# Tool definition
+# Tool definition para Gemini
 # ---------------------------------------------------------------------------
 
 BUSCAR_CALLE_TOOL = genai_types.Tool(
@@ -209,7 +209,7 @@ async def gemini_incoming(request: Request):
     logger.info("Gemini Live — llamada entrante")
     host = BASE_URL.replace("https://", "").replace("http://", "")
     response = VoiceResponse()
-    connect = Connect()
+    connect  = Connect()
     connect.stream(url=f"wss://{host}/voice-gemini/stream")
     response.append(connect)
     return Response(content=str(response), media_type="application/xml")
@@ -241,7 +241,7 @@ async def gemini_stream(websocket: WebSocket):
                     )
                 )
             ),
-            # VAD automático: Gemini detecta inicio/fin de habla del usuario
+            # VAD automático — atributos verificados en google-genai 2.18.1
             realtime_input_config=genai_types.RealtimeInputConfig(
                 automatic_activity_detection=genai_types.AutomaticActivityDetection(
                     disabled=False,
@@ -253,28 +253,31 @@ async def gemini_stream(websocket: WebSocket):
                 activity_handling=genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
                 turn_coverage=genai_types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
             ),
-            # Transcripción del audio de entrada (usuario)
+            # Transcripción del audio del usuario
             input_audio_transcription=genai_types.AudioTranscriptionConfig(),
         )
 
         async with client.aio.live.connect(model=GEMINI_LIVE_MODEL, config=live_config) as session:
-            logger.info("[GEMINI] Sesión Gemini Live abierta")
+            logger.info("[GEMINI] Sesión Live abierta")
 
-            # Saludo inicial
+            # Saludo inicial — igual que realtime.py dispara response.create
             await session.send(
                 input="Saluda al usuario brevemente.",
                 end_of_turn=True,
             )
 
-            # Esperar que el saludo termine antes de mandar audio del usuario
+            # Esperar que el saludo termine antes de enviar audio del usuario
             greeting_done = asyncio.Event()
 
+            # ------------------------------------------------------------------
+            # twilio_to_gemini — igual que twilio_to_openai en realtime.py
+            # ------------------------------------------------------------------
             async def twilio_to_gemini():
                 nonlocal stream_sid, call_sid, chat_id
                 audio_chunks = 0
                 try:
                     async for message in websocket.iter_text():
-                        data = json.loads(message)
+                        data  = json.loads(message)
                         event = data.get("event")
 
                         if event == "start":
@@ -287,7 +290,7 @@ async def gemini_stream(websocket: WebSocket):
                                 )
 
                         elif event == "media":
-                            # Esperar saludo antes de mandar audio del usuario
+                            # No enviar audio hasta que el saludo terminó
                             if not greeting_done.is_set():
                                 await greeting_done.wait()
                             audio_chunks += 1
@@ -303,62 +306,53 @@ async def gemini_stream(websocket: WebSocket):
                                         mime_type="audio/pcm;rate=16000",
                                     )
                                 )
-                            except Exception:
+                            except Exception as exc:
+                                logger.error(f"[ERROR] twilio_to_gemini send: {exc}")
                                 break
 
                         elif event == "stop":
                             logger.info(f"[STREAM STOP] Total chunks: {audio_chunks}")
                             break
+
                         else:
                             logger.info(f"[TWILIO EVENT] {event}")
 
                 except WebSocketDisconnect:
                     logger.info("[TWILIO] Desconectado")
 
+            # ------------------------------------------------------------------
+            # gemini_to_twilio — igual que openai_to_twilio en realtime.py
+            # ------------------------------------------------------------------
             async def gemini_to_twilio():
                 model_text: list[str] = []
                 user_text:  list[str] = []
                 try:
                     async for response in session.receive():
+                        # ----------------------------------------------------------
+                        # VAD: voice_activity (SDK 2.18.1 confirmado)
+                        # LiveServerMessage.voice_activity → VoiceActivity
+                        #   └─ voice_activity_type: VoiceActivityType
+                        #        ACTIVITY_START | ACTIVITY_END | TYPE_UNSPECIFIED
+                        # ----------------------------------------------------------
+                        va = response.voice_activity  # None si no hay evento VAD
+                        if va is not None:
+                            vtype = va.voice_activity_type
+                            if vtype == genai_types.VoiceActivityType.ACTIVITY_START:
+                                logger.info("[GEMINI] speech_started")
+                                # Barge-in: limpiar buffer de audio en Twilio
+                                if stream_sid:
+                                    await websocket.send_text(json.dumps({
+                                        "event": "clear",
+                                        "streamSid": stream_sid,
+                                    }))
+                            elif vtype == genai_types.VoiceActivityType.ACTIVITY_END:
+                                logger.info("[GEMINI] speech_stopped")
 
-                        # ---- VAD events — compatible con sdk antiguo y nuevo ----
-                        # SDK >= 2.18: response.voice_activity (VoiceActivity)
-                        # SDK < 2.18:  response.voice_activity_detection_signal (VoiceActivityDetectionSignal)
-                        _va = getattr(response, "voice_activity", None)
-                        _vads = getattr(response, "voice_activity_detection_signal", None)
-
-                        _speech_started = False
-                        _speech_stopped = False
-
-                        if _va:
-                            vtype = getattr(_va, "voice_activity_type", None)
-                            _vat_start = getattr(genai_types, "VoiceActivityType", None)
-                            if _vat_start:
-                                _speech_started = (vtype == genai_types.VoiceActivityType.ACTIVITY_START)
-                                _speech_stopped = (vtype == genai_types.VoiceActivityType.ACTIVITY_END)
-                            else:
-                                _speech_started = str(vtype) in ("ACTIVITY_START", "VoiceActivityType.ACTIVITY_START")
-                                _speech_stopped = str(vtype) in ("ACTIVITY_END", "VoiceActivityType.ACTIVITY_END")
-                        elif _vads:
-                            sig = getattr(_vads, "vad_signal_type", None)
-                            _speech_started = str(sig) in ("VAD_SIGNAL_TYPE_SOS", "VadSignalType.VAD_SIGNAL_TYPE_SOS")
-                            _speech_stopped = str(sig) in ("VAD_SIGNAL_TYPE_EOS", "VadSignalType.VAD_SIGNAL_TYPE_EOS")
-
-                        if _speech_started:
-                            logger.info("[GEMINI] speech_started")
-                            if stream_sid:
-                                await websocket.send_text(json.dumps({
-                                    "event": "clear",
-                                    "streamSid": stream_sid,
-                                }))
-                        elif _speech_stopped:
-                            logger.info("[GEMINI] speech_stopped")
-
-                        # Interrupción explícita desde server_content
-                        if (
-                            response.server_content
-                            and getattr(response.server_content, "interrupted", False)
-                        ):
+                        # ----------------------------------------------------------
+                        # Interrupción explícita (server_content.interrupted)
+                        # ----------------------------------------------------------
+                        sc = response.server_content
+                        if sc and sc.interrupted:
                             logger.info("[GEMINI] Usuario interrumpió (server_content.interrupted)")
                             if stream_sid:
                                 await websocket.send_text(json.dumps({
@@ -366,14 +360,16 @@ async def gemini_stream(websocket: WebSocket):
                                     "streamSid": stream_sid,
                                 }))
 
-                        # Audio de respuesta
-                        if response.server_content and response.server_content.model_turn:
-                            for part in response.server_content.model_turn.parts:
+                        # ----------------------------------------------------------
+                        # Audio de respuesta de Gemini
+                        # ----------------------------------------------------------
+                        if sc and sc.model_turn:
+                            for part in sc.model_turn.parts:
+                                # Audio inline
                                 if getattr(part, "inline_data", None) and part.inline_data.data:
                                     mulaw_b64 = await asyncio.to_thread(
                                         pcm24_to_pcmu, part.inline_data.data
                                     )
-                                    # Boost de volumen igual que realtime.py
                                     mulaw_b64 = _boost_pcmu(mulaw_b64)
                                     if stream_sid:
                                         await websocket.send_text(json.dumps({
@@ -381,19 +377,24 @@ async def gemini_stream(websocket: WebSocket):
                                             "streamSid": stream_sid,
                                             "media": {"payload": mulaw_b64},
                                         }))
+                                # Texto (transcripción de salida, si llega)
                                 if getattr(part, "text", None):
                                     model_text.append(part.text)
-                                    logger.info(f"[GEMINI] texto: {part.text}")
+                                    logger.info(f"[GEMINI texto] {part.text}")
 
-                        # Transcripción del usuario — viene en server_content.input_transcription
-                        if response.server_content and response.server_content.input_transcription:
-                            tr = response.server_content.input_transcription
+                        # ----------------------------------------------------------
+                        # Transcripción del usuario (input_transcription)
+                        # ----------------------------------------------------------
+                        if sc and sc.input_transcription:
+                            tr = sc.input_transcription
                             if tr.text:
                                 user_text.append(tr.text)
                                 if tr.finished:
                                     logger.info(f"[USUARIO] {''.join(user_text)}")
 
+                        # ----------------------------------------------------------
                         # Function calling
+                        # ----------------------------------------------------------
                         if response.tool_call:
                             for fc in response.tool_call.function_calls:
                                 if fc.name == "buscar_calle":
@@ -424,30 +425,42 @@ async def gemini_stream(websocket: WebSocket):
                                         )
                                     )
 
-                        # Fin de turno → guardar en chat
-                        if response.server_content and response.server_content.turn_complete:
+                        # ----------------------------------------------------------
+                        # Fin de turno
+                        # ----------------------------------------------------------
+                        if sc and sc.turn_complete:
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo — activando audio del usuario")
-                            full_user = "".join(user_text).strip()
-                            logger.info(f"[GEMINI] turn_complete — usuario: '{full_user}' | modelo: {''.join(model_text).strip()!r}")
+
+                            full_user  = "".join(user_text).strip()
+                            full_model = "".join(model_text).strip()
+                            logger.info(
+                                f"[GEMINI] turn_complete — usuario: '{full_user}' | modelo: '{full_model}'"
+                            )
+
                             if chat_id:
                                 if user_text:
                                     txt = " ".join(user_text).strip()
                                     user_text.clear()
                                     if txt:
                                         await asyncio.to_thread(repo.save_message, chat_id, "user", txt)
-                                        await asyncio.to_thread(save_message_to_memory, VOICE_SYSTEM_USER, "user", txt)
+                                        await asyncio.to_thread(
+                                            save_message_to_memory, VOICE_SYSTEM_USER, "user", txt
+                                        )
                                 if model_text:
                                     txt = " ".join(model_text).strip()
                                     model_text.clear()
                                     if txt:
                                         await asyncio.to_thread(repo.save_message, chat_id, "assistant", txt)
-                                        await asyncio.to_thread(save_message_to_memory, VOICE_SYSTEM_USER, "assistant", txt)
+                                        await asyncio.to_thread(
+                                            save_message_to_memory, VOICE_SYSTEM_USER, "assistant", txt
+                                        )
 
                 except Exception as e:
-                    logger.error(f"[ERROR] gemini_to_twilio: {e}")
+                    logger.error(f"[ERROR] gemini_to_twilio: {e}", exc_info=True)
 
+            # Mismo patrón que realtime.py
             await asyncio.gather(twilio_to_gemini(), gemini_to_twilio())
 
     except Exception as e:
