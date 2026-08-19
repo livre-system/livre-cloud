@@ -112,11 +112,16 @@ def _boost_pcmu(payload_b64: str, volume: float = VOLUME_BOOST) -> str:
         boosted[i] = _linear_to_ulaw(linear)
     return base64.b64encode(bytes(boosted)).decode()
 
+# Estado del filtro de ratecv — se mantiene entre chunks para audio continuo
+_ratecv_state_in = None
+
 def pcmu_to_pcm16(mulaw_b64: str) -> bytes:
-    """PCMU base64 8 kHz → PCM16 16 kHz para Gemini."""
+    """PCMU base64 8 kHz → PCM16 16 kHz para Gemini.
+    Mantiene el estado de ratecv entre chunks para evitar discontinuidades."""
+    global _ratecv_state_in
     raw  = base64.b64decode(mulaw_b64)
     pcm8 = audioop.ulaw2lin(raw, 2)
-    pcm16, _ = audioop.ratecv(pcm8, 2, 1, TWILIO_RATE, GEMINI_IN, None)
+    pcm16, _ratecv_state_in = audioop.ratecv(pcm8, 2, 1, TWILIO_RATE, GEMINI_IN, _ratecv_state_in)
     return pcm16
 
 def pcm24_to_pcmu(pcm24: bytes) -> str:
