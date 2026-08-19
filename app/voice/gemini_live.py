@@ -319,26 +319,39 @@ async def gemini_stream(websocket: WebSocket):
 
                 async for response in session.receive():
 
-                    # --- Audio de respuesta ---
-                    if response.data:
-                        # PCM 24kHz → PCMU para Twilio
-                        mulaw_b64 = await asyncio.to_thread(
-                            gemini_to_twilio, response.data
-                        )
-                        twilio_msg = json.dumps({
-                            "event": "media",
-                            "streamSid": stream_sid,
-                            "media": {"payload": mulaw_b64},
-                        })
-                        await websocket.send_text(twilio_msg)
+                    # --- Interrupción: usuario empezó a hablar → limpiar buffer Twilio ---
+                    if (
+                        response.server_content
+                        and getattr(response.server_content, "interrupted", False)
+                    ):
+                        logger.info("[GEMINI] Usuario interrumpió — limpiando buffer Twilio")
+                        if stream_sid:
+                            await websocket.send_text(json.dumps({
+                                "event": "clear",
+                                "streamSid": stream_sid,
+                            }))
 
-                    # --- Texto transcripto (para guardar en chat) ---
-                    if response.text:
-                        model_text_buffer.append(response.text)
+                    # --- Audio de respuesta (viene como inline_data en las parts) ---
+                    if response.server_content and response.server_content.model_turn:
+                        for part in response.server_content.model_turn.parts:
+                            # Audio
+                            if hasattr(part, "inline_data") and part.inline_data and part.inline_data.data:
+                                audio_bytes = part.inline_data.data
+                                mulaw_b64 = await asyncio.to_thread(gemini_to_twilio, audio_bytes)
+                                await websocket.send_text(json.dumps({
+                                    "event": "media",
+                                    "streamSid": stream_sid,
+                                    "media": {"payload": mulaw_b64},
+                                }))
+                            # Texto (para guardar en chat)
+                            if hasattr(part, "text") and part.text:
+                                model_text_buffer.append(part.text)
+                                logger.info(f"[GEMINI] {part.text}")
 
-                    # --- Transcripción del usuario (input_transcription) ---
+                    # --- Transcripción del usuario ---
                     if hasattr(response, "input_transcription") and response.input_transcription:
                         user_text_buffer.append(response.input_transcription)
+                        logger.info(f"[USUARIO] {response.input_transcription}")
 
                     # --- Function calling ---
                     if response.tool_call:
@@ -351,7 +364,6 @@ async def gemini_stream(websocket: WebSocket):
                                     _search_top3_streets, query
                                 )
 
-                                # Formatear resultado para Gemini
                                 if candidates:
                                     result_text = (
                                         f"Calles encontradas: {', '.join(candidates)}. "
@@ -379,8 +391,8 @@ async def gemini_stream(websocket: WebSocket):
 
                     # --- Fin de turno: guardar en chat ---
                     if response.server_content and response.server_content.turn_complete:
+                        logger.info("[GEMINI] Turno completo")
                         if chat_id:
-                            # Guardar lo que dijo el usuario
                             if user_text_buffer:
                                 user_text = " ".join(user_text_buffer).strip()
                                 user_text_buffer.clear()
@@ -392,8 +404,6 @@ async def gemini_stream(websocket: WebSocket):
                                         save_message_to_memory,
                                         VOICE_SYSTEM_USER, "user", user_text,
                                     )
-
-                            # Guardar lo que respondió el modelo
                             if model_text_buffer:
                                 model_text = " ".join(model_text_buffer).strip()
                                 model_text_buffer.clear()
