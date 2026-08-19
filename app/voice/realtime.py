@@ -46,7 +46,7 @@ SYSTEM_PROMPT = (
     "\nSi no entendés algo, pedí que repitan despacio. Nunca inventes direcciones."
 )
 
-VOICE = "verse"
+VOICE = "ballad"
 VOLUME_BOOST = 2.0  # subir o bajar este valor
 
 
