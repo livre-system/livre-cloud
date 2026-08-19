@@ -67,7 +67,7 @@ async def media_stream(websocket: WebSocket):
         )
         logger.info("[ELEVEN] ElevenLabs WebSocket conectado")
 
-        # Configurar el formato de audio para Twilio (PCMU 8kHz)
+        # Configurar formato de audio compatible con Twilio Media Streams (ulaw 8kHz)
         await eleven_ws.send(json.dumps({
             "type": "conversation_initiation_client_data",
             "conversation_config_override": {
@@ -77,8 +77,18 @@ async def media_stream(websocket: WebSocket):
                 "tts": {
                     "optimize_streaming_latency": 3,
                 },
+                "audio": {
+                    "input": {
+                        "encoding": "ulaw",
+                        "sample_rate": 8000,
+                    },
+                    "output": {
+                        "encoding": "ulaw",
+                        "sample_rate": 8000,
+                        "chunk_length_schedule": [50],
+                    },
+                },
             },
-            "custom_llm_extra_body": {},
         }))
 
         async def twilio_to_eleven():
