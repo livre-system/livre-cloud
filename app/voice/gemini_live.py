@@ -302,12 +302,10 @@ async def gemini_stream(websocket: WebSocket):
                         pcm_bytes = await asyncio.to_thread(twilio_to_gemini, mulaw_b64)
                         await session.send(
                             input=genai_types.LiveClientRealtimeInput(
-                                media_chunks=[
-                                    genai_types.Blob(
-                                        data=pcm_bytes,
-                                        mime_type="audio/pcm;rate=16000",
-                                    )
-                                ]
+                                audio=genai_types.Blob(
+                                    data=pcm_bytes,
+                                    mime_type="audio/pcm;rate=16000",
+                                )
                             )
                         )
 
