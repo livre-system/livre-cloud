@@ -322,6 +322,8 @@ async def gemini_stream(websocket: WebSocket):
                                     if not speaking:
                                         speaking = True
                                         logger.info("[VAD] Usuario empezó a hablar → activity_start")
+                                        # Mandamos activity_start + primer chunk de audio
+                                        # en el MISMO send — mismo canal, Gemini los correlaciona
                                         await session.send(
                                             input=genai_types.LiveClientRealtimeInput(
                                                 activity_start=genai_types.ActivityStart()
@@ -343,10 +345,16 @@ async def gemini_stream(websocket: WebSocket):
                                 if audio_chunks % 50 == 0:
                                     logger.info(f"[AUDIO] {audio_chunks} chunks | speaking={speaking} max_amp={max_amp}")
 
-                                await session.send_realtime_input(
-                                    audio=genai_types.Blob(
-                                        data=pcm,
-                                        mime_type="audio/pcm;rate=16000",
+                                # Audio siempre por session.send() con LiveClientRealtimeInput
+                                # — mismo canal que activity_start/activity_end.
+                                # Con VAD deshabilitado, send_realtime_input va por un canal
+                                # distinto que Gemini no correlaciona con los eventos VAD.
+                                await session.send(
+                                    input=genai_types.LiveClientRealtimeInput(
+                                        audio=genai_types.Blob(
+                                            data=pcm,
+                                            mime_type="audio/pcm;rate=16000",
+                                        )
                                     )
                                 )
                             except Exception as exc:
