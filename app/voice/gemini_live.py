@@ -401,16 +401,12 @@ async def gemini_stream(websocket: WebSocket):
 
                         # ----------------------------------------------------------
                         # Interrupción explícita (server_content.interrupted)
-                        # Solo si interrupted es explícitamente True — no truthy vacío
+                        # [TEST] Solo logueamos — NO bloqueamos gemini_speaking,
+                        # NO descartamos audio, NO enviamos clear a Twilio.
+                        # Queremos ver si Gemini responde al texto sin esta interferencia.
                         # ----------------------------------------------------------
                         if sc and getattr(sc, "interrupted", None) is True:
-                            logger.info("[GEMINI] interrupted real — bloqueando audio usuario")
-                            gemini_speaking.set()   # bloquear audio mientras Gemini procesa
-                            if stream_sid:
-                                await websocket.send_text(json.dumps({
-                                    "event": "clear",
-                                    "streamSid": stream_sid,
-                                }))
+                            logger.info("[GEMINI] interrupted recibido — IGNORADO para test (no bloqueamos ni limpiamos)")
 
                         # ----------------------------------------------------------
                         # Audio de respuesta de Gemini
