@@ -22,4 +22,4 @@ openai
 pydub
 rapidfuzz
 websockets
-google-genai>=1.0.0
+google-genai>=2.18.1

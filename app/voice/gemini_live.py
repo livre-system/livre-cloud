@@ -321,19 +321,38 @@ async def gemini_stream(websocket: WebSocket):
                 try:
                     async for response in session.receive():
 
-                        # ---- VAD events (speech_started / speech_stopped) ----
-                        if response.voice_activity:
-                            vtype = response.voice_activity.voice_activity_type
-                            if vtype == genai_types.VoiceActivityType.ACTIVITY_START:
-                                logger.info("[GEMINI] speech_started")
-                                # Interrupción: limpiar buffer de Twilio
-                                if stream_sid:
-                                    await websocket.send_text(json.dumps({
-                                        "event": "clear",
-                                        "streamSid": stream_sid,
-                                    }))
-                            elif vtype == genai_types.VoiceActivityType.ACTIVITY_END:
-                                logger.info("[GEMINI] speech_stopped")
+                        # ---- VAD events — compatible con sdk antiguo y nuevo ----
+                        # SDK >= 2.18: response.voice_activity (VoiceActivity)
+                        # SDK < 2.18:  response.voice_activity_detection_signal (VoiceActivityDetectionSignal)
+                        _va = getattr(response, "voice_activity", None)
+                        _vads = getattr(response, "voice_activity_detection_signal", None)
+
+                        _speech_started = False
+                        _speech_stopped = False
+
+                        if _va:
+                            vtype = getattr(_va, "voice_activity_type", None)
+                            _vat_start = getattr(genai_types, "VoiceActivityType", None)
+                            if _vat_start:
+                                _speech_started = (vtype == genai_types.VoiceActivityType.ACTIVITY_START)
+                                _speech_stopped = (vtype == genai_types.VoiceActivityType.ACTIVITY_END)
+                            else:
+                                _speech_started = str(vtype) in ("ACTIVITY_START", "VoiceActivityType.ACTIVITY_START")
+                                _speech_stopped = str(vtype) in ("ACTIVITY_END", "VoiceActivityType.ACTIVITY_END")
+                        elif _vads:
+                            sig = getattr(_vads, "vad_signal_type", None)
+                            _speech_started = str(sig) in ("VAD_SIGNAL_TYPE_SOS", "VadSignalType.VAD_SIGNAL_TYPE_SOS")
+                            _speech_stopped = str(sig) in ("VAD_SIGNAL_TYPE_EOS", "VadSignalType.VAD_SIGNAL_TYPE_EOS")
+
+                        if _speech_started:
+                            logger.info("[GEMINI] speech_started")
+                            if stream_sid:
+                                await websocket.send_text(json.dumps({
+                                    "event": "clear",
+                                    "streamSid": stream_sid,
+                                }))
+                        elif _speech_stopped:
+                            logger.info("[GEMINI] speech_stopped")
 
                         # Interrupción explícita desde server_content
                         if (
