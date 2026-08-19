@@ -31,8 +31,8 @@ from fastapi.responses import Response
 from twilio.twiml.voice_response import VoiceResponse, Connect, Stream
 
 # Gemini (SDK nuevo — google-genai)
-from google import genai
-from google.genai import types as genai_types
+import google.genai as genai
+import google.genai.types as genai_types
 
 # DB y embeddings (misma lógica que router.py)
 from app.core.database import get_cursor

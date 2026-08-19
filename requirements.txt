@@ -23,4 +23,3 @@ pydub
 rapidfuzz
 websockets
 google-genai>=1.0.0
-google-generativeai @ git+https://github.com/empty
