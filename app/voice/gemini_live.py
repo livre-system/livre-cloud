@@ -246,11 +246,14 @@ async def gemini_stream(websocket: WebSocket):
         async with client.aio.live.connect(model=GEMINI_LIVE_MODEL, config=live_config) as session:
             logger.info("[GEMINI] Sesión Gemini Live abierta")
 
-            # Saludo inicial — igual que realtime.py manda "Saluda al usuario brevemente."
+            # Saludo inicial
             await session.send(
                 input="Saluda al usuario brevemente.",
                 end_of_turn=True,
             )
+
+            # Esperar que el saludo termine antes de mandar audio del usuario
+            greeting_done = asyncio.Event()
 
             async def twilio_to_gemini():
                 nonlocal stream_sid, call_sid, chat_id
@@ -270,6 +273,9 @@ async def gemini_stream(websocket: WebSocket):
                                 )
 
                         elif event == "media":
+                            # Esperar saludo antes de mandar audio del usuario
+                            if not greeting_done.is_set():
+                                await greeting_done.wait()
                             audio_chunks += 1
                             if audio_chunks % 50 == 0:
                                 logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
@@ -370,6 +376,9 @@ async def gemini_stream(websocket: WebSocket):
 
                         # Fin de turno → guardar en chat
                         if response.server_content and response.server_content.turn_complete:
+                            if not greeting_done.is_set():
+                                greeting_done.set()
+                                logger.info("[GEMINI] Saludo completo — activando audio del usuario")
                             logger.info("[GEMINI] Turno completo")
                             if chat_id:
                                 if user_text:
