@@ -10,8 +10,6 @@ import json
 import base64
 import logging
 import asyncio
-import subprocess
-import tempfile
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import Response
@@ -50,28 +48,51 @@ VOICE = "cedar"
 VOLUME_BOOST = 2.0  # subir o bajar este valor
 
 
+def _build_ulaw_to_linear() -> list:
+    table = []
+    for u in range(256):
+        u_val = ~u & 0xFF
+        exponent = (u_val >> 4) & 0x07
+        mantissa = u_val & 0x0F
+        linear = ((mantissa << 1) + 33) << exponent
+        linear -= 33
+        if u_val & 0x80:
+            linear = -linear
+        table.append(linear)
+    return table
+
+_ULAW_TO_LINEAR = _build_ulaw_to_linear()
+_BIAS = 0x84
+_CLIP = 32635
+
+def _linear_to_ulaw(sample: int) -> int:
+    sign = 0
+    if sample < 0:
+        sample = -sample
+        sign = 0x80
+    if sample > _CLIP:
+        sample = _CLIP
+    sample += _BIAS
+    exponent = 7
+    for exp, threshold in enumerate([0x100, 0x200, 0x400, 0x800, 0x1000, 0x2000, 0x4000]):
+        if sample < threshold:
+            exponent = exp
+            break
+    mantissa = (sample >> (exponent + 3)) & 0x0F
+    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+
 def _boost_pcmu(payload_b64: str, volume: float = VOLUME_BOOST) -> str:
-    """Amplifica audio G.711 ulaw (pcmu) usando ffmpeg y devuelve base64."""
-    try:
-        raw = base64.b64decode(payload_b64)
-        with tempfile.NamedTemporaryFile(suffix=".ulaw", delete=False) as f:
-            f.write(raw)
-            inp = f.name
-        out = inp.replace(".ulaw", "_out.ulaw")
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-f", "mulaw", "-ar", "8000", "-ac", "1", "-i", inp,
-            "-filter:a", f"volume={volume}",
-            "-f", "mulaw", "-ar", "8000", "-ac", "1", out,
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-        with open(out, "rb") as f:
-            result = base64.b64encode(f.read()).decode()
-        os.unlink(inp)
-        os.unlink(out)
-        return result
-    except Exception as e:
-        logger.warning(f"ffmpeg boost falló: {e}")
-        return payload_b64
+    """Amplifica audio G.711 ulaw (pcmu) en Python puro, sin ffmpeg."""
+    raw = base64.b64decode(payload_b64)
+    boosted = bytearray(len(raw))
+    for i, byte in enumerate(raw):
+        linear = int(_ULAW_TO_LINEAR[byte] * volume)
+        if linear > 32767:
+            linear = 32767
+        elif linear < -32768:
+            linear = -32768
+        boosted[i] = _linear_to_ulaw(linear)
+    return base64.b64encode(bytes(boosted)).decode()
 
 
 @router.post("/incoming")
@@ -193,7 +214,7 @@ async def media_stream(websocket: WebSocket):
                         await websocket.send_text(json.dumps({
                             "event": "media",
                             "streamSid": stream_sid,
-                            "media": {"payload": data["delta"]},
+                            "media": {"payload": _boost_pcmu(data["delta"])},
                         }))
                     elif event_type == "response.output_audio.done":
                         logger.info("[OPENAI] Audio de respuesta terminado")
