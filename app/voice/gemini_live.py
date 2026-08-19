@@ -41,7 +41,7 @@ TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER", "")
 VOICE_SYSTEM_USER   = "voice_calls"
-GEMINI_LIVE_MODEL   = os.getenv("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
+GEMINI_LIVE_MODEL   = "gemini-2.0-flash-live-001"   # modelo Live GA estable
 
 SYSTEM_PROMPT = (
     "Sos LIVRE, el asistente de voz de Viaja Livre, una empresa de transporte de pasajeros "
@@ -294,12 +294,27 @@ async def gemini_stream(websocket: WebSocket):
                             if not greeting_done.is_set():
                                 await greeting_done.wait()
                             audio_chunks += 1
-                            if audio_chunks % 50 == 0:
-                                logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
                             try:
                                 pcm = await asyncio.to_thread(
                                     pcmu_to_pcm16, data["media"]["payload"]
                                 )
+                                # --- DIAGNÓSTICO DE ENVÍO ---
+                                if audio_chunks <= 3:
+                                    # Primeros 3 chunks: logueamos todo
+                                    frames    = len(pcm) // 2          # PCM16 = 2 bytes/frame
+                                    secs      = frames / GEMINI_IN
+                                    nonzero   = sum(1 for i in range(0, len(pcm), 2)
+                                                    if int.from_bytes(pcm[i:i+2], "little", signed=True) != 0)
+                                    logger.info(
+                                        f"[AUDIO DIAG #{audio_chunks}] "
+                                        f"bytes={len(pcm)} frames={frames} "
+                                        f"duracion={secs:.3f}s "
+                                        f"frames_nonzero={nonzero} "
+                                        f"mime=audio/pcm;rate=16000"
+                                    )
+                                elif audio_chunks % 50 == 0:
+                                    logger.info(f"[AUDIO] {audio_chunks} chunks enviados a Gemini")
+
                                 await session.send_realtime_input(
                                     audio=genai_types.Blob(
                                         data=pcm,
@@ -326,17 +341,62 @@ async def gemini_stream(websocket: WebSocket):
             async def gemini_to_twilio():
                 model_text: list[str] = []
                 user_text:  list[str] = []
+                msg_count  = 0
                 try:
                     async for response in session.receive():
+                        msg_count += 1
+
+                        # ----------------------------------------------------------
+                        # DIAGNÓSTICO SEGURO — inspeccionamos cada mensaje
+                        # ----------------------------------------------------------
+                        if msg_count <= 20:
+                            # Listamos todos los atributos no-privados del objeto
+                            attrs = [a for a in dir(response) if not a.startswith("_")]
+                            # Campos con valor no-None
+                            populated = []
+                            for a in attrs:
+                                try:
+                                    val = getattr(response, a, None)
+                                    if val is not None and not callable(val):
+                                        populated.append(a)
+                                except Exception:
+                                    pass
+                            logger.info(
+                                f"[RECV #{msg_count}] type={type(response).__name__} "
+                                f"campos_con_valor={populated}"
+                            )
+
+                        # Inspección segura de server_content
+                        sc = getattr(response, "server_content", None)
+                        if sc is not None and msg_count <= 20:
+                            sc_fields = {}
+                            for f in ["interrupted", "turn_complete", "model_turn",
+                                      "input_transcription", "output_transcription",
+                                      "generation_complete"]:
+                                v = getattr(sc, f, None)
+                                if v is not None:
+                                    sc_fields[f] = repr(v)[:120]
+                            logger.info(f"[RECV #{msg_count}] server_content fields={sc_fields}")
+
+                        # Inspección segura de voice_activity / VAD
+                        va = getattr(response, "voice_activity", None)
+                        if va is not None:
+                            vtype = getattr(va, "voice_activity_type", None)
+                            logger.info(f"[RECV #{msg_count}] voice_activity type={vtype}")
+
+                        # Inspección segura de tool_call
+                        tc = getattr(response, "tool_call", None)
+                        if tc is not None and msg_count <= 20:
+                            logger.info(f"[RECV #{msg_count}] tool_call={repr(tc)[:200]}")
+
                         # ----------------------------------------------------------
                         # VAD: voice_activity (SDK 2.18.1 confirmado)
                         # LiveServerMessage.voice_activity → VoiceActivity
                         #   └─ voice_activity_type: VoiceActivityType
                         #        ACTIVITY_START | ACTIVITY_END | TYPE_UNSPECIFIED
                         # ----------------------------------------------------------
-                        va = response.voice_activity  # None si no hay evento VAD
                         if va is not None:
-                            vtype = va.voice_activity_type
+                            vtype = getattr(va, "voice_activity_type", None)
                             if vtype == genai_types.VoiceActivityType.ACTIVITY_START:
                                 logger.info("[GEMINI] speech_started")
                                 # Barge-in: limpiar buffer de audio en Twilio
@@ -351,8 +411,7 @@ async def gemini_stream(websocket: WebSocket):
                         # ----------------------------------------------------------
                         # Interrupción explícita (server_content.interrupted)
                         # ----------------------------------------------------------
-                        sc = response.server_content
-                        if sc and sc.interrupted:
+                        if sc and getattr(sc, "interrupted", False):
                             logger.info("[GEMINI] Usuario interrumpió (server_content.interrupted)")
                             if stream_sid:
                                 await websocket.send_text(json.dumps({
@@ -363,8 +422,8 @@ async def gemini_stream(websocket: WebSocket):
                         # ----------------------------------------------------------
                         # Audio de respuesta de Gemini
                         # ----------------------------------------------------------
-                        if sc and sc.model_turn:
-                            for part in sc.model_turn.parts:
+                        if sc and getattr(sc, "model_turn", None):
+                            for part in (getattr(sc.model_turn, "parts", None) or []):
                                 # Audio inline
                                 if getattr(part, "inline_data", None) and part.inline_data.data:
                                     mulaw_b64 = await asyncio.to_thread(
@@ -385,18 +444,18 @@ async def gemini_stream(websocket: WebSocket):
                         # ----------------------------------------------------------
                         # Transcripción del usuario (input_transcription)
                         # ----------------------------------------------------------
-                        if sc and sc.input_transcription:
+                        if sc and getattr(sc, "input_transcription", None):
                             tr = sc.input_transcription
-                            if tr.text:
+                            if getattr(tr, "text", None):
                                 user_text.append(tr.text)
-                                if tr.finished:
+                                if getattr(tr, "finished", False):
                                     logger.info(f"[USUARIO] {''.join(user_text)}")
 
                         # ----------------------------------------------------------
                         # Function calling
                         # ----------------------------------------------------------
-                        if response.tool_call:
-                            for fc in response.tool_call.function_calls:
+                        if tc:
+                            for fc in (getattr(tc, "function_calls", None) or []):
                                 if fc.name == "buscar_calle":
                                     query = fc.args.get("query", "")
                                     logger.info(f"[TOOL] buscar_calle({query!r})")
@@ -428,7 +487,7 @@ async def gemini_stream(websocket: WebSocket):
                         # ----------------------------------------------------------
                         # Fin de turno
                         # ----------------------------------------------------------
-                        if sc and sc.turn_complete:
+                        if sc and getattr(sc, "turn_complete", False):
                             if not greeting_done.is_set():
                                 greeting_done.set()
                                 logger.info("[GEMINI] Saludo completo — activando audio del usuario")
