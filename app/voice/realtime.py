@@ -7,8 +7,11 @@ Twilio manda audio por WebSocket → OpenAI Realtime lo procesa → responde con
 
 import os
 import json
+import base64
 import logging
 import asyncio
+import subprocess
+import tempfile
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import Response
@@ -44,6 +47,31 @@ SYSTEM_PROMPT = (
 )
 
 VOICE = "shimmer"
+VOLUME_BOOST = 2.0  # subir o bajar este valor
+
+
+def _boost_pcmu(payload_b64: str, volume: float = VOLUME_BOOST) -> str:
+    """Amplifica audio G.711 ulaw (pcmu) usando ffmpeg y devuelve base64."""
+    try:
+        raw = base64.b64decode(payload_b64)
+        with tempfile.NamedTemporaryFile(suffix=".ulaw", delete=False) as f:
+            f.write(raw)
+            inp = f.name
+        out = inp.replace(".ulaw", "_out.ulaw")
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-f", "mulaw", "-ar", "8000", "-ac", "1", "-i", inp,
+            "-filter:a", f"volume={volume}",
+            "-f", "mulaw", "-ar", "8000", "-ac", "1", out,
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        with open(out, "rb") as f:
+            result = base64.b64encode(f.read()).decode()
+        os.unlink(inp)
+        os.unlink(out)
+        return result
+    except Exception as e:
+        logger.warning(f"ffmpeg boost falló: {e}")
+        return payload_b64
 
 
 @router.post("/incoming")
@@ -163,10 +191,11 @@ async def media_stream(websocket: WebSocket):
                         gpt_text = []
                     elif event_type == "response.output_audio.delta" and data.get("delta"):
                         logger.info("[AUDIO OUT] Audio recibido de OpenAI")
+                        boosted = _boost_pcmu(data["delta"])
                         await websocket.send_text(json.dumps({
                             "event": "media",
                             "streamSid": stream_sid,
-                            "media": {"payload": data["delta"]},
+                            "media": {"payload": boosted},
                         }))
                     elif event_type == "response.output_audio.done":
                         logger.info("[OPENAI] Audio de respuesta terminado")
