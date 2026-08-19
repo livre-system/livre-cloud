@@ -76,13 +76,23 @@ async def media_stream(websocket: WebSocket):
         await openai_ws.send(json.dumps({
             "type": "session.update",
             "session": {
-                "turn_detection": {"type": "server_vad"},
-                "input_audio_format": "g711_ulaw",
-                "output_audio_format": "g711_ulaw",
-                "voice": VOICE,
+                "type": "realtime",
+                "model": "gpt-realtime-2.1",
                 "instructions": SYSTEM_PROMPT,
-                "modalities": ["text", "audio"],
-                "temperature": 0.7,
+                "output_modalities": ["audio"],
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcmu"},
+                        "turn_detection": {
+                            "type": "server_vad",
+                            "interrupt_response": True,
+                        }
+                    },
+                    "output": {
+                        "format": {"type": "audio/pcmu"},
+                        "voice": VOICE,
+                    }
+                }
             }
         }))
 
@@ -110,11 +120,13 @@ async def media_stream(websocket: WebSocket):
                         audio_chunks += 1
                         if audio_chunks % 50 == 0:
                             logger.info(f"[AUDIO] {audio_chunks} chunks enviados a OpenAI")
-                        if openai_ws.open:
+                        try:
                             await openai_ws.send(json.dumps({
                                 "type": "input_audio_buffer.append",
                                 "audio": data["media"]["payload"],
                             }))
+                        except Exception:
+                            break
                     elif event == "stop":
                         logger.info(f"[STREAM STOP] Total chunks: {audio_chunks}")
                         break
