@@ -46,7 +46,7 @@ async def patch_agent_voice():
             },
             "tts": {
                 "voice_id": ELEVENLABS_VOICE_ID,
-                "model_id": "eleven_v3_conversational",
+                "model_id": "eleven_turbo_v2_5",
                 "voice_settings": {
                     "stability": 0.8,
                     "similarity_boost": 1.0,
