@@ -16,6 +16,7 @@ import base64
 import audioop
 import logging
 import asyncio
+import httpx
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import Response
@@ -63,6 +64,50 @@ def ulaw8k_b64_to_pcm16k(payload_b64: str) -> bytes:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Diagnóstico — configuración real del Agent en ElevenLabs
+# ---------------------------------------------------------------------------
+
+@router.get("/config")
+async def get_agent_config():
+    """Consulta la configuración real del Agent configurado en ElevenLabs."""
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=500, detail="ELEVENLABS_API_KEY no configurada.")
+    if not ELEVENLABS_AGENT_ID:
+        raise HTTPException(status_code=500, detail="ELEVENLABS_AGENT_ID no configurado.")
+
+    url = f"https://api.elevenlabs.io/v1/convai/agents/{ELEVENLABS_AGENT_ID}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, headers={"xi-api-key": ELEVENLABS_API_KEY})
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Error conectando con ElevenLabs: {e}")
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"ElevenLabs respondió {resp.status_code}: {resp.text[:300]}",
+        )
+
+    data = resp.json()
+    cc   = data.get("conversation_config", {})
+    tts  = cc.get("tts", {})
+    agent = cc.get("agent", {})
+    asr  = cc.get("asr", {})
+
+    return {
+        "agent_id":   data.get("agent_id"),
+        "agent_name": data.get("name"),
+        "voice_id":   tts.get("voice_id"),
+        "tts_model":  tts.get("model_id"),
+        "output_audio_format": tts.get("agent_output_audio_format"),
+        "input_audio_format":  asr.get("user_input_audio_format"),
+        "language":   agent.get("language"),
+        "first_message": agent.get("first_message"),
+    }
+
+
 
 @router.post("/incoming")
 async def incoming_call(request: Request):
