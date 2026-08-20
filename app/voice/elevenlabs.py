@@ -41,16 +41,9 @@ async def patch_agent_voice():
     url = f"https://api.elevenlabs.io/v1/convai/agents/{ELEVENLABS_AGENT_ID}"
     payload = {
         "conversation_config": {
-            "agent": {
-                "language": "es-419",
-            },
             "tts": {
                 "voice_id": ELEVENLABS_VOICE_ID,
                 "model_id": "eleven_turbo_v2_5",
-                "voice_settings": {
-                    "stability": 0.8,
-                    "similarity_boost": 1.0,
-                },
             }
         }
     }
