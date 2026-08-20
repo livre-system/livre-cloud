@@ -30,6 +30,7 @@ router = APIRouter(prefix="/voice-eleven", tags=["voice-elevenlabs"])
 
 ELEVENLABS_API_KEY  = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 
 BASE_URL            = os.getenv("BASE_URL", "")
 TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
@@ -145,6 +146,7 @@ async def media_stream(websocket: WebSocket):
                     "language": "es",
                 },
                 "tts": {
+                    "voice_id": ELEVENLABS_VOICE_ID,
                     "optimize_streaming_latency": 3,
                 },
             },
@@ -213,7 +215,7 @@ async def media_stream(websocket: WebSocket):
                         in_format   = meta.get("user_input_audio_format", "?")
                         logger.info(f"[ELEVEN] Sesión iniciada — conversation_id={conv_id}")
                         logger.info(f"[ELEVEN] audio entrada={in_format} | salida={out_format}")
-                        logger.info(f"[ELEVEN] voice_id activo: 2KrcT8wE5IyKnWz2nknz esperado — verificá con /voice-eleven/config")
+                        logger.info(f"[ELEVEN] voice_id override: {ELEVENLABS_VOICE_ID}")
                         eleven_ready.set()
 
                     elif event_type == "audio":
