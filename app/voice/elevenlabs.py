@@ -32,6 +32,32 @@ ELEVENLABS_API_KEY  = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
 ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 
+
+async def patch_agent_voice():
+    """Al arrancar, parchea el agente con la voz de ELEVENLABS_VOICE_ID."""
+    if not ELEVENLABS_API_KEY or not ELEVENLABS_AGENT_ID or not ELEVENLABS_VOICE_ID:
+        logger.warning("[ELEVEN] patch_agent_voice: faltan variables, no se parchea el agente.")
+        return
+    url = f"https://api.elevenlabs.io/v1/convai/agents/{ELEVENLABS_AGENT_ID}"
+    payload = {
+        "conversation_config": {
+            "tts": {"voice_id": ELEVENLABS_VOICE_ID}
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.patch(
+                url,
+                headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+                json=payload,
+            )
+        if resp.status_code == 200:
+            logger.info(f"[ELEVEN] Agente actualizado — voice_id={ELEVENLABS_VOICE_ID}")
+        else:
+            logger.error(f"[ELEVEN] Error al parchear agente: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"[ELEVEN] Exception en patch_agent_voice: {e}")
+
 BASE_URL            = os.getenv("BASE_URL", "")
 TWILIO_ACCOUNT_SID  = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN   = os.getenv("TWILIO_AUTH_TOKEN", "")
@@ -146,7 +172,6 @@ async def media_stream(websocket: WebSocket):
                     "language": "es",
                 },
                 "tts": {
-                    "voice_id": ELEVENLABS_VOICE_ID,
                     "optimize_streaming_latency": 3,
                 },
             },
@@ -215,7 +240,7 @@ async def media_stream(websocket: WebSocket):
                         in_format   = meta.get("user_input_audio_format", "?")
                         logger.info(f"[ELEVEN] Sesión iniciada — conversation_id={conv_id}")
                         logger.info(f"[ELEVEN] audio entrada={in_format} | salida={out_format}")
-                        logger.info(f"[ELEVEN] voice_id override: {ELEVENLABS_VOICE_ID}")
+                        logger.info(f"[ELEVEN] voice_id activo: 2KrcT8wE5IyKnWz2nknz esperado — verificá con /voice-eleven/config")
                         eleven_ready.set()
 
                     elif event_type == "audio":

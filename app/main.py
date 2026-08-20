@@ -13,7 +13,7 @@ from app.memory.router import router as memory_router
 from app.compiler.router import router as compiler_router
 from app.chat.router import router as chat_router
 from app.voice.realtime import router as voice_router
-from app.voice.elevenlabs import router as voice_eleven_router
+from app.voice.elevenlabs import router as voice_eleven_router, patch_agent_voice
 from app.voice.gemini_live import router as voice_gemini_router
 import logging
 
@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     init_db()
     ensure_tables()
+    await patch_agent_voice()
     yield
 
 
