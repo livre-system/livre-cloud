@@ -207,8 +207,14 @@ async def media_stream(websocket: WebSocket):
                     event_type = data.get("type")
 
                     if event_type == "conversation_initiation_metadata":
-                        logger.info(f"[ELEVEN] Sesión iniciada: {data}")
-                        eleven_ready.set()  # ahora sí podemos mandar audio
+                        meta = data.get("conversation_initiation_metadata_event", {})
+                        conv_id     = meta.get("conversation_id", "?")
+                        out_format  = meta.get("agent_output_audio_format", "?")
+                        in_format   = meta.get("user_input_audio_format", "?")
+                        logger.info(f"[ELEVEN] Sesión iniciada — conversation_id={conv_id}")
+                        logger.info(f"[ELEVEN] audio entrada={in_format} | salida={out_format}")
+                        logger.info(f"[ELEVEN] voice_id activo: 2KrcT8wE5IyKnWz2nknz esperado — verificá con /voice-eleven/config")
+                        eleven_ready.set()
 
                     elif event_type == "audio":
                         audio_b64 = data.get("audio_event", {}).get("audio_base_64", "")
