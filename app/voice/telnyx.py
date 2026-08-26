@@ -332,14 +332,23 @@ async def media_stream(websocket: WebSocket):
         )
         logger.info("[ELEVEN] conexión — WebSocket conectado")
 
-        # Configuración idéntica a elevenlabs.py
-        await eleven_ws.send(json.dumps({
+        # Configuración de inicio de conversación.
+        # voice_id en tts override: fuerza la voz aunque el agente tenga otra
+        # configurada en el dashboard. Fuente: documentación oficial ElevenLabs
+        # https://elevenlabs.io/docs/eleven-agents/api-reference/eleven-agents/websocket
+        initiation_payload: dict = {
             "type": "conversation_initiation_client_data",
             "conversation_config_override": {
                 "agent": {"language": "es"},
                 "tts":   {"optimize_streaming_latency": 3},
             },
-        }))
+        }
+        if ELEVENLABS_VOICE_ID:
+            initiation_payload["conversation_config_override"]["tts"]["voice_id"] = ELEVENLABS_VOICE_ID
+            logger.info(f"[ELEVEN] voz override activo — voice_id={ELEVENLABS_VOICE_ID}")
+        else:
+            logger.warning("[ELEVEN] ELEVENLABS_VOICE_ID no configurado — se usará la voz del agente en el dashboard")
+        await eleven_ws.send(json.dumps(initiation_payload))
 
         # ------------------------------------------------------------------
         # LOOP 1: Telnyx → ElevenLabs
