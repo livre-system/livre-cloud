@@ -58,14 +58,17 @@ def normalize_street_text(text: str) -> str:
     return " ".join(tokens).strip()
 
 def _fuzzy_score_rapidfuzz(query_norm: str, candidate: str) -> dict:
-    """Devuelve los tres scores individuales para diagnóstico."""
+    """Devuelve los tres scores individuales para diagnóstico.
+    'effective' es el scorer que realmente se usa en match() según longitud."""
     cand_norm = normalize_street_text(candidate)
     if not query_norm or not cand_norm:
-        return {"ratio": 0.0, "WRatio": 0.0, "token_set_ratio": 0.0}
+        return {"ratio": 0.0, "WRatio": 0.0, "token_set_ratio": 0.0, "effective": 0.0}
+    effective_fn = fuzz.ratio if len(query_norm) <= 5 else fuzz.WRatio
     return {
         "ratio":           fuzz.ratio(query_norm, cand_norm) / 100.0,
         "WRatio":          fuzz.WRatio(query_norm, cand_norm) / 100.0,
         "token_set_ratio": fuzz.token_set_ratio(query_norm, cand_norm) / 100.0,
+        "effective":       effective_fn(query_norm, cand_norm) / 100.0,
     }
 
 MAX_WINDOW_TOKENS = 3
@@ -109,8 +112,12 @@ def match(transcript: str) -> list[str]:
         return []
     extracted, win_score = _extract_segment(query_norm)
 
+    # Scorer según longitud del segmento extraído (espeja address_matching.py).
+    # len <= 5 chars → fuzz.ratio: evita inflación por partial_ratio en tokens cortos.
+    # len >  5 chars → fuzz.WRatio: robustez para errores STT.
+    final_scorer = fuzz.ratio if len(extracted) <= 5 else fuzz.WRatio
     rf_results = rf_process.extract(
-        extracted, streets_norm, scorer=fuzz.WRatio,
+        extracted, streets_norm, scorer=final_scorer,
         limit=len(CALLES_BB), score_cutoff=0,
     )
     all_scored = [(CALLES_BB[idx], sc100 / 100.0) for _, sc100, idx in rf_results]
@@ -154,7 +161,7 @@ def run_test(label: str, transcript: str, expect_hit: bool, expect_street: str |
         detail.append(
             f"{name}(ratio={scores['ratio']:.3f},"
             f"WRatio={scores['WRatio']:.3f},"
-            f"tsr={scores['token_set_ratio']:.3f})"
+            f"effective={scores['effective']:.3f})"
         )
     print(f"  [ADDRESS] candidatos RapidFuzz : {', '.join(detail)}")
 

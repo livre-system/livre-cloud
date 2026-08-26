@@ -136,16 +136,20 @@ def _fuzzy_score(query_norm: str, candidate: str) -> float:
     Score fuzzy entre el query normalizado y el nombre de calle normalizado.
     Retorna valor ∈ [0, 1].
 
-    Usa rapidfuzz.fuzz.WRatio, que internamente elige el mejor entre:
-      - ratio            (comparación carácter a carácter)
-      - partial_ratio    (substring óptimo)
-      - token_sort_ratio (ignora orden de tokens)
-      - token_set_ratio  (ignora tokens duplicados/extra)
+    Scorer elegido según longitud del query:
+      - len(query_norm) <= 5 chars → fuzz.ratio (comparación carácter a carácter)
+        Razón: WRatio delega en partial_ratio para strings cortos, lo que infla
+        el score de tokens de 2-5 letras que son substrings de calles largas.
+        Ej: "si"    → partial_ratio("si","alsina") = 100 → falso positivo
+            "viaje" → partial_ratio("viaje","rivadavia") = 67 → falso positivo
+        fuzz.ratio penaliza correctamente la diferencia de longitud.
 
-    WRatio es más robusto que SequenceMatcher.ratio() para errores STT:
-      "cavera"   vs "saavedra"   → WRatio ~63  vs SM ~57  (mejor recuperación)
-      "concha"   vs "cuyo"       → WRatio ~40  (correctamente descartado)
-      "rodriguez" vs "rodríguez" → WRatio 100  (normalización ya quitó tilde)
+      - len(query_norm) > 5 chars → fuzz.WRatio (máxima robustez para errores STT)
+        WRatio elige internamente entre ratio/partial_ratio/token_sort/token_set.
+        Para queries de longitud razonable (≥ 6 chars), partial_ratio no infla
+        artificialmente porque la penalización de longitud es proporcional.
+        Ej: "cavera" (6) vs "saavedra" (8) → WRatio ~63 > ratio ~57 ✓
+            "rodriguez" (9) vs "rodriguez" (9) → WRatio 100 ✓
 
     RapidFuzz devuelve [0, 100]; dividimos por 100 para mantener la
     interfaz [0, 1] que usan todos los thresholds existentes.
@@ -153,6 +157,8 @@ def _fuzzy_score(query_norm: str, candidate: str) -> float:
     cand_norm = normalize_street_text(candidate)
     if not query_norm or not cand_norm:
         return 0.0
+    if len(query_norm) <= 5:
+        return fuzz.ratio(query_norm, cand_norm) / 100.0
     return fuzz.WRatio(query_norm, cand_norm) / 100.0
 
 
@@ -529,11 +535,19 @@ def search_streets_fuzzy(query: str) -> list[str]:
     # Paso 5: fuzzy contra todas las calles usando el segmento extraído.
     # Usamos rf_process.extract() que devuelve los mejores N resultados
     # ordenados por score, sin iterar manualmente en Python.
-    # scorer=fuzz.WRatio para máxima robustez ante errores STT.
+    #
+    # Scorer elegido según longitud del segmento extraído:
+    #   - len <= 5 chars → fuzz.ratio: evita que partial_ratio infle scores
+    #     de tokens cortos que son substrings de calles largas.
+    #     Ej: "viaje"(5) → partial_ratio vs "rivadavia" = 67 → falso positivo
+    #         "si"(2)    → partial_ratio vs "alsina"    = 100 → falso positivo
+    #   - len > 5 chars → fuzz.WRatio: máxima robustez para errores STT.
+    #     Ej: "cavera"(6) vs "saavedra" → WRatio 63 > ratio 57 ✓
+    final_scorer = fuzz.ratio if len(extracted) <= 5 else fuzz.WRatio
     rf_results = rf_process.extract(
         extracted,
         [normalize_street_text(s) for s in all_streets],
-        scorer=fuzz.WRatio,
+        scorer=final_scorer,
         limit=len(all_streets),  # necesitamos todos para el filtro de threshold
         score_cutoff=0,
     )
