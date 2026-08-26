@@ -30,6 +30,7 @@ import struct
 import audioop
 import logging
 import asyncio
+import time
 import httpx
 import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
@@ -61,6 +62,17 @@ BASE_URL             = os.getenv("BASE_URL", "")
 ELEVENLABS_API_KEY   = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID  = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
 ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
+
+# ---------------------------------------------------------------------------
+# Timeouts de llamada — configurables desde Railway
+# ---------------------------------------------------------------------------
+
+# Segundos de inactividad (sin user_transcript) antes de cerrar la llamada.
+# Evita que contestadores automáticos o IVR mantengan la sesión abierta.
+IDLE_TIMEOUT_SECS = int(os.getenv("TELNYX_IDLE_TIMEOUT_SECONDS", "12"))
+
+# Duración máxima absoluta de una llamada en segundos.
+MAX_CALL_SECS = int(os.getenv("TELNYX_MAX_CALL_SECONDS", "30"))
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -273,6 +285,102 @@ async def _handle_user_transcript_for_address(text: str, eleven_ws, call_state: 
 
 
 # ---------------------------------------------------------------------------
+# Detección de contestador automático / IVR
+#
+# Opera exclusivamente sobre el user_transcript que ya entrega ElevenLabs.
+# No analiza audio, no llama a OpenAI, no usa embeddings.
+#
+# Estrategia de dos niveles:
+#   NIVEL 1 — señales inequívocas (una sola es suficiente):
+#     frases que SOLO aparecen en grabaciones o IVR, nunca en conversación humana.
+#   NIVEL 2 — señales de refuerzo (se activan con 2 o más, o combinadas con nivel 1):
+#     palabras que podrían usarse en conversación humana pero son comunes en
+#     contestadores. Se exige combinación para evitar falsos positivos.
+#
+# Regla de transcript largo: si el primer transcript supera 120 caracteres sin
+# respuesta humana previa, casi siempre es un mensaje grabado. Se activa solo
+# cuando call_state["human_turns"] == 0 para no cortar a un humano verborrágico.
+# ---------------------------------------------------------------------------
+
+# Frases de nivel 1: inequívocas, una sola dispara el corte.
+_VOICEMAIL_STRONG: list[tuple[str, str]] = [
+    # menú IVR con dígitos
+    (r"presion[eéa][e ]?\s*[el]?\s*[12345678]",   "ivr-menu-presione"),
+    (r"marc[aáe][e ]?\s*[el]?\s*[12345678]",       "ivr-menu-marque"),
+    (r"para dejar\s+(un\s+)?mensaje",               "voicemail-dejar-mensaje"),
+    (r"dej[eé]\s+(un\s+)?mensaje",                  "voicemail-deje-mensaje"),
+    (r"despu[eé]s\s+de\s+la\s+se[ñn]al",           "voicemail-despues-señal"),
+    (r"al\s+o[íi]r\s+la\s+se[ñn]al",               "voicemail-al-oir-señal"),
+    (r"buz[oó]n\s+de\s+voz",                        "voicemail-buzon"),
+    (r"correo\s+de\s+voz",                          "voicemail-correo"),
+    (r"mensaje\s+de\s+voz",                         "voicemail-mensaje-voz"),
+    (r"para\s+hablar\s+con\s+un\s+operador",        "ivr-operador"),
+    (r"para\s+hablar\s+con\s+un\s+agente",          "ivr-agente"),
+    (r"marque\s+cero\s+para",                       "ivr-marque-cero"),
+    (r"presione\s+cero\s+para",                     "ivr-presione-cero"),
+    (r"men[uú]\s+principal",                        "ivr-menu-principal"),
+    (r"opciones\s+del\s+men[uú]",                   "ivr-opciones-menu"),
+]
+
+# Frases de nivel 2: requieren al menos 2 coincidencias para disparar el corte.
+_VOICEMAIL_SOFT: list[tuple[str, str]] = [
+    (r"no\s+(est[aá]\s+)?disponible",               "soft-no-disponible"),
+    (r"en\s+este\s+momento\s+no\s+(podemos|puedo)", "soft-en-este-momento"),
+    (r"no\s+podemos\s+atender",                     "soft-no-podemos-atender"),
+    (r"comuníquese\s+(con|al)",                     "soft-comuniquese"),
+    (r"llame\s+(m[aá]s\s+tarde|nuevamente)",        "soft-llame-mas-tarde"),
+    (r"intente\s+(m[aá]s\s+tarde|nuevamente)",      "soft-intente-mas-tarde"),
+    (r"\bgrabaci[oó]n\b",                           "soft-grabacion"),
+    (r"mensaje\s+grabado",                          "soft-mensaje-grabado"),
+    (r"el\s+n[uú]mero\s+(marcado|llamado)",         "soft-numero-marcado"),
+    (r"fuera\s+del\s+horario",                      "soft-fuera-horario"),
+    (r"horario\s+de\s+atenci[oó]n",                 "soft-horario-atencion"),
+    (r"para\s+continuar\s+en\s+espa[ñn]ol",        "soft-idioma"),
+    (r"seleccione\s+una\s+opci[oó]n",               "soft-seleccione-opcion"),
+]
+
+_VOICEMAIL_LONG_TRANSCRIPT_CHARS = 120   # umbral para primer transcript largo
+
+
+def _is_voicemail_ivr(text: str, human_turns: int) -> tuple[bool, str]:
+    """
+    Analiza un user_transcript y devuelve (es_contestador, motivo).
+
+    Parámetros:
+      text        — transcript recibido de ElevenLabs (puede ser voz del contestador).
+      human_turns — cuántos transcripts previos ya se procesaron en esta llamada.
+                    Si es 0, es el primer turno; se aplica la regla de longitud.
+
+    Retorna:
+      (True, motivo)  → contestador/IVR detectado, cerrar llamada.
+      (False, "")     → parece humano, continuar normal.
+    """
+    if not text:
+        return False, ""
+
+    normalized = text.lower()
+
+    # Nivel 1: una sola coincidencia fuerte alcanza.
+    for pattern, label in _VOICEMAIL_STRONG:
+        if re.search(pattern, normalized):
+            return True, label
+
+    # Nivel 2: necesitamos al menos 2 coincidencias suaves.
+    soft_hits: list[str] = []
+    for pattern, label in _VOICEMAIL_SOFT:
+        if re.search(pattern, normalized):
+            soft_hits.append(label)
+    if len(soft_hits) >= 2:
+        return True, "+".join(soft_hits)
+
+    # Regla de longitud: primer transcript muy largo → probable mensaje grabado.
+    if human_turns == 0 and len(text) >= _VOICEMAIL_LONG_TRANSCRIPT_CHARS:
+        return True, f"long-transcript-{len(text)}chars"
+
+    return False, ""
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -307,7 +415,18 @@ async def media_stream(websocket: WebSocket):
     eleven_ws    = None
     eleven_ready = asyncio.Event()
     stop_event   = asyncio.Event()   # señaliza cierre a ambos loops
-    call_state: dict = {"pending": None, "confirmed_address": None, "pending_street": None}
+    user_spoke   = asyncio.Event()   # se setea en cada user_transcript (no en audio)
+    call_state: dict = {
+        "pending": None,
+        "confirmed_address": None,
+        "pending_street": None,
+        "human_turns": 0,   # transcripts procesados como humanos (para regla longitud)
+    }
+
+    logger.info(
+        f"[TELNYX] llamada iniciada — idle_timeout={IDLE_TIMEOUT_SECS}s "
+        f"max_call={MAX_CALL_SECS}s"
+    )
 
     async def _close_eleven(reason: str = "stop"):
         """Envía close_socket a ElevenLabs y cierra el WebSocket limpiamente."""
@@ -481,6 +600,29 @@ async def media_stream(websocket: WebSocket):
                     elif event_type == "user_transcript":
                         text = data.get("user_transcription_event", {}).get("user_transcript", "")
                         logger.info(f"[ELEVEN USUARIO] '{text}'")
+
+                        # --------------------------------------------------
+                        # Detección de contestador / IVR
+                        # Se ejecuta ANTES de user_spoke.set() para que un
+                        # mensaje grabado no reinicie el idle timer.
+                        # --------------------------------------------------
+                        is_vm, vm_reason = _is_voicemail_ivr(
+                            text, call_state["human_turns"]
+                        )
+                        if is_vm:
+                            logger.warning(
+                                f"[TELNYX] contestador/IVR detectado — cerrando llamada "
+                                f"(señal: {vm_reason}, texto: '{text[:80]}')"
+                            )
+                            logger.info("[TELNYX] llamada finalizada — reason=voicemail-ivr")
+                            stop_event.set()
+                            await _close_eleven(reason="voicemail-ivr")
+                            break
+
+                        # Humano real: registrar turno y continuar normal.
+                        call_state["human_turns"] += 1
+                        # Señalizar actividad humana real al watchdog de inactividad.
+                        user_spoke.set()
                         await _handle_user_transcript_for_address(text, eleven_ws, call_state)
 
                     elif event_type == "error":
@@ -494,7 +636,56 @@ async def media_stream(websocket: WebSocket):
                     # Solo loguear si NO fue un cierre intencional nuestro
                     logger.error(f"[ELEVEN] eleven_to_telnyx error: {e}")
 
-        await asyncio.gather(telnyx_to_eleven(), eleven_to_telnyx())
+        # ------------------------------------------------------------------
+        # WATCHDOG: timeout de inactividad + timeout absoluto
+        # Corre en paralelo con los dos loops de audio.
+        # ------------------------------------------------------------------
+        async def _watchdog():
+            """
+            Dos capas de protección:
+              1. Timeout absoluto: MAX_CALL_SECS desde el arranque.
+              2. Timeout de inactividad: IDLE_TIMEOUT_SECS sin user_transcript.
+            El watchdog sale solo si stop_event ya fue seteado por otro path.
+            """
+            deadline = time.monotonic() + MAX_CALL_SECS
+
+            while not stop_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        f"[TELNYX] timeout absoluto — cerrando llamada "
+                        f"(max={MAX_CALL_SECS}s)"
+                    )
+                    logger.info("[TELNYX] llamada finalizada — reason=max-call-timeout")
+                    stop_event.set()
+                    await _close_eleven(reason="max-call-timeout")
+                    return
+
+                # Esperar hasta IDLE_TIMEOUT_SECS o hasta que llegue un transcript,
+                # lo que ocurra primero. El Event se resetea aquí para detectar el
+                # próximo transcript.
+                user_spoke.clear()
+                wait_secs = min(IDLE_TIMEOUT_SECS, remaining)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(user_spoke.wait()),
+                        timeout=wait_secs,
+                    )
+                    # Llegó un transcript: reiniciar el idle timer y continuar.
+                    continue
+                except asyncio.TimeoutError:
+                    if stop_event.is_set():
+                        return
+                    logger.warning(
+                        f"[TELNYX] timeout inactividad — cerrando llamada "
+                        f"(idle={IDLE_TIMEOUT_SECS}s sin user_transcript)"
+                    )
+                    logger.info("[TELNYX] llamada finalizada — reason=idle-timeout")
+                    stop_event.set()
+                    await _close_eleven(reason="idle-timeout")
+                    return
+
+        await asyncio.gather(telnyx_to_eleven(), eleven_to_telnyx(), _watchdog())
 
     except Exception as e:
         logger.exception(f"[TELNYX] Error en media_stream: {e}")

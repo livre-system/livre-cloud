@@ -272,12 +272,37 @@ def search_top3_streets(query: str) -> list[str]:
 #   - "pueyrredon" vs "pueyrredon" → 1.00 ✓
 #   - "rodriguez"  vs "rodríguez"  → 0.94 ✓ (normalize_street_text quita tilde)
 #
-#   0.55 es suficientemente alto para evitar que palabras comunes del
-#   transcript (artículos, verbos, etc.) activen una calle.
-FUZZY_ONLY_THRESHOLD = 0.55
+#   0.50 permite rescatar errores de STT como "cavera" → "Saavedra" (~0.57).
+#   El gap mínimo (MIN_SCORE_GAP) actúa como segunda defensa contra falsos positivos.
+FUZZY_ONLY_THRESHOLD = 0.50
 
 # Cuántos candidatos devolver en modo fuzzy-only.
 FUZZY_ONLY_TOP_N = 3
+
+# Segunda capa anti-falsos positivos: diferencia mínima entre el score del
+# candidato #1 y el #2 para aceptar el resultado.
+#
+# Intuición:
+#   - Calle real ("saavedra" → Saavedra 1.00, siguiente ~0.60) → gap 0.40 ✓
+#   - Error STT  ("cavera"  → Saavedra ~0.57, siguiente ~0.44) → gap 0.13 ✓
+#   - Conversación ("sí correcto", "viaje", etc.) → scores parejos ~0.50-0.52,
+#     gap < 0.05 → ✗ rechazado
+#
+# Con 0.09 se permite rescatar errores STT claros como "cavera"→"Saavedra"
+# (gap real ~0.099) y se bloquea conversación (gaps < 0.02).
+MIN_SCORE_GAP = 0.09
+
+# Longitud mínima (en caracteres) del segmento extraído para que sea válido
+# como candidato a nombre de calle. Evita que monosílabos como "no", "sí"
+# o tokens de 2 letras encuentren coincidencia en calles cortas.
+MIN_SEGMENT_LEN = 3
+
+# Score mínimo para aceptar un candidato único (sin competidores sobre threshold).
+# Si solo hay un candidato, exigimos que su score sea muy alto para evitar
+# que tokens comunes matcheen una sola calle por coincidencia.
+# Ej: "como" → solo Colón con 0.667 → rechazado (< 0.85).
+#     "saavedra" → solo Saavedra con 1.000 → aceptado (≥ 0.85).
+MIN_SOLO_SCORE = 0.85
 
 # Tamaño máximo (en tokens) de la ventana deslizante usada para extraer
 # el segmento de nombre de calle del transcript completo.
@@ -301,9 +326,11 @@ MAX_WINDOW_TOKENS = 3
 #     "hipolito yrigoyen" vs "Hipólito Yrigoyen" → 1.000 ✓  se extrae
 #     "como" vs "Colón"             → 0.667 ✗  no se extrae
 #     "correcto" vs "Moreno"        → 0.571 ✗  no se extrae
-#   Cuando ninguna ventana supera 0.70, el texto completo normalizado va al
-#   fuzzy y FUZZY_ONLY_THRESHOLD = 0.55 descarta el caso correctamente.
-WINDOW_MIN_SCORE = 0.70
+#   Bajado a 0.50 para permitir extraer segmentos con errores STT fuertes
+#   como "cavera" (best score ~0.57 vs "Saavedra").
+#   La segunda defensa (MIN_SCORE_GAP) evita que frases de conversación
+#   pasen: sus scores son bajos Y parejos entre candidatos.
+WINDOW_MIN_SCORE = 0.50
 
 
 def _collapse_spelling(text: str) -> str:
@@ -440,23 +467,86 @@ def search_streets_fuzzy(query: str) -> list[str]:
         logger.warning("[ADDRESS] candidatos finales  : ninguno (street_names vacío)")
         return []
 
+    # Detección de patrón conversacional de repetición: "X por X", "X y X", etc.
+    # Cuando el transcript normalizado repite la misma palabra clave, es probable
+    # que sea conversación ("viaje por viaje", "así así") y no una calle.
+    norm_tokens = query_norm.split()
+    if len(norm_tokens) >= 2:
+        unique_tokens = set(norm_tokens)
+        repetition_ratio = 1 - (len(unique_tokens) / len(norm_tokens))
+        if repetition_ratio >= 0.5:  # la mitad o más de los tokens se repiten
+            logger.info(f"[ADDRESS] mejor candidata     : ninguna")
+            logger.info(f"[ADDRESS] score               : -")
+            logger.info(
+                f"[ADDRESS] decisión final      : RECHAZADO "
+                f"(patrón de repetición conversacional detectado, ratio={repetition_ratio:.2f})"
+            )
+            return []
+
+    # Validación de longitud mínima del segmento
+    if len(extracted) < MIN_SEGMENT_LEN:
+        logger.info(f"[ADDRESS] mejor candidata     : ninguna")
+        logger.info(f"[ADDRESS] score               : -")
+        logger.info(
+            f"[ADDRESS] decisión final      : RECHAZADO "
+            f"(segmento '{extracted}' demasiado corto, < {MIN_SEGMENT_LEN} chars)"
+        )
+        return []
+
     # Paso 5: fuzzy contra todas las calles usando el segmento extraído
-    scored: list[tuple[str, float]] = []
+    all_scored: list[tuple[str, float]] = []
     for street in all_streets:
         score = _fuzzy_score(extracted, street)
-        if score >= FUZZY_ONLY_THRESHOLD:
-            scored.append((street, score))
+        all_scored.append((street, score))
 
-    top5 = sorted(scored, key=lambda x: x[1], reverse=True)[:5]
+    all_scored.sort(key=lambda x: x[1], reverse=True)
+
+    # Log top5 completo (incluye candidatos por debajo del threshold)
+    top5_log = all_scored[:5]
     logger.info(
         "[ADDRESS] fuzzy top5          : "
-        + (", ".join(f"{n}={s:.3f}" for n, s in top5) if top5 else "ninguno")
+        + (", ".join(f"{n}={s:.3f}" for n, s in top5_log) if top5_log else "ninguno")
     )
 
-    top = top5[:FUZZY_ONLY_TOP_N]
+    # Filtrar por threshold mínimo
+    scored = [(n, s) for n, s in all_scored if s >= FUZZY_ONLY_THRESHOLD]
+
+    if not scored:
+        logger.info(f"[ADDRESS] mejor candidata     : ninguna (threshold {FUZZY_ONLY_THRESHOLD})")
+        logger.info("[ADDRESS] score               : -")
+        logger.info("[ADDRESS] decisión final      : RECHAZADO (sin candidatos sobre threshold)")
+        return []
+
+    best_name, best_score = scored[0]
+    second_score = scored[1][1] if len(scored) > 1 else 0.0
+    gap = best_score - second_score
+
+    # Validación de candidato único: si no hay segundo candidato sobre threshold,
+    # exigir score muy alto para evitar falsos positivos por tokens cortos/comunes.
+    if len(scored) == 1 and best_score < MIN_SOLO_SCORE:
+        logger.info(f"[ADDRESS] mejor candidata     : '{best_name}'")
+        logger.info(f"[ADDRESS] score               : {best_score:.3f} (único candidato)")
+        logger.info(
+            f"[ADDRESS] decisión final      : RECHAZADO "
+            f"(candidato único con score {best_score:.3f} < MIN_SOLO_SCORE {MIN_SOLO_SCORE})"
+        )
+        return []
+
+    logger.info(f"[ADDRESS] mejor candidata     : '{best_name}'")
+    logger.info(f"[ADDRESS] score               : {best_score:.3f} (gap vs #2: {gap:.3f})")
+
+    # Segunda validación: el candidato #1 debe destacarse suficientemente del #2
+    if gap < MIN_SCORE_GAP:
+        logger.info(
+            f"[ADDRESS] decisión final      : RECHAZADO "
+            f"(gap {gap:.3f} < MIN_SCORE_GAP {MIN_SCORE_GAP} → posible conversación, no calle)"
+        )
+        return []
+
+    top = scored[:FUZZY_ONLY_TOP_N]
     logger.info(
-        "[ADDRESS] candidatos finales  : "
-        + (", ".join(f"{n}={s:.3f}" for n, s in top) if top else "ninguno")
+        "[ADDRESS] decisión final      : ACEPTADO → "
+        + ", ".join(f"{n}={s:.3f}" for n, s in top)
     )
 
     return [name for name, _ in top]
