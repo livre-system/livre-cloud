@@ -222,14 +222,41 @@ async def _handle_user_transcript_for_address(text: str, eleven_ws, call_state: 
         normalized = normalize_numbers_in_text(text)
         numbers = re.findall(r'\b\d+\b', normalized)
         number = numbers[0] if numbers else ""
-        if not number:
-            return  # sin altura, no hay dirección que validar todavía
+
+        # Si hay una calle pendiente de altura del turno anterior, combinamos.
+        pending_street_candidates = call_state.get("pending_street")
+        if number and pending_street_candidates:
+            # Usuario dijo la altura después de haber dicho la calle sola.
+            call_state["pending_street"] = None
+            call_state["pending"] = {
+                "candidates": pending_street_candidates,
+                "index": 0,
+                "number": number,
+            }
+            candidata = f"{pending_street_candidates[0]} {number}".strip()
+            logger.info(f"[TELNYX] dirección — calle previa + altura nueva: {candidata}")
+            await _send_context_to_eleven(
+                eleven_ws,
+                f"[CANDIDATA DE DIRECCIÓN A CONFIRMAR: {candidata}] "
+                f"Preguntale al usuario, en una frase corta: ¿Es {candidata}?",
+            )
+            return
 
         candidates = await asyncio.to_thread(search_top3_streets, normalized)
         if not candidates:
-            return  # sin coincidencia razonable → el agente sigue y pide aclaración
+            # Sin coincidencia razonable → el agente sigue y pide aclaración
+            return
+
+        if not number:
+            # Calle detectada pero sin altura todavía: guardar y esperar.
+            call_state["pending_street"] = candidates
+            logger.info(
+                f"[TELNYX] dirección — calle sin altura, guardando candidatas: {candidates}"
+            )
+            return
 
         call_state["pending"] = {"candidates": candidates, "index": 0, "number": number}
+        call_state["pending_street"] = None
         candidata = f"{candidates[0]} {number}".strip()
         logger.info(f"[TELNYX] dirección — candidata detectada: {candidata}")
         await _send_context_to_eleven(
@@ -277,7 +304,7 @@ async def media_stream(websocket: WebSocket):
 
     eleven_ws    = None
     eleven_ready = asyncio.Event()
-    call_state: dict = {"pending": None, "confirmed_address": None}
+    call_state: dict = {"pending": None, "confirmed_address": None, "pending_street": None}
 
     try:
         # Conectar a ElevenLabs

@@ -8,56 +8,238 @@ Usada por:
   - app/voice/router.py   (flujo Twilio + GPT)
   - app/voice/telnyx.py   (flujo Telnyx + ElevenLabs)
 
-Se extrajo a un módulo aparte a propósito: así ninguno de los dos flujos de
-voz duplica esta lógica, y telnyx.py NO necesita importar router.py (que
-carga Twilio, Groq y el cliente de chat de OpenAI) solo para reusarla. Este
-módulo solo depende de get_embedding() y get_cursor().
+ESTRATEGIA DE MATCHING (v2):
+  El transcript puede llegar muy distorsionado por el STT de ElevenLabs:
+  "Saavedra" → "Cavera", "Casilda", "Vereda", etc.
+
+  Solución: combinar dos scores independientes y tomar el mejor candidato.
+
+    1. Embedding (semántico, via OpenAI + pgvector)
+       → bueno cuando el nombre está medianamente bien transcripto
+       → devuelve similarity ∈ [0, 1] directamente desde Postgres
+
+    2. Fuzzy textual (difflib.SequenceMatcher, stdlib pura)
+       → compara carácter a carácter contra TODOS los nombres de la DB
+       → muy bueno para errores de STT con fonética parecida:
+         "cavera" vs "saavedra" → ratio ~0.57
+       → se normaliza: sin tildes, minúsculas
+
+    Score final = max(embedding_sim, fuzzy_sim * FUZZY_WEIGHT)
+    Threshold final = COMBINED_THRESHOLD
+
+  No se baja el threshold del embedding en crudo: el peso del fuzzy
+  compensa errores de STT sin abrir la puerta a falsos positivos.
+
+  CALLE SIN ALTURA:
+    Si el usuario dice solo la calle, se guarda en call_state["pending_street"]
+    y se espera la altura en el siguiente turno.
 """
 
 import re
+import unicodedata
 import logging
+from difflib import SequenceMatcher
 
 from app.memory.embeddings import get_embedding
 from app.core.database import get_cursor
 
 logger = logging.getLogger(__name__)
 
-# cache: texto de calle → top3 calles candidatas
-_embedding_cache: dict[str, list[str]] = {}
+# ---------------------------------------------------------------------------
+# Parámetros de scoring
+# ---------------------------------------------------------------------------
+
+# Peso que se le aplica al score fuzzy antes de comparar con el embedding.
+# Ej: fuzzy_ratio=0.80 → fuzzy_score_final = 0.80 * 0.90 = 0.72
+# Mantenlo < 1.0 para que el embedding siga siendo el camino preferido.
+FUZZY_WEIGHT = 0.90
+
+# Score mínimo combinado para considerar un candidato válido.
+COMBINED_THRESHOLD = 0.52
+
+# Cuántos candidatos devolver al llamador.
+TOP_N = 3
+
+# ---------------------------------------------------------------------------
+# Cache en memoria
+# ---------------------------------------------------------------------------
+
+# street_names: todos los nombres de calle tal como están en la DB (cargado una vez)
+_street_names_cache: list[str] | None = None
+
+# embedding cache: texto de calle normalizado → lista de candidatos
+_embedding_cache: dict[str, list[tuple[str, float]]] = {}  # → [(name, sim)]
 
 
 # ---------------------------------------------------------------------------
-# Búsqueda de calles por embedding (igual a la lógica original de router.py)
+# Normalización de texto
 # ---------------------------------------------------------------------------
 
-def search_top3_streets(query: str) -> list[str]:
-    street_part = re.sub(r'\b\d+\b', '', query).strip().lower()
-    if not street_part:
-        return []
+_STOP_WORDS = {
+    "calle", "avenida", "av", "avda", "bulevar", "boulevard", "pasaje", "pje",
+    "ruta", "camino", "vereda", "esquina", "esq", "entre", "y", "la", "el",
+    "las", "los", "de", "del", "desde", "hasta", "por",
+}
 
-    if street_part in _embedding_cache:
-        logger.info(f"Cache hit para '{street_part}'")
-        return _embedding_cache[street_part]
 
-    embedding = get_embedding(street_part)
-    if not embedding:
-        return []
+def _strip_accents(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def normalize_street_text(text: str) -> str:
+    """
+    Normalización para comparación fuzzy y como input al embedding:
+      - minúsculas
+      - sin tildes
+      - sin puntuación
+      - sin stop words de vía pública
+      - sin números (se extraen aparte)
+    """
+    t = text.lower()
+    t = _strip_accents(t)
+    t = re.sub(r'[^a-z0-9 ]', ' ', t)
+    t = re.sub(r'\b\d+\b', ' ', t)       # quitar números
+    tokens = [w for w in t.split() if w not in _STOP_WORDS]
+    return " ".join(tokens).strip()
+
+
+# ---------------------------------------------------------------------------
+# Carga de todos los nombres de calle (una vez)
+# ---------------------------------------------------------------------------
+
+def _load_all_street_names() -> list[str]:
+    global _street_names_cache
+    if _street_names_cache is not None:
+        return _street_names_cache
     try:
         with get_cursor() as cur:
-            cur.execute("""
-                SELECT name, 1 - (embedding <=> %s::vector) AS similarity
-                FROM street_embeddings
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> %s::vector
-                LIMIT 3
-            """, (str(embedding), str(embedding)))
+            cur.execute("SELECT name FROM street_embeddings ORDER BY name")
             rows = cur.fetchall()
-            result = [r["name"] for r in rows if r["similarity"] > 0.5]
-            _embedding_cache[street_part] = result
-            return result
+            _street_names_cache = [r["name"] for r in rows]
+            logger.info(f"[ADDRESS] street_names cargados: {len(_street_names_cache)}")
     except Exception as e:
-        logger.warning(f"Error buscando calles top3: {e}")
-    return []
+        logger.warning(f"[ADDRESS] No se pudieron cargar street_names: {e}")
+        _street_names_cache = []
+    return _street_names_cache
+
+
+# ---------------------------------------------------------------------------
+# Score fuzzy textual
+# ---------------------------------------------------------------------------
+
+def _fuzzy_score(query_norm: str, candidate: str) -> float:
+    """
+    SequenceMatcher ratio entre el query normalizado y el nombre de calle
+    normalizado. Retorna valor ∈ [0, 1].
+    """
+    cand_norm = normalize_street_text(candidate)
+    if not query_norm or not cand_norm:
+        return 0.0
+    return SequenceMatcher(None, query_norm, cand_norm).ratio()
+
+
+# ---------------------------------------------------------------------------
+# Búsqueda combinada: embedding + fuzzy
+# ---------------------------------------------------------------------------
+
+def search_top_streets(query: str) -> list[tuple[str, float, float, float]]:
+    """
+    Devuelve los mejores candidatos para el texto `query`.
+
+    Retorna lista de (nombre, emb_sim, fuzzy_sim, score_final) ordenada por
+    score_final desc, limitada a TOP_N entradas con score >= COMBINED_THRESHOLD.
+
+    Si el embedding falla, usa solo fuzzy (y viceversa).
+    """
+    query_norm = normalize_street_text(query)
+    if not query_norm:
+        return []
+
+    logger.info(f"[ADDRESS] transcript original : '{query}'")
+    logger.info(f"[ADDRESS] transcript norm     : '{query_norm}'")
+
+    # ---- 1. Embedding (async-safe: se llama con asyncio.to_thread desde telnyx.py) ----
+    emb_results: dict[str, float] = {}   # name → embedding similarity
+    cache_key = query_norm
+
+    if cache_key in _embedding_cache:
+        logger.info(f"[ADDRESS] embedding cache hit para '{query_norm}'")
+        for name, sim in _embedding_cache[cache_key]:
+            emb_results[name] = sim
+    else:
+        embedding = get_embedding(query_norm)
+        if embedding:
+            try:
+                with get_cursor() as cur:
+                    cur.execute("""
+                        SELECT name, 1 - (embedding <=> %s::vector) AS similarity
+                        FROM street_embeddings
+                        WHERE embedding IS NOT NULL
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT 20
+                    """, (str(embedding), str(embedding)))
+                    rows = cur.fetchall()
+                    top = [(r["name"], float(r["similarity"])) for r in rows]
+                    _embedding_cache[cache_key] = top
+                    for name, sim in top:
+                        emb_results[name] = sim
+                    logger.info(
+                        f"[ADDRESS] embedding top3: "
+                        + ", ".join(f"{n}={s:.3f}" for n, s in top[:3])
+                    )
+            except Exception as e:
+                logger.warning(f"[ADDRESS] Error embedding DB: {e}")
+        else:
+            logger.warning("[ADDRESS] get_embedding devolvió None")
+
+    # ---- 2. Fuzzy contra TODOS los nombres ----
+    all_streets = _load_all_street_names()
+    fuzzy_results: dict[str, float] = {}
+
+    for street in all_streets:
+        score = _fuzzy_score(query_norm, street)
+        if score >= 0.40:       # poda liviana, no filtramos candidatos buenos
+            fuzzy_results[street] = score
+
+    top_fuzzy = sorted(fuzzy_results.items(), key=lambda x: x[1], reverse=True)[:5]
+    logger.info(
+        f"[ADDRESS] fuzzy top5: "
+        + ", ".join(f"{n}={s:.3f}" for n, s in top_fuzzy)
+    )
+
+    # ---- 3. Score combinado ----
+    all_names = set(emb_results) | set(fuzzy_results)
+    scored: list[tuple[str, float, float, float]] = []
+
+    for name in all_names:
+        emb_sim   = emb_results.get(name, 0.0)
+        fuzzy_sim = fuzzy_results.get(name, 0.0)
+        final     = max(emb_sim, fuzzy_sim * FUZZY_WEIGHT)
+        if final >= COMBINED_THRESHOLD:
+            scored.append((name, emb_sim, fuzzy_sim, final))
+
+    scored.sort(key=lambda x: x[3], reverse=True)
+    top = scored[:TOP_N]
+
+    logger.info(
+        f"[ADDRESS] candidatos finales: "
+        + ", ".join(
+            f"{n}(emb={e:.3f}, fuzz={f:.3f}, final={fin:.3f})"
+            for n, e, f, fin in top
+        )
+    )
+    return top
+
+
+def search_top3_streets(query: str) -> list[str]:
+    """
+    Interfaz compatible con router.py (Twilio).
+    Devuelve solo los nombres, sin scores.
+    """
+    return [name for name, *_ in search_top_streets(query)]
 
 
 # ---------------------------------------------------------------------------
@@ -75,10 +257,7 @@ def is_no(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Números dichos en palabras → dígitos ("mil quinientos" → "1500")
-#
-# Cubre lo típico de una altura de calle (hasta ~9999). No es un parser de
-# lenguaje natural completo a propósito: solo lo necesario para direcciones.
+# Números en palabras → dígitos
 # ---------------------------------------------------------------------------
 
 _UNITS = {
@@ -124,9 +303,6 @@ def _words_to_number(words: list[str]) -> int:
 
 def normalize_numbers_in_text(text: str) -> str:
     """
-    Convierte números dichos en palabras a dígitos dentro del texto, para
-    poder extraerlos después con un regex \\d+ normal.
-
     "avenida alem mil quinientos" → "avenida alem 1500"
     """
     tokens = text.lower().split()
