@@ -67,9 +67,11 @@ ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 # Timeouts de llamada — configurables desde Railway
 # ---------------------------------------------------------------------------
 
-# Segundos de inactividad (sin user_transcript) antes de cerrar la llamada.
-# Evita que contestadores automáticos o IVR mantengan la sesión abierta.
-IDLE_TIMEOUT_SECS = int(os.getenv("TELNYX_IDLE_TIMEOUT_SECONDS", "12"))
+# Segundos de inactividad antes de cerrar la llamada.
+# "Inactividad" significa silencio completo: sin audio inbound con energía detectable
+# y sin user_transcript. Un humano pensando (con ruido de fondo) no dispara este timeout.
+# La detección de voicemail/IVR (sobre transcripts) actúa independientemente y más rápido.
+IDLE_TIMEOUT_SECS = int(os.getenv("TELNYX_IDLE_TIMEOUT_SECONDS", "30"))
 
 # Duración máxima absoluta de una llamada en segundos.
 MAX_CALL_SECS = int(os.getenv("TELNYX_MAX_CALL_SECONDS", "30"))
@@ -341,6 +343,16 @@ _VOICEMAIL_SOFT: list[tuple[str, str]] = [
 
 _VOICEMAIL_LONG_TRANSCRIPT_CHARS = 120   # umbral para primer transcript largo
 
+# ---------------------------------------------------------------------------
+# Umbral de energía RMS para detección de audio activo
+#
+# Se aplica sobre PCM 16-bit (resultado de audioop.ulaw2lin) antes del
+# upsampling. Un valor de 200 captura voz susurrada y ruido de fondo suave;
+# silencio de línea telefónica suele estar por debajo de 50.
+# No distingue humano de contestador — eso lo hace _is_voicemail_ivr().
+# ---------------------------------------------------------------------------
+_AUDIO_ENERGY_THRESHOLD = 200   # RMS mínimo sobre PCM 16-bit para considerar audio activo
+
 
 def _is_voicemail_ivr(text: str, human_turns: int) -> tuple[bool, str]:
     """
@@ -415,7 +427,8 @@ async def media_stream(websocket: WebSocket):
     eleven_ws    = None
     eleven_ready = asyncio.Event()
     stop_event   = asyncio.Event()   # señaliza cierre a ambos loops
-    user_spoke   = asyncio.Event()   # se setea en cada user_transcript (no en audio)
+    user_spoke   = asyncio.Event()   # se setea en cada user_transcript confirmado humano
+    audio_active = asyncio.Event()   # se setea cuando llega audio inbound con energía detectable
     call_state: dict = {
         "pending": None,
         "confirmed_address": None,
@@ -510,6 +523,16 @@ async def media_stream(websocket: WebSocket):
                         except Exception as e:
                             logger.error(f"[TELNYX] Error decode payload: {e}")
                             continue
+
+                        # Señalizar actividad de audio al watchdog si la energía supera
+                        # el umbral. Distingue silencio de línea de voz/ruido real.
+                        # No distingue humano de contestador — eso lo hace _is_voicemail_ivr().
+                        try:
+                            pcm_raw = audioop.ulaw2lin(pcmu_bytes, 2)
+                            if audioop.rms(pcm_raw, 2) >= _AUDIO_ENERGY_THRESHOLD:
+                                audio_active.set()
+                        except Exception:
+                            pass  # nunca interrumpir el flujo de audio por esto
 
                         # PCMU 8kHz → PCM 16kHz → ElevenLabs
                         pcm16k_b64 = _pcmu8k_to_pcm16k_b64(pcmu_bytes)
@@ -644,8 +667,22 @@ async def media_stream(websocket: WebSocket):
             """
             Dos capas de protección:
               1. Timeout absoluto: MAX_CALL_SECS desde el arranque.
-              2. Timeout de inactividad: IDLE_TIMEOUT_SECS sin user_transcript.
-            El watchdog sale solo si stop_event ya fue seteado por otro path.
+              2. Timeout de inactividad: IDLE_TIMEOUT_SECS sin ninguna señal de vida.
+
+            Señales de vida (cualquiera resetea el idle timer):
+              - audio_active: llega audio inbound con energía > threshold (humano O contestador).
+              - user_spoke:   llegó un user_transcript confirmado como no-voicemail.
+
+            La detección de voicemail/IVR actúa en eleven_to_telnyx() independientemente
+            y con prioridad — corta antes de que el watchdog llegue a evaluar el idle.
+
+            Esto permite:
+              - humano hablando → audio_active setea, no corta
+              - humano pensando con ruido → audio_active setea, no corta
+              - silencio completo → nada setea → corta por idle (contestador mudo,
+                llamada abandonada, o timeout de espera inicial)
+              - contestador con voz → audio_active setea, pero _is_voicemail_ivr()
+                corta inmediatamente al llegar el primer transcript
             """
             deadline = time.monotonic() + MAX_CALL_SECS
 
@@ -661,29 +698,38 @@ async def media_stream(websocket: WebSocket):
                     await _close_eleven(reason="max-call-timeout")
                     return
 
-                # Esperar hasta IDLE_TIMEOUT_SECS o hasta que llegue un transcript,
-                # lo que ocurra primero. El Event se resetea aquí para detectar el
-                # próximo transcript.
+                # Resetear ambas señales y esperar la primera que llegue.
+                # Se resetean juntas para evitar que una señal previa enmascare
+                # un período de silencio posterior.
+                audio_active.clear()
                 user_spoke.clear()
                 wait_secs = min(IDLE_TIMEOUT_SECS, remaining)
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(user_spoke.wait()),
-                        timeout=wait_secs,
-                    )
-                    # Llegó un transcript: reiniciar el idle timer y continuar.
+
+                # Esperar audio_active OR user_spoke, lo que llegue primero.
+                done, _ = await asyncio.wait(
+                    [
+                        asyncio.ensure_future(asyncio.shield(audio_active.wait())),
+                        asyncio.ensure_future(asyncio.shield(user_spoke.wait())),
+                    ],
+                    timeout=wait_secs,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if done:
+                    # Al menos una señal llegó: reiniciar el idle timer.
                     continue
-                except asyncio.TimeoutError:
-                    if stop_event.is_set():
-                        return
-                    logger.warning(
-                        f"[TELNYX] timeout inactividad — cerrando llamada "
-                        f"(idle={IDLE_TIMEOUT_SECS}s sin user_transcript)"
-                    )
-                    logger.info("[TELNYX] llamada finalizada — reason=idle-timeout")
-                    stop_event.set()
-                    await _close_eleven(reason="idle-timeout")
+
+                # Ninguna señal en IDLE_TIMEOUT_SECS → silencio completo.
+                if stop_event.is_set():
                     return
+                logger.warning(
+                    f"[TELNYX] timeout inactividad — cerrando llamada "
+                    f"(idle={IDLE_TIMEOUT_SECS}s sin audio ni transcript)"
+                )
+                logger.info("[TELNYX] llamada finalizada — reason=idle-timeout")
+                stop_event.set()
+                await _close_eleven(reason="idle-timeout")
+                return
 
         await asyncio.gather(telnyx_to_eleven(), eleven_to_telnyx(), _watchdog())
 
