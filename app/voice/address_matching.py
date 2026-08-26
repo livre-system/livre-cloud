@@ -38,7 +38,8 @@ ESTRATEGIA DE MATCHING (v2):
 import re
 import unicodedata
 import logging
-from difflib import SequenceMatcher
+
+from rapidfuzz import fuzz, process as rf_process
 
 from app.memory.embeddings import get_embedding
 from app.core.database import get_cursor
@@ -132,13 +133,27 @@ def _load_all_street_names() -> list[str]:
 
 def _fuzzy_score(query_norm: str, candidate: str) -> float:
     """
-    SequenceMatcher ratio entre el query normalizado y el nombre de calle
-    normalizado. Retorna valor ∈ [0, 1].
+    Score fuzzy entre el query normalizado y el nombre de calle normalizado.
+    Retorna valor ∈ [0, 1].
+
+    Usa rapidfuzz.fuzz.WRatio, que internamente elige el mejor entre:
+      - ratio            (comparación carácter a carácter)
+      - partial_ratio    (substring óptimo)
+      - token_sort_ratio (ignora orden de tokens)
+      - token_set_ratio  (ignora tokens duplicados/extra)
+
+    WRatio es más robusto que SequenceMatcher.ratio() para errores STT:
+      "cavera"   vs "saavedra"   → WRatio ~63  vs SM ~57  (mejor recuperación)
+      "concha"   vs "cuyo"       → WRatio ~40  (correctamente descartado)
+      "rodriguez" vs "rodríguez" → WRatio 100  (normalización ya quitó tilde)
+
+    RapidFuzz devuelve [0, 100]; dividimos por 100 para mantener la
+    interfaz [0, 1] que usan todos los thresholds existentes.
     """
     cand_norm = normalize_street_text(candidate)
     if not query_norm or not cand_norm:
         return 0.0
-    return SequenceMatcher(None, query_norm, cand_norm).ratio()
+    return fuzz.WRatio(query_norm, cand_norm) / 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -397,12 +412,30 @@ def _extract_address_segment(transcript_norm: str) -> str:
     best_window = ""
     best_score  = 0.0
 
+    # Normalizar las calles una sola vez para toda la búsqueda de ventanas.
+    # normalize_street_text() es idempotente y el resultado se usa solo acá.
+    streets_norm = [normalize_street_text(s) for s in all_streets]
+
     for window_size in range(1, MAX_WINDOW_TOKENS + 1):
         for start in range(len(text_tokens) - window_size + 1):
             window = " ".join(text_tokens[start : start + window_size])
-            # Score de esta ventana = mejor fuzzy contra cualquier calle
-            for street in all_streets:
-                score = _fuzzy_score(window, street)
+            # scorer=fuzz.ratio (NO WRatio) para la extracción de ventana.
+            # Razón: WRatio delega en partial_ratio para strings cortos, lo que
+            # infla el score de tokens de 2-3 letras que son substrings de calles
+            # (ej: "si" → partial_ratio("si","alsina")=100 → win_score=0.90).
+            # fuzz.ratio hace comparación carácter a carácter sin substrings,
+            # por lo que tokens cortos reciben score correcto (bajo) y no
+            # confunden la extracción de segmento. WRatio sigue usándose en el
+            # scoring final (Paso 5) donde el segmento ya tiene longitud adecuada.
+            result = rf_process.extractOne(
+                window,
+                streets_norm,
+                scorer=fuzz.ratio,
+                score_cutoff=0,
+            )
+            if result is not None:
+                _, score_100, _ = result
+                score = score_100 / 100.0
                 if score > best_score:
                     best_score  = score
                     best_window = window
@@ -493,19 +526,39 @@ def search_streets_fuzzy(query: str) -> list[str]:
         )
         return []
 
-    # Paso 5: fuzzy contra todas las calles usando el segmento extraído
-    all_scored: list[tuple[str, float]] = []
-    for street in all_streets:
-        score = _fuzzy_score(extracted, street)
-        all_scored.append((street, score))
+    # Paso 5: fuzzy contra todas las calles usando el segmento extraído.
+    # Usamos rf_process.extract() que devuelve los mejores N resultados
+    # ordenados por score, sin iterar manualmente en Python.
+    # scorer=fuzz.WRatio para máxima robustez ante errores STT.
+    rf_results = rf_process.extract(
+        extracted,
+        [normalize_street_text(s) for s in all_streets],
+        scorer=fuzz.WRatio,
+        limit=len(all_streets),  # necesitamos todos para el filtro de threshold
+        score_cutoff=0,
+    )
+    # rf_results: list of (matched_norm, score_100, index)
+    # Reconstituir nombres originales (no normalizados) para devolverlos al llamador.
+    all_scored: list[tuple[str, float]] = [
+        (all_streets[idx], score_100 / 100.0)
+        for _, score_100, idx in rf_results
+    ]
+    # Ya viene ordenado por score desc desde RapidFuzz.
 
-    all_scored.sort(key=lambda x: x[1], reverse=True)
-
-    # Log top5 completo (incluye candidatos por debajo del threshold)
+    # Log detallado top5: incluye los tres scores individuales para diagnóstico.
     top5_log = all_scored[:5]
+    top5_detail: list[str] = []
+    for street_name, _ in top5_log:
+        seg_norm  = extracted
+        cand_norm = normalize_street_text(street_name)
+        r   = fuzz.ratio(seg_norm, cand_norm) / 100.0
+        wr  = fuzz.WRatio(seg_norm, cand_norm) / 100.0
+        tsr = fuzz.token_set_ratio(seg_norm, cand_norm) / 100.0
+        top5_detail.append(f"{street_name}(ratio={r:.3f},WRatio={wr:.3f},tsr={tsr:.3f})")
+
     logger.info(
-        "[ADDRESS] fuzzy top5          : "
-        + (", ".join(f"{n}={s:.3f}" for n, s in top5_log) if top5_log else "ninguno")
+        "[ADDRESS] candidatos RapidFuzz : "
+        + (", ".join(top5_detail) if top5_detail else "ninguno")
     )
 
     # Filtrar por threshold mínimo
