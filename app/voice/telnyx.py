@@ -71,10 +71,10 @@ ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 # "Inactividad" significa silencio completo: sin audio inbound con energía detectable
 # y sin user_transcript. Un humano pensando (con ruido de fondo) no dispara este timeout.
 # La detección de voicemail/IVR (sobre transcripts) actúa independientemente y más rápido.
-IDLE_TIMEOUT_SECS = int(os.getenv("TELNYX_IDLE_TIMEOUT_SECONDS", "30"))
+IDLE_TIMEOUT_SECS = int(os.getenv("TELNYX_IDLE_TIMEOUT_SECONDS", "25"))
 
 # Duración máxima absoluta de una llamada en segundos.
-MAX_CALL_SECS = int(os.getenv("TELNYX_MAX_CALL_SECONDS", "30"))
+MAX_CALL_SECS = int(os.getenv("TELNYX_MAX_CALL_SECONDS", "180"))
 
 # ---------------------------------------------------------------------------
 # Audio helpers
