@@ -279,45 +279,174 @@ FUZZY_ONLY_THRESHOLD = 0.55
 # Cuántos candidatos devolver en modo fuzzy-only.
 FUZZY_ONLY_TOP_N = 3
 
+# Tamaño máximo (en tokens) de la ventana deslizante usada para extraer
+# el segmento de nombre de calle del transcript completo.
+# 3 cubre el 100% de calles de Bahía Blanca después de normalizar
+# (ninguna tiene más de 3 tokens significativos tras quitar stop words).
+MAX_WINDOW_TOKENS = 3
+
+# Score mínimo que debe alcanzar la mejor ventana para ser aceptada
+# como segmento extraído. Por debajo de este valor, se usa el transcript
+# normalizado completo y el threshold final (FUZZY_ONLY_THRESHOLD) decide.
+#
+# Elección: 0.70
+#   La ventana deslizante puede producir falsos positivos si acepta tokens
+#   comunes con score moderado:
+#     "como"    vs "Colón"  → 0.667  → si se acepta, matchea una calle falsa
+#     "correcto" vs "Moreno" → 0.571 → ídem
+#   Con 0.70 solo se acepta una ventana con coincidencia claramente buena:
+#     "saavedra" vs "Saavedra"      → 1.000 ✓  se extrae
+#     "rodriguez" vs "Rodríguez"    → 1.000 ✓  se extrae
+#     "pueyrredon" vs "Pueyrredón"  → 1.000 ✓  se extrae
+#     "hipolito yrigoyen" vs "Hipólito Yrigoyen" → 1.000 ✓  se extrae
+#     "como" vs "Colón"             → 0.667 ✗  no se extrae
+#     "correcto" vs "Moreno"        → 0.571 ✗  no se extrae
+#   Cuando ninguna ventana supera 0.70, el texto completo normalizado va al
+#   fuzzy y FUZZY_ONLY_THRESHOLD = 0.55 descarta el caso correctamente.
+WINDOW_MIN_SCORE = 0.70
+
+
+def _collapse_spelling(text: str) -> str:
+    """
+    Detecta y colapsa deletreo letra a letra.
+
+    Patrones reconocidos:
+      "R-O-D-R-I-G-U-E-Z"      → "rodriguez"
+      "R O D R I G U E Z"       → "rodriguez"  (letras sueltas separadas por espacio)
+      "r o d r i g u e z"       → "rodriguez"
+
+    La heurística es: si el texto (sin tildes, minúsculas) tiene 4 o más tokens
+    de una sola letra cada uno, se trata como deletreo.
+
+    Si no parece deletreo, devuelve el texto original sin cambios.
+    """
+    # Normalizar para análisis: minúsculas, sin tildes, reemplazar guiones por espacio
+    cleaned = _strip_accents(text.lower())
+    cleaned = re.sub(r'[-–—]', ' ', cleaned)
+    tokens = cleaned.split()
+
+    single_letter_count = sum(1 for t in tokens if re.fullmatch(r'[a-z]', t))
+    if single_letter_count >= 4 and single_letter_count >= len(tokens) * 0.7:
+        # Parece deletreo: colapsar solo las letras individuales en una palabra
+        collapsed = "".join(t for t in tokens if re.fullmatch(r'[a-z]', t))
+        logger.info(f"[ADDRESS] deletreo detectado: '{text}' → '{collapsed}'")
+        return collapsed
+
+    return text
+
+
+def _extract_address_segment(transcript_norm: str) -> str:
+    """
+    Extrae el segmento del transcript normalizado que más probablemente
+    corresponde a un nombre de calle, usando una ventana deslizante de
+    1 a MAX_WINDOW_TOKENS tokens sobre los nombres de la DB.
+
+    Estrategia:
+      Para cada ventana de tokens del transcript (largo 1, 2 o 3),
+      calculamos el mejor score fuzzy contra las 810 calles.
+      Nos quedamos con la ventana que produce el score más alto.
+
+    Si ninguna ventana supera WINDOW_MIN_SCORE, devuelve el transcript
+    completo (el matcher aplicará el threshold final igualmente).
+
+    Los tokens numéricos se excluyen de la ventana porque son altura,
+    no nombre de calle.
+    """
+    all_streets = _load_all_street_names()
+    if not all_streets:
+        return transcript_norm
+
+    tokens = [t for t in transcript_norm.split() if t]
+    # Excluir tokens puramente numéricos de la ventana de búsqueda
+    text_tokens = [t for t in tokens if not re.fullmatch(r'\d+', t)]
+
+    if not text_tokens:
+        return transcript_norm
+
+    # Si hay un solo token no tiene sentido hacer ventana.
+    if len(text_tokens) == 1:
+        return text_tokens[0]
+
+    best_window = ""
+    best_score  = 0.0
+
+    for window_size in range(1, MAX_WINDOW_TOKENS + 1):
+        for start in range(len(text_tokens) - window_size + 1):
+            window = " ".join(text_tokens[start : start + window_size])
+            # Score de esta ventana = mejor fuzzy contra cualquier calle
+            for street in all_streets:
+                score = _fuzzy_score(window, street)
+                if score > best_score:
+                    best_score  = score
+                    best_window = window
+
+    if best_score >= WINDOW_MIN_SCORE:
+        return best_window
+
+    # Ninguna ventana alcanzó el mínimo: devolver todos los text_tokens
+    # y dejar que el threshold final (FUZZY_ONLY_THRESHOLD) descarte.
+    return " ".join(text_tokens)
+
 
 def search_streets_fuzzy(query: str) -> list[str]:
     """
-    Fuzzy-only street search.  NO usa embeddings.
+    Fuzzy-only street search con extracción de segmento.  NO usa embeddings.
 
-    Compara `query` normalizado contra todos los nombres de street_embeddings
-    usando difflib.SequenceMatcher (stdlib pura, sin dependencias extras).
+    Pipeline:
+      1. Detectar y colapsar deletreo ("R-O-D-R-I-G-U-E-Z" → "rodriguez")
+      2. normalize_numbers_in_text  ("mil quinientos" → "1500")
+      3. normalize_street_text      (minúsculas, sin tildes, sin stop words,
+                                     sin números)
+      4. _extract_address_segment   (ventana deslizante 1-3 tokens)
+      5. Fuzzy contra 810 calles    (SequenceMatcher, threshold 0.55)
+      6. Devolver top FUZZY_ONLY_TOP_N
 
-    Retorna hasta FUZZY_ONLY_TOP_N nombres cuyo score >= FUZZY_ONLY_THRESHOLD,
-    ordenados de mayor a menor score.
-    Si ninguno supera el threshold, retorna [].
+    Retorna lista de nombres (strings), vacía si nada supera el threshold.
 
-    Logs emitidos:
-      [ADDRESS] transcript original : '<texto crudo>'
-      [ADDRESS] transcript norm     : '<texto normalizado>'
-      [ADDRESS] fuzzy top5          : nombre=score, ...
-      [ADDRESS] candidatos finales  : nombre=score, ...  (o "ninguno")
+    Logs:
+      [ADDRESS] transcript original : ...
+      [ADDRESS] texto extraído      : ...
+      [ADDRESS] transcript norm     : ...
+      [ADDRESS] fuzzy top5          : ...
+      [ADDRESS] candidatos finales  : ...
     """
-    query_norm = normalize_street_text(query)
-
     logger.info(f"[ADDRESS] transcript original : '{query}'")
-    logger.info(f"[ADDRESS] transcript norm     : '{query_norm}'")
+
+    # Paso 1: colapsar deletreo antes de cualquier otra normalización
+    text = _collapse_spelling(query)
+
+    # Paso 2: convertir números en palabras a dígitos
+    text = normalize_numbers_in_text(text)
+
+    # Paso 3: normalización estándar (minúsculas, sin tildes, sin stop words,
+    #         sin números — los números los extraemos desde el transcript
+    #         original en telnyx.py, no acá)
+    query_norm = normalize_street_text(text)
 
     if not query_norm:
+        logger.info("[ADDRESS] texto extraído      : (vacío)")
+        logger.info("[ADDRESS] transcript norm     : (vacío)")
         logger.info("[ADDRESS] candidatos finales  : ninguno (query vacío tras normalizar)")
         return []
+
+    # Paso 4: extraer el segmento más probable de nombre de calle
+    extracted = _extract_address_segment(query_norm)
+
+    logger.info(f"[ADDRESS] texto extraído      : '{extracted}'")
+    logger.info(f"[ADDRESS] transcript norm     : '{query_norm}'")
 
     all_streets = _load_all_street_names()
     if not all_streets:
         logger.warning("[ADDRESS] candidatos finales  : ninguno (street_names vacío)")
         return []
 
+    # Paso 5: fuzzy contra todas las calles usando el segmento extraído
     scored: list[tuple[str, float]] = []
     for street in all_streets:
-        score = _fuzzy_score(query_norm, street)
+        score = _fuzzy_score(extracted, street)
         if score >= FUZZY_ONLY_THRESHOLD:
             scored.append((street, score))
 
-    # Log top5 antes de cortar a TOP_N
     top5 = sorted(scored, key=lambda x: x[1], reverse=True)[:5]
     logger.info(
         "[ADDRESS] fuzzy top5          : "
