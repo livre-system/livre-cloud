@@ -77,9 +77,20 @@ _embedding_cache: dict[str, list[tuple[str, float]]] = {}  # → [(name, sim)]
 # ---------------------------------------------------------------------------
 
 _STOP_WORDS = {
+    # Prefijos de vía pública
     "calle", "avenida", "av", "avda", "bulevar", "boulevard", "pasaje", "pje",
     "ruta", "camino", "vereda", "esquina", "esq", "entre", "y", "la", "el",
     "las", "los", "de", "del", "desde", "hasta", "por",
+    # Palabras conversacionales frecuentes en ASR de taxi/remis.
+    # Ninguna de estas es ni puede ser nombre de calle en Bahía Blanca.
+    # Agregarlas acá hace que normalize_street_text() las descarte antes
+    # de cualquier comparación fuzzy, eliminando falsos positivos sin
+    # necesidad de tocar thresholds.
+    "hola", "como", "estas", "bien", "mal", "bueno", "buenas",
+    "quiero", "salir", "salgo", "arrancar", "pasame", "buscar",
+    "voy", "hacia", "solicita", "solicito", "viaje", "viajes",
+    "correcto", "exacto", "gracias", "ok", "dale", "claro",
+    "si", "no", "un", "una", "me", "te", "se", "mi", "su",
 }
 
 
@@ -136,20 +147,20 @@ def _fuzzy_score(query_norm: str, candidate: str) -> float:
     Score fuzzy entre el query normalizado y el nombre de calle normalizado.
     Retorna valor ∈ [0, 1].
 
-    Scorer elegido según longitud del query:
-      - len(query_norm) <= 5 chars → fuzz.ratio (comparación carácter a carácter)
-        Razón: WRatio delega en partial_ratio para strings cortos, lo que infla
-        el score de tokens de 2-5 letras que son substrings de calles largas.
-        Ej: "si"    → partial_ratio("si","alsina") = 100 → falso positivo
-            "viaje" → partial_ratio("viaje","rivadavia") = 67 → falso positivo
-        fuzz.ratio penaliza correctamente la diferencia de longitud.
+    Usa fuzz.ratio (comparación carácter a carácter, sin substrings).
 
-      - len(query_norm) > 5 chars → fuzz.WRatio (máxima robustez para errores STT)
-        WRatio elige internamente entre ratio/partial_ratio/token_sort/token_set.
-        Para queries de longitud razonable (≥ 6 chars), partial_ratio no infla
-        artificialmente porque la penalización de longitud es proporcional.
-        Ej: "cavera" (6) vs "saavedra" (8) → WRatio ~63 > ratio ~57 ✓
-            "rodriguez" (9) vs "rodriguez" (9) → WRatio 100 ✓
+    Razón del cambio respecto a WRatio:
+      WRatio delega internamente en partial_ratio cuando los strings difieren
+      en longitud, lo que acepta cualquier palabra que sea substring fonético
+      de un nombre de calle:
+        "solicita" → partial_ratio → Solís   = 0.80  (falso positivo)
+        "viaje"    → partial_ratio → Rivadavia = 0.67 (falso positivo)
+        "si"       → partial_ratio → Alsina   = 1.00  (falso positivo)
+
+      fuzz.ratio penaliza la diferencia de longitud correctamente:
+        "solicita" vs "solis"    → ratio = 0.615  (bajo threshold o rechazado por len_ratio)
+        "cavera"   vs "saavedra" → ratio = 0.714  (error STT real, aceptado)
+        "saavedra" vs "saavedra" → ratio = 1.000  (perfecto)
 
     RapidFuzz devuelve [0, 100]; dividimos por 100 para mantener la
     interfaz [0, 1] que usan todos los thresholds existentes.
@@ -157,9 +168,7 @@ def _fuzzy_score(query_norm: str, candidate: str) -> float:
     cand_norm = normalize_street_text(candidate)
     if not query_norm or not cand_norm:
         return 0.0
-    if len(query_norm) <= 5:
-        return fuzz.ratio(query_norm, cand_norm) / 100.0
-    return fuzz.WRatio(query_norm, cand_norm) / 100.0
+    return fuzz.ratio(query_norm, cand_norm) / 100.0
 
 
 # ---------------------------------------------------------------------------
@@ -314,9 +323,21 @@ FUZZY_ONLY_TOP_N = 3
 MIN_SCORE_GAP = 0.09
 
 # Longitud mínima (en caracteres) del segmento extraído para que sea válido
-# como candidato a nombre de calle. Evita que monosílabos como "no", "sí"
-# o tokens de 2 letras encuentren coincidencia en calles cortas.
-MIN_SEGMENT_LEN = 3
+# como candidato a nombre de calle.
+# 4 chars: descarta monosílabos ("si", "no") y palabras de 3 letras que
+# escaparon de _STOP_WORDS. Las calles reales más cortas de BB tienen 4+
+# chars normalizados (Alem=4, Roca=4, Cuyo=4, Ruiz=4).
+MIN_SEGMENT_LEN = 4
+
+# Proporción máxima entre la longitud del segmento y la longitud normalizada
+# del mejor candidato. Si el segmento es mucho más largo que la calle, la
+# coincidencia es espuria: fuzz.ratio castiga la diferencia pero no alcanza
+# a bloquearla cuando el score queda entre threshold y el candidato destaca.
+#
+# Ejemplo: "solicita"(8) vs "solis"(5) → ratio=0.615, len_ratio=1.60 → rechazado
+#          "cavera"(6)   vs "saavedra"(8) → ratio=0.714, len_ratio=0.75 → aceptado
+#          "saavedra"(8) vs "saavedra"(8) → ratio=1.000, len_ratio=1.00 → aceptado
+MAX_LEN_RATIO = 1.5
 
 # Score mínimo para aceptar un candidato único (sin competidores sobre threshold).
 # Si solo hay un candidato, exigimos que su score sea muy alto para evitar
@@ -533,50 +554,39 @@ def search_streets_fuzzy(query: str) -> list[str]:
         return []
 
     # Paso 5: fuzzy contra todas las calles usando el segmento extraído.
-    # Usamos rf_process.extract() que devuelve los mejores N resultados
-    # ordenados por score, sin iterar manualmente en Python.
-    #
-    # Scorer elegido según longitud del segmento extraído:
-    #   - len <= 5 chars → fuzz.ratio: evita que partial_ratio infle scores
-    #     de tokens cortos que son substrings de calles largas.
-    #     Ej: "viaje"(5) → partial_ratio vs "rivadavia" = 67 → falso positivo
-    #         "si"(2)    → partial_ratio vs "alsina"    = 100 → falso positivo
-    #   - len > 5 chars → fuzz.WRatio: máxima robustez para errores STT.
-    #     Ej: "cavera"(6) vs "saavedra" → WRatio 63 > ratio 57 ✓
-    final_scorer = fuzz.ratio if len(extracted) <= 5 else fuzz.WRatio
+    # scorer=fuzz.ratio en todos los casos (sin WRatio ni partial_ratio).
+    # Razón: WRatio/partial_ratio inflan el score de palabras conversacionales
+    # que son substrings de nombres de calle ("solicita"→Solís, "viaje"→Rivadavia).
+    # fuzz.ratio compara carácter a carácter y penaliza diferencia de longitud,
+    # lo que mantiene la tolerancia a errores ASR reales ("cavera"→0.714) sin
+    # aceptar palabras conversacionales (scores bajos o bloqueados por MAX_LEN_RATIO).
+    streets_norm_list = [normalize_street_text(s) for s in all_streets]
     rf_results = rf_process.extract(
         extracted,
-        [normalize_street_text(s) for s in all_streets],
-        scorer=final_scorer,
-        limit=len(all_streets),  # necesitamos todos para el filtro de threshold
+        streets_norm_list,
+        scorer=fuzz.ratio,
+        limit=len(all_streets),
         score_cutoff=0,
     )
     # rf_results: list of (matched_norm, score_100, index)
     # Reconstituir nombres originales (no normalizados) para devolverlos al llamador.
-    all_scored: list[tuple[str, float]] = [
-        (all_streets[idx], score_100 / 100.0)
+    all_scored: list[tuple[str, float, str]] = [
+        (all_streets[idx], score_100 / 100.0, streets_norm_list[idx])
         for _, score_100, idx in rf_results
     ]
     # Ya viene ordenado por score desc desde RapidFuzz.
 
-    # Log detallado top5: incluye los tres scores individuales para diagnóstico.
-    top5_log = all_scored[:5]
+    # Log detallado top5.
     top5_detail: list[str] = []
-    for street_name, _ in top5_log:
-        seg_norm  = extracted
-        cand_norm = normalize_street_text(street_name)
-        r   = fuzz.ratio(seg_norm, cand_norm) / 100.0
-        wr  = fuzz.WRatio(seg_norm, cand_norm) / 100.0
-        tsr = fuzz.token_set_ratio(seg_norm, cand_norm) / 100.0
-        top5_detail.append(f"{street_name}(ratio={r:.3f},WRatio={wr:.3f},tsr={tsr:.3f})")
-
+    for street_name, sc, cn in all_scored[:5]:
+        top5_detail.append(f"{street_name}(ratio={sc:.3f})")
     logger.info(
         "[ADDRESS] candidatos RapidFuzz : "
         + (", ".join(top5_detail) if top5_detail else "ninguno")
     )
 
     # Filtrar por threshold mínimo
-    scored = [(n, s) for n, s in all_scored if s >= FUZZY_ONLY_THRESHOLD]
+    scored = [(n, s, cn) for n, s, cn in all_scored if s >= FUZZY_ONLY_THRESHOLD]
 
     if not scored:
         logger.info(f"[ADDRESS] mejor candidata     : ninguna (threshold {FUZZY_ONLY_THRESHOLD})")
@@ -584,13 +594,29 @@ def search_streets_fuzzy(query: str) -> list[str]:
         logger.info("[ADDRESS] decisión final      : RECHAZADO (sin candidatos sobre threshold)")
         return []
 
-    best_name, best_score = scored[0]
-    second_score = scored[1][1] if len(scored) > 1 else 0.0
+    best_name, best_score, best_cn = scored[0]
+
+    # Validación de proporción de longitud: si el segmento es mucho más largo
+    # que el nombre de calle normalizado, la coincidencia es espuria.
+    # "solicita"(8) vs "solis"(5) → len_ratio=1.60 > 1.5 → rechazado.
+    # "cavera"(6)   vs "saavedra"(8) → len_ratio=0.75 → aceptado.
+    len_ratio = len(extracted) / max(len(best_cn), 1)
+    if len_ratio > MAX_LEN_RATIO:
+        logger.info(f"[ADDRESS] mejor candidata     : '{best_name}'")
+        logger.info(f"[ADDRESS] score               : {best_score:.3f}")
+        logger.info(
+            f"[ADDRESS] decisión final      : RECHAZADO "
+            f"(len_ratio {len_ratio:.2f} > MAX_LEN_RATIO {MAX_LEN_RATIO}: "
+            f"'{extracted}'→'{best_cn}')"
+        )
+        return []
+
+    scored2 = [(n, s) for n, s, _ in scored]
+    second_score = scored2[1][1] if len(scored2) > 1 else 0.0
     gap = best_score - second_score
 
-    # Validación de candidato único: si no hay segundo candidato sobre threshold,
-    # exigir score muy alto para evitar falsos positivos por tokens cortos/comunes.
-    if len(scored) == 1 and best_score < MIN_SOLO_SCORE:
+    # Validación de candidato único
+    if len(scored2) == 1 and best_score < MIN_SOLO_SCORE:
         logger.info(f"[ADDRESS] mejor candidata     : '{best_name}'")
         logger.info(f"[ADDRESS] score               : {best_score:.3f} (único candidato)")
         logger.info(
@@ -602,7 +628,7 @@ def search_streets_fuzzy(query: str) -> list[str]:
     logger.info(f"[ADDRESS] mejor candidata     : '{best_name}'")
     logger.info(f"[ADDRESS] score               : {best_score:.3f} (gap vs #2: {gap:.3f})")
 
-    # Segunda validación: el candidato #1 debe destacarse suficientemente del #2
+    # El candidato #1 debe destacarse suficientemente del #2
     if gap < MIN_SCORE_GAP:
         logger.info(
             f"[ADDRESS] decisión final      : RECHAZADO "
@@ -610,7 +636,7 @@ def search_streets_fuzzy(query: str) -> list[str]:
         )
         return []
 
-    top = scored[:FUZZY_ONLY_TOP_N]
+    top = scored2[:FUZZY_ONLY_TOP_N]
     logger.info(
         "[ADDRESS] decisión final      : ACEPTADO → "
         + ", ".join(f"{n}={s:.3f}" for n, s in top)
