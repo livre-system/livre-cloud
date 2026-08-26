@@ -236,10 +236,101 @@ def search_top_streets(query: str) -> list[tuple[str, float, float, float]]:
 
 def search_top3_streets(query: str) -> list[str]:
     """
-    Interfaz compatible con router.py (Twilio).
+    Interfaz compatible con router.py (Twilio) y telnyx.py.
     Devuelve solo los nombres, sin scores.
+
+    SWITCH EMBEDDING ↔ FUZZY:
+      - Modo actual  (embeddings OFF): delega en search_streets_fuzzy()
+      - Para reactivar embeddings:     cambiar por search_top_streets()
+        → return [name for name, *_ in search_top_streets(query)]
     """
-    return [name for name, *_ in search_top_streets(query)]
+    return search_streets_fuzzy(query)
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-only matching  (embeddings desactivados temporalmente)
+#
+# Activado como fuente exclusiva para el flujo de voz Telnyx + ElevenLabs.
+# NO usa get_embedding() ni la columna vector de street_embeddings.
+# Lee únicamente la columna `name` de street_embeddings (ya cacheada).
+#
+# Para volver a activar embeddings:
+#   1. En search_top3_streets(), reemplazar `return search_streets_fuzzy(query)`
+#      por `return [name for name, *_ in search_top_streets(query)]`
+#   2. Nada más. Esta función puede quedarse sin efectos secundarios.
+# ---------------------------------------------------------------------------
+
+# Threshold mínimo de SequenceMatcher.ratio() para considerar un candidato.
+# SequenceMatcher devuelve valores en [0, 1].
+#
+# Elección: 0.55
+#   - "saavedra" vs "saavedra"  → 1.00  ✓
+#   - "cavera"   vs "saavedra"  → ~0.57 ✓  (error STT típico)
+#   - "casilda"  vs "saavedra"  → ~0.50 ✗  (descartado)
+#   - "vereda"   vs "saavedra"  → ~0.46 ✗  (descartado, era stop word igual)
+#   - "hola"     vs cualquier   → < 0.40 ✗ (no genera falsos positivos)
+#   - "pueyrredon" vs "pueyrredon" → 1.00 ✓
+#   - "rodriguez"  vs "rodríguez"  → 0.94 ✓ (normalize_street_text quita tilde)
+#
+#   0.55 es suficientemente alto para evitar que palabras comunes del
+#   transcript (artículos, verbos, etc.) activen una calle.
+FUZZY_ONLY_THRESHOLD = 0.55
+
+# Cuántos candidatos devolver en modo fuzzy-only.
+FUZZY_ONLY_TOP_N = 3
+
+
+def search_streets_fuzzy(query: str) -> list[str]:
+    """
+    Fuzzy-only street search.  NO usa embeddings.
+
+    Compara `query` normalizado contra todos los nombres de street_embeddings
+    usando difflib.SequenceMatcher (stdlib pura, sin dependencias extras).
+
+    Retorna hasta FUZZY_ONLY_TOP_N nombres cuyo score >= FUZZY_ONLY_THRESHOLD,
+    ordenados de mayor a menor score.
+    Si ninguno supera el threshold, retorna [].
+
+    Logs emitidos:
+      [ADDRESS] transcript original : '<texto crudo>'
+      [ADDRESS] transcript norm     : '<texto normalizado>'
+      [ADDRESS] fuzzy top5          : nombre=score, ...
+      [ADDRESS] candidatos finales  : nombre=score, ...  (o "ninguno")
+    """
+    query_norm = normalize_street_text(query)
+
+    logger.info(f"[ADDRESS] transcript original : '{query}'")
+    logger.info(f"[ADDRESS] transcript norm     : '{query_norm}'")
+
+    if not query_norm:
+        logger.info("[ADDRESS] candidatos finales  : ninguno (query vacío tras normalizar)")
+        return []
+
+    all_streets = _load_all_street_names()
+    if not all_streets:
+        logger.warning("[ADDRESS] candidatos finales  : ninguno (street_names vacío)")
+        return []
+
+    scored: list[tuple[str, float]] = []
+    for street in all_streets:
+        score = _fuzzy_score(query_norm, street)
+        if score >= FUZZY_ONLY_THRESHOLD:
+            scored.append((street, score))
+
+    # Log top5 antes de cortar a TOP_N
+    top5 = sorted(scored, key=lambda x: x[1], reverse=True)[:5]
+    logger.info(
+        "[ADDRESS] fuzzy top5          : "
+        + (", ".join(f"{n}={s:.3f}" for n, s in top5) if top5 else "ninguno")
+    )
+
+    top = top5[:FUZZY_ONLY_TOP_N]
+    logger.info(
+        "[ADDRESS] candidatos finales  : "
+        + (", ".join(f"{n}={s:.3f}" for n, s in top) if top else "ninguno")
+    )
+
+    return [name for name, _ in top]
 
 
 # ---------------------------------------------------------------------------

@@ -37,7 +37,9 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.voice.address_matching import (
-    search_top3_streets,
+    search_top3_streets,      # switch embedding ↔ fuzzy vive en address_matching.py
+    search_streets_fuzzy,     # fuzzy-only: importado por claridad; el switch está
+                              # en search_top3_streets() dentro de address_matching.py
     is_yes,
     is_no,
     normalize_numbers_in_text,
