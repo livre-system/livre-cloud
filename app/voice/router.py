@@ -15,7 +15,6 @@ from twilio.twiml.voice_response import VoiceResponse, Gather
 from openai import AsyncOpenAI
 
 from app.core.config import TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER
-from app.memory.embeddings import get_embedding
 from app.llm.groq import GroqProvider
 from app.llm.factory import get_llm_provider
 from app.context.provider import get_livre_sources
@@ -23,6 +22,12 @@ from app.compiler.base_compiler import compile_base_context
 from app.compiler.style_compiler import compile_style_context
 from app.core.database import get_cursor
 from app.memory.service import save_message_to_memory
+from app.voice.address_matching import (
+    search_top3_streets as _search_top3_streets,
+    is_yes as _is_yes,
+    is_no as _is_no,
+    normalize_numbers_in_text as _normalize_numbers_in_text,
+)
 import app.chat.repository as repo
 
 logger = logging.getLogger(__name__)
@@ -37,7 +42,6 @@ openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 _pending_confirmation: dict[str, dict] = {}
 _STREET_HINTS: str | None = None
-_embedding_cache: dict[str, list[str]] = {}  # cache: texto → top3 calles
 
 
 # ---------------------------------------------------------------------------
@@ -102,54 +106,6 @@ def _build_voice_system_prompt() -> str:
         "- No ofrezcas otros canales si el usuario ya está en la llamada.\n"
     )
     return _system_prompt_cache
-
-
-# ---------------------------------------------------------------------------
-# Embeddings con caché
-# ---------------------------------------------------------------------------
-
-def _search_top3_streets(query: str) -> list[str]:
-    street_part = re.sub(r'\b\d+\b', '', query).strip().lower()
-    if not street_part:
-        return []
-
-    if street_part in _embedding_cache:
-        logger.info(f"Cache hit para '{street_part}'")
-        return _embedding_cache[street_part]
-
-    embedding = get_embedding(street_part)
-    if not embedding:
-        return []
-    try:
-        with get_cursor() as cur:
-            cur.execute("""
-                SELECT name, 1 - (embedding <=> %s::vector) AS similarity
-                FROM street_embeddings
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> %s::vector
-                LIMIT 3
-            """, (str(embedding), str(embedding)))
-            rows = cur.fetchall()
-            result = [r["name"] for r in rows if r["similarity"] > 0.5]
-            _embedding_cache[street_part] = result
-            return result
-    except Exception as e:
-        logger.warning(f"Error buscando calles top3: {e}")
-    return []
-
-
-# ---------------------------------------------------------------------------
-# Detección sí/no
-# ---------------------------------------------------------------------------
-
-def _is_yes(text: str) -> bool:
-    t = text.lower()
-    return any(w in t for w in ["sí", "si", "correcto", "exacto", "eso", "ese", "esa", "ok", "dale", "claro"])
-
-
-def _is_no(text: str) -> bool:
-    t = text.lower()
-    return any(w in t for w in ["no", "negativo", "otro", "otra", "distinto"])
 
 
 # ---------------------------------------------------------------------------

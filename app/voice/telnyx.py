@@ -23,6 +23,7 @@ Llamadas entrantes:
 """
 
 import os
+import re
 import json
 import base64
 import struct
@@ -34,6 +35,13 @@ import websockets
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+
+from app.voice.address_matching import (
+    search_top3_streets,
+    is_yes,
+    is_no,
+    normalize_numbers_in_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +149,101 @@ def _build_incoming_texml(ws_url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Validación de direcciones (calle + altura) sobre el transcript de usuario
+#
+# Reutiliza la búsqueda por embedding de app/voice/address_matching.py (la
+# misma que usa el flujo Twilio). No toca audio ni el WebSocket de Telnyx:
+# solo lee el texto que ya llega en el evento "user_transcript" y le manda a
+# ElevenLabs un "contextual_update" con la calle candidata para que el
+# agente la confirme con el usuario en su propia voz.
+#
+# IMPORTANTE (ver aclaración al final de la respuesta): esto asume que el
+# system prompt del agente de ElevenLabs sabe qué hacer con ese contexto
+# (preguntar "¿Es <candidata>?"). El backend no puede forzar literalmente
+# lo que el agente dice, solo puede informarle.
+# ---------------------------------------------------------------------------
+
+async def _send_context_to_eleven(eleven_ws, text: str):
+    try:
+        await eleven_ws.send(json.dumps({
+            "type": "contextual_update",
+            "text": text,
+        }))
+        logger.info(f"[TELNYX] dirección — contexto enviado a ElevenLabs: {text}")
+    except Exception as e:
+        logger.error(f"[TELNYX] Error enviando contextual_update: {e}")
+
+
+async def _handle_user_transcript_for_address(text: str, eleven_ws, call_state: dict):
+    """
+    call_state es un dict propio de la llamada (vive en media_stream) con:
+      - "pending": {"candidates": [...], "index": int, "number": str} | None
+      - "confirmed_address": str | None
+    """
+    if not text:
+        return
+
+    pending = call_state.get("pending")
+
+    try:
+        if pending:
+            candidates = pending["candidates"]
+            index = pending["index"]
+            number = pending["number"]
+
+            if is_yes(text):
+                direccion = f"{candidates[index]} {number}".strip()
+                call_state["pending"] = None
+                call_state["confirmed_address"] = direccion
+                logger.info(f"[TELNYX] dirección confirmada: {direccion}")
+                await _send_context_to_eleven(
+                    eleven_ws, f"[DIRECCIÓN CONFIRMADA: {direccion}]"
+                )
+                return
+
+            if is_no(text) and index + 1 < len(candidates):
+                next_index = index + 1
+                call_state["pending"]["index"] = next_index
+                siguiente = f"{candidates[next_index]} {number}".strip()
+                logger.info(f"[TELNYX] dirección — ofreciendo siguiente candidata: {siguiente}")
+                await _send_context_to_eleven(
+                    eleven_ws,
+                    f"[CANDIDATA DE DIRECCIÓN A CONFIRMAR: {siguiente}] "
+                    f"Preguntale al usuario, en una frase corta: ¿Es {siguiente}?",
+                )
+                return
+
+            # Ni sí ni no reconocido, o se acabaron las candidatas: soltamos
+            # la detección y dejamos que el agente siga la conversación normal.
+            call_state["pending"] = None
+            return
+
+        # ---- Detección de una dirección nueva en el transcript ----
+        normalized = normalize_numbers_in_text(text)
+        numbers = re.findall(r'\b\d+\b', normalized)
+        number = numbers[0] if numbers else ""
+        if not number:
+            return  # sin altura, no hay dirección que validar todavía
+
+        candidates = await asyncio.to_thread(search_top3_streets, normalized)
+        if not candidates:
+            return  # sin coincidencia razonable → el agente sigue y pide aclaración
+
+        call_state["pending"] = {"candidates": candidates, "index": 0, "number": number}
+        candidata = f"{candidates[0]} {number}".strip()
+        logger.info(f"[TELNYX] dirección — candidata detectada: {candidata}")
+        await _send_context_to_eleven(
+            eleven_ws,
+            f"[CANDIDATA DE DIRECCIÓN A CONFIRMAR: {candidata}] "
+            f"Preguntale al usuario, en una frase corta: ¿Es {candidata}?",
+        )
+
+    except Exception as e:
+        # Cualquier falla acá jamás debe cortar la llamada ni el audio.
+        logger.error(f"[TELNYX] Error validando dirección: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -174,6 +277,7 @@ async def media_stream(websocket: WebSocket):
 
     eleven_ws    = None
     eleven_ready = asyncio.Event()
+    call_state: dict = {"pending": None, "confirmed_address": None}
 
     try:
         # Conectar a ElevenLabs
@@ -312,6 +416,7 @@ async def media_stream(websocket: WebSocket):
                     elif event_type == "user_transcript":
                         text = data.get("user_transcription_event", {}).get("user_transcript", "")
                         logger.info(f"[ELEVEN USUARIO] '{text}'")
+                        await _handle_user_transcript_for_address(text, eleven_ws, call_state)
 
                     elif event_type == "error":
                         logger.error(f"[ELEVEN ERROR] {data}")
