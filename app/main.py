@@ -15,6 +15,7 @@ from app.chat.router import router as chat_router
 from app.voice.realtime import router as voice_router
 from app.voice.elevenlabs import router as voice_eleven_router, patch_agent_voice
 from app.voice.gemini_live import router as voice_gemini_router
+from app.voice.telnyx import router as voice_telnyx_router   # ← nuevo
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -55,6 +56,7 @@ app.include_router(chat_router)
 app.include_router(voice_router)
 app.include_router(voice_eleven_router)
 app.include_router(voice_gemini_router)
+app.include_router(voice_telnyx_router)   # ← nuevo
 
 
 # Servir imágenes subidas al volumen
