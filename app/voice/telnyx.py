@@ -64,6 +64,30 @@ ELEVENLABS_AGENT_ID  = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
 ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 
 # ---------------------------------------------------------------------------
+# ⚠️ MODO DE PRUEBA — bypass de address_matching (AISLAMIENTO DE ASR)
+# ---------------------------------------------------------------------------
+# Cuando TELNYX_ADDRESS_MATCH_BYPASS=true, _handle_user_transcript_for_address()
+# no ejecuta NINGUNA lógica de matching de calles: no llama a
+# search_top3_streets()/search_streets_fuzzy() (RapidFuzz, extracción de
+# segmento, thresholds), no arma candidatos, y NO manda ningún
+# "contextual_update" con una calle sugerida. El transcript de ElevenLabs
+# sigue su curso normal hacia el LLM de ElevenLabs sin ninguna corrección
+# de nuestro backend.
+#
+# No afecta: audio, RTP, codec, WebSocket, ElevenLabs, TTS, watchdog,
+# timeouts, ni detección de contestador/IVR (_is_voicemail_ivr sigue activa).
+#
+# REVERSIÓN: poner la env var en "false" o eliminarla. No se borró ni
+# modificó ninguna función de app/voice/address_matching.py.
+ADDRESS_MATCH_BYPASS = os.getenv("TELNYX_ADDRESS_MATCH_BYPASS", "false").strip().lower() == "true"
+if ADDRESS_MATCH_BYPASS:
+    logger.warning(
+        "[TELNYX] ⚠️  MODO DE PRUEBA ACTIVO — address_matching BYPASSEADO "
+        "(TELNYX_ADDRESS_MATCH_BYPASS=true). El transcript de ElevenLabs NO "
+        "será corregido por RapidFuzz antes de llegar al LLM."
+    )
+
+# ---------------------------------------------------------------------------
 # Timeouts de llamada — configurables desde Railway
 # ---------------------------------------------------------------------------
 
@@ -197,6 +221,16 @@ async def _handle_user_transcript_for_address(text: str, eleven_ws, call_state: 
       - "confirmed_address": str | None
     """
     if not text:
+        return
+
+    # --- MODO DE PRUEBA: bypass total del matching de calles -------------
+    # Ver "⚠️ MODO DE PRUEBA" arriba en este archivo. No se toca call_state,
+    # no se llama a RapidFuzz/address_matching, no se manda contextual_update.
+    if ADDRESS_MATCH_BYPASS:
+        logger.info(
+            f"[TELNYX][TEST-MODE] address_matching bypasseado — "
+            f"transcript sin tocar: '{text}'"
+        )
         return
 
     pending = call_state.get("pending")
