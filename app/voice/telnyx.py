@@ -304,7 +304,25 @@ async def media_stream(websocket: WebSocket):
 
     eleven_ws    = None
     eleven_ready = asyncio.Event()
+    stop_event   = asyncio.Event()   # señaliza cierre a ambos loops
     call_state: dict = {"pending": None, "confirmed_address": None, "pending_street": None}
+
+    async def _close_eleven(reason: str = "stop"):
+        """Envía close_socket a ElevenLabs y cierra el WebSocket limpiamente."""
+        ws = eleven_ws
+        if ws is None:
+            return
+        logger.info(f"[ELEVEN] cerrando conversación (razón: {reason})")
+        try:
+            if ws.open:
+                await ws.send(json.dumps({"type": "close_socket"}))
+        except Exception:
+            pass  # ya estaba cerrado, ignorar
+        try:
+            await ws.close()
+        except Exception:
+            pass
+        logger.info("[ELEVEN] WebSocket cerrado")
 
     try:
         # Conectar a ElevenLabs
@@ -377,7 +395,9 @@ async def media_stream(websocket: WebSocket):
                             break
 
                     elif event == "stop":
-                        logger.info(f"[TELNYX] call/control — stop. Total: {audio_chunks} chunks")
+                        logger.info(f"[TELNYX] stop recibido — total audio: {audio_chunks} chunks")
+                        stop_event.set()
+                        await _close_eleven(reason="telnyx-stop")
                         break
 
                     elif event == "dtmf":
@@ -390,7 +410,9 @@ async def media_stream(websocket: WebSocket):
                         logger.debug(f"[TELNYX] call/control — evento: {event}")
 
             except WebSocketDisconnect:
-                logger.info("[TELNYX] conexión — desconectado")
+                logger.info("[TELNYX] conexión — desconectado (disconnect abrupto)")
+                stop_event.set()
+                await _close_eleven(reason="telnyx-disconnect")
 
         # ------------------------------------------------------------------
         # LOOP 2: ElevenLabs → Telnyx
@@ -398,6 +420,11 @@ async def media_stream(websocket: WebSocket):
         async def eleven_to_telnyx():
             try:
                 async for raw_msg in eleven_ws:
+                    # Si ya se señalizó el cierre, descartar mensajes restantes
+                    # y dejar que el loop termine naturalmente.
+                    if stop_event.is_set():
+                        break
+
                     data       = json.loads(raw_msg)
                     event_type = data.get("type")
 
@@ -452,16 +479,20 @@ async def media_stream(websocket: WebSocket):
                         logger.debug(f"[ELEVEN] evento: {event_type}")
 
             except Exception as e:
-                logger.error(f"[ELEVEN] eleven_to_telnyx error: {e}")
+                if not stop_event.is_set():
+                    # Solo loguear si NO fue un cierre intencional nuestro
+                    logger.error(f"[ELEVEN] eleven_to_telnyx error: {e}")
 
         await asyncio.gather(telnyx_to_eleven(), eleven_to_telnyx())
 
     except Exception as e:
         logger.exception(f"[TELNYX] Error en media_stream: {e}")
     finally:
-        if eleven_ws:
-            await eleven_ws.close()
-        logger.info("[TELNYX] conexión — WebSocket cerrado")
+        # Garantía final: si por alguna razón _close_eleven no se llamó antes
+        # (excepción inesperada en gather), cerramos igual.
+        if not stop_event.is_set():
+            await _close_eleven(reason="finally-fallback")
+        logger.info("[TELNYX] conexión — sesión finalizada")
 
 
 # ---------------------------------------------------------------------------
