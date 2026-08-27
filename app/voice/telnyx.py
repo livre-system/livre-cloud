@@ -64,9 +64,14 @@ ELEVENLABS_AGENT_ID  = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
 ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 
 # ---------------------------------------------------------------------------
-# ⚠️ MODO DE PRUEBA — bypass de address_matching (AISLAMIENTO DE ASR)
+# FLUJO PREDETERMINADO — address_matching desactivado por defecto
 # ---------------------------------------------------------------------------
-# Cuando TELNYX_ADDRESS_MATCH_BYPASS=true, _handle_user_transcript_for_address()
+# Decisión de producto: el Agent de ElevenLabs escucha, interpreta y
+# conversa directamente (origen, destino, calle, altura, confirmaciones),
+# sin que nuestro backend intente corregir nombres de calle.
+#
+# Por eso ADDRESS_MATCH_BYPASS es "true" por DEFECTO: cuando la env var
+# TELNYX_ADDRESS_MATCH_BYPASS no está seteada, _handle_user_transcript_for_address()
 # no ejecuta NINGUNA lógica de matching de calles: no llama a
 # search_top3_streets()/search_streets_fuzzy() (RapidFuzz, extracción de
 # segmento, thresholds), no arma candidatos, y NO manda ningún
@@ -77,14 +82,14 @@ ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
 # No afecta: audio, RTP, codec, WebSocket, ElevenLabs, TTS, watchdog,
 # timeouts, ni detección de contestador/IVR (_is_voicemail_ivr sigue activa).
 #
-# REVERSIÓN: poner la env var en "false" o eliminarla. No se borró ni
-# modificó ninguna función de app/voice/address_matching.py.
-ADDRESS_MATCH_BYPASS = os.getenv("TELNYX_ADDRESS_MATCH_BYPASS", "false").strip().lower() == "true"
-if ADDRESS_MATCH_BYPASS:
+# REVERSIÓN (reactivar el matcher): setear TELNYX_ADDRESS_MATCH_BYPASS=false.
+# No se borró ni modificó ninguna función de app/voice/address_matching.py.
+ADDRESS_MATCH_BYPASS = os.getenv("TELNYX_ADDRESS_MATCH_BYPASS", "true").strip().lower() == "true"
+if not ADDRESS_MATCH_BYPASS:
     logger.warning(
-        "[TELNYX] ⚠️  MODO DE PRUEBA ACTIVO — address_matching BYPASSEADO "
-        "(TELNYX_ADDRESS_MATCH_BYPASS=true). El transcript de ElevenLabs NO "
-        "será corregido por RapidFuzz antes de llegar al LLM."
+        "[TELNYX] ⚠️  address_matching REACTIVADO manualmente "
+        "(TELNYX_ADDRESS_MATCH_BYPASS=false). El backend volverá a mandar "
+        "contextual_update con calles candidatas vía RapidFuzz."
     )
 
 # ---------------------------------------------------------------------------
@@ -223,14 +228,12 @@ async def _handle_user_transcript_for_address(text: str, eleven_ws, call_state: 
     if not text:
         return
 
-    # --- MODO DE PRUEBA: bypass total del matching de calles -------------
-    # Ver "⚠️ MODO DE PRUEBA" arriba en este archivo. No se toca call_state,
+    # --- Flujo predeterminado: sin matching de calles ---------------------
+    # Ver "FLUJO PREDETERMINADO" arriba en este archivo. No se toca call_state,
     # no se llama a RapidFuzz/address_matching, no se manda contextual_update.
+    # El Agent de ElevenLabs es quien interpreta y confirma la dirección.
     if ADDRESS_MATCH_BYPASS:
-        logger.info(
-            f"[TELNYX][TEST-MODE] address_matching bypasseado — "
-            f"transcript sin tocar: '{text}'"
-        )
+        logger.debug(f"[TELNYX] transcript sin matching (flujo predeterminado): '{text}'")
         return
 
     pending = call_state.get("pending")
