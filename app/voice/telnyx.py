@@ -37,15 +37,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Request, HTTPExce
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from app.voice.address_matching import (
-    search_top3_streets,      # switch embedding ↔ fuzzy vive en address_matching.py
-    search_streets_fuzzy,     # fuzzy-only: importado por claridad; el switch está
-                              # en search_top3_streets() dentro de address_matching.py
-    is_yes,
-    is_no,
-    normalize_numbers_in_text,
-)
-
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/voice-telnyx", tags=["voice-telnyx"])
@@ -62,35 +53,6 @@ BASE_URL             = os.getenv("BASE_URL", "")
 ELEVENLABS_API_KEY   = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID  = "agent_3701m0dfvnmmemptqcm2jym9wdvv"
 ELEVENLABS_VOICE_ID  = os.getenv("ELEVENLABS_VOICE_ID", "2KrcT8wE5IyKnWz2nknz")
-
-# ---------------------------------------------------------------------------
-# FLUJO PREDETERMINADO — address_matching desactivado por defecto
-# ---------------------------------------------------------------------------
-# Decisión de producto: el Agent de ElevenLabs escucha, interpreta y
-# conversa directamente (origen, destino, calle, altura, confirmaciones),
-# sin que nuestro backend intente corregir nombres de calle.
-#
-# Por eso ADDRESS_MATCH_BYPASS es "true" por DEFECTO: cuando la env var
-# TELNYX_ADDRESS_MATCH_BYPASS no está seteada, _handle_user_transcript_for_address()
-# no ejecuta NINGUNA lógica de matching de calles: no llama a
-# search_top3_streets()/search_streets_fuzzy() (RapidFuzz, extracción de
-# segmento, thresholds), no arma candidatos, y NO manda ningún
-# "contextual_update" con una calle sugerida. El transcript de ElevenLabs
-# sigue su curso normal hacia el LLM de ElevenLabs sin ninguna corrección
-# de nuestro backend.
-#
-# No afecta: audio, RTP, codec, WebSocket, ElevenLabs, TTS, watchdog,
-# timeouts, ni detección de contestador/IVR (_is_voicemail_ivr sigue activa).
-#
-# REVERSIÓN (reactivar el matcher): setear TELNYX_ADDRESS_MATCH_BYPASS=false.
-# No se borró ni modificó ninguna función de app/voice/address_matching.py.
-ADDRESS_MATCH_BYPASS = os.getenv("TELNYX_ADDRESS_MATCH_BYPASS", "true").strip().lower() == "true"
-if not ADDRESS_MATCH_BYPASS:
-    logger.warning(
-        "[TELNYX] ⚠️  address_matching REACTIVADO manualmente "
-        "(TELNYX_ADDRESS_MATCH_BYPASS=false). El backend volverá a mandar "
-        "contextual_update con calles candidatas vía RapidFuzz."
-    )
 
 # ---------------------------------------------------------------------------
 # Timeouts de llamada — configurables desde Railway
@@ -191,136 +153,6 @@ def _build_incoming_texml(ws_url: str) -> str:
     />
   </Connect>
 </Response>"""
-
-
-# ---------------------------------------------------------------------------
-# Validación de direcciones (calle + altura) sobre el transcript de usuario
-#
-# Reutiliza la búsqueda por embedding de app/voice/address_matching.py (la
-# misma que usa el flujo Twilio). No toca audio ni el WebSocket de Telnyx:
-# solo lee el texto que ya llega en el evento "user_transcript" y le manda a
-# ElevenLabs un "contextual_update" con la calle candidata para que el
-# agente la confirme con el usuario en su propia voz.
-#
-# IMPORTANTE (ver aclaración al final de la respuesta): esto asume que el
-# system prompt del agente de ElevenLabs sabe qué hacer con ese contexto
-# (preguntar "¿Es <candidata>?"). El backend no puede forzar literalmente
-# lo que el agente dice, solo puede informarle.
-# ---------------------------------------------------------------------------
-
-async def _send_context_to_eleven(eleven_ws, text: str):
-    try:
-        await eleven_ws.send(json.dumps({
-            "type": "contextual_update",
-            "text": text,
-        }))
-        logger.info(f"[TELNYX] dirección — contexto enviado a ElevenLabs: {text}")
-    except Exception as e:
-        logger.error(f"[TELNYX] Error enviando contextual_update: {e}")
-
-
-async def _handle_user_transcript_for_address(text: str, eleven_ws, call_state: dict):
-    """
-    call_state es un dict propio de la llamada (vive en media_stream) con:
-      - "pending": {"candidates": [...], "index": int, "number": str} | None
-      - "confirmed_address": str | None
-    """
-    if not text:
-        return
-
-    # --- Flujo predeterminado: sin matching de calles ---------------------
-    # Ver "FLUJO PREDETERMINADO" arriba en este archivo. No se toca call_state,
-    # no se llama a RapidFuzz/address_matching, no se manda contextual_update.
-    # El Agent de ElevenLabs es quien interpreta y confirma la dirección.
-    if ADDRESS_MATCH_BYPASS:
-        logger.debug(f"[TELNYX] transcript sin matching (flujo predeterminado): '{text}'")
-        return
-
-    pending = call_state.get("pending")
-
-    try:
-        if pending:
-            candidates = pending["candidates"]
-            index = pending["index"]
-            number = pending["number"]
-
-            if is_yes(text):
-                direccion = f"{candidates[index]} {number}".strip()
-                call_state["pending"] = None
-                call_state["confirmed_address"] = direccion
-                logger.info(f"[TELNYX] dirección confirmada: {direccion}")
-                await _send_context_to_eleven(
-                    eleven_ws, f"[DIRECCIÓN CONFIRMADA: {direccion}]"
-                )
-                return
-
-            if is_no(text) and index + 1 < len(candidates):
-                next_index = index + 1
-                call_state["pending"]["index"] = next_index
-                siguiente = f"{candidates[next_index]} {number}".strip()
-                logger.info(f"[TELNYX] dirección — ofreciendo siguiente candidata: {siguiente}")
-                await _send_context_to_eleven(
-                    eleven_ws,
-                    f"[CANDIDATA DE DIRECCIÓN A CONFIRMAR: {siguiente}] "
-                    f"Preguntale al usuario, en una frase corta: ¿Es {siguiente}?",
-                )
-                return
-
-            # Ni sí ni no reconocido, o se acabaron las candidatas: soltamos
-            # la detección y dejamos que el agente siga la conversación normal.
-            call_state["pending"] = None
-            return
-
-        # ---- Detección de una dirección nueva en el transcript ----
-        normalized = normalize_numbers_in_text(text)
-        numbers = re.findall(r'\b\d+\b', normalized)
-        number = numbers[0] if numbers else ""
-
-        # Si hay una calle pendiente de altura del turno anterior, combinamos.
-        pending_street_candidates = call_state.get("pending_street")
-        if number and pending_street_candidates:
-            # Usuario dijo la altura después de haber dicho la calle sola.
-            call_state["pending_street"] = None
-            call_state["pending"] = {
-                "candidates": pending_street_candidates,
-                "index": 0,
-                "number": number,
-            }
-            candidata = f"{pending_street_candidates[0]} {number}".strip()
-            logger.info(f"[TELNYX] dirección — calle previa + altura nueva: {candidata}")
-            await _send_context_to_eleven(
-                eleven_ws,
-                f"[CANDIDATA DE DIRECCIÓN A CONFIRMAR: {candidata}] "
-                f"Preguntale al usuario, en una frase corta: ¿Es {candidata}?",
-            )
-            return
-
-        candidates = await asyncio.to_thread(search_top3_streets, normalized)
-        if not candidates:
-            # Sin coincidencia razonable → el agente sigue y pide aclaración
-            return
-
-        if not number:
-            # Calle detectada pero sin altura todavía: guardar y esperar.
-            call_state["pending_street"] = candidates
-            logger.info(
-                f"[TELNYX] dirección — calle sin altura, guardando candidatas: {candidates}"
-            )
-            return
-
-        call_state["pending"] = {"candidates": candidates, "index": 0, "number": number}
-        call_state["pending_street"] = None
-        candidata = f"{candidates[0]} {number}".strip()
-        logger.info(f"[TELNYX] dirección — candidata detectada: {candidata}")
-        await _send_context_to_eleven(
-            eleven_ws,
-            f"[CANDIDATA DE DIRECCIÓN A CONFIRMAR: {candidata}] "
-            f"Preguntale al usuario, en una frase corta: ¿Es {candidata}?",
-        )
-
-    except Exception as e:
-        # Cualquier falla acá jamás debe cortar la llamada ni el audio.
-        logger.error(f"[TELNYX] Error validando dirección: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -467,9 +299,6 @@ async def media_stream(websocket: WebSocket):
     user_spoke   = asyncio.Event()   # se setea en cada user_transcript confirmado humano
     audio_active = asyncio.Event()   # se setea cuando llega audio inbound con energía detectable
     call_state: dict = {
-        "pending": None,
-        "confirmed_address": None,
-        "pending_street": None,
         "human_turns": 0,   # transcripts procesados como humanos (para regla longitud)
     }
 
@@ -658,6 +487,11 @@ async def media_stream(websocket: WebSocket):
                         logger.info(f"[ELEVEN GPT] '{text}'")
 
                     elif event_type == "user_transcript":
+                        # Solo diagnóstico/logging. Este transcript NO se modifica,
+                        # interpreta, ni corrige antes de llegar al LLM de ElevenLabs:
+                        # el Agent ya lo procesó de forma independiente en su propio
+                        # pipeline (ASR + LLM + TTS). Nuestro backend no envía
+                        # contextual_update ni ninguna sugerencia de calle.
                         text = data.get("user_transcription_event", {}).get("user_transcript", "")
                         logger.info(f"[ELEVEN USUARIO] '{text}'")
 
@@ -683,7 +517,6 @@ async def media_stream(websocket: WebSocket):
                         call_state["human_turns"] += 1
                         # Señalizar actividad humana real al watchdog de inactividad.
                         user_spoke.set()
-                        await _handle_user_transcript_for_address(text, eleven_ws, call_state)
 
                     elif event_type == "error":
                         logger.error(f"[ELEVEN ERROR] {data}")
