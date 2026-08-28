@@ -18,8 +18,11 @@ Llamadas salientes:
   El streaming arranca automáticamente al contestar. Sin TeXML.
 
 Llamadas entrantes:
-  Telnyx llama al webhook /incoming → respondemos TeXML <Connect><Stream>
-  Esto es obligatorio para llamadas entrantes en Telnyx.
+  El número está asociado a una Call Control Application ("livre-ia"), NO a
+  una TeXML Application. Telnyx entrega el evento call.initiated al webhook
+  /incoming y espera control vía Call Control API — TeXML no se ejecuta acá.
+  Respondemos contestando la llamada con POST /v2/calls/{id}/actions/answer
+  + stream_url + stream_bidirectional_mode=rtp. Mismo mecanismo que salientes.
 """
 
 import os
@@ -132,27 +135,59 @@ def _build_rtp_pcmu(pcm16k_bytes: bytes) -> str:
 
 
 # ---------------------------------------------------------------------------
-# TeXML para llamadas ENTRANTES
+# Llamada ENTRANTE — Call Control API, sin TeXML
+#
+# El número vive en una Call Control Application ("livre-ia"), no en una
+# TeXML Application. Para este tipo de conexión, Telnyx NO ejecuta TeXML:
+# manda un webhook con el evento call.initiated y espera que la llamada se
+# controle por la Call Control API. Contestamos con /actions/answer pasando
+# los mismos parámetros de streaming que ya usamos en salientes — el stream
+# arranca automáticamente al contestar, sin webhook adicional.
+#
+# Doc: https://developers.telnyx.com/api/call-control/answer-call
 # ---------------------------------------------------------------------------
 
-def _build_incoming_texml(ws_url: str) -> str:
+async def _answer_incoming_call(call_control_id: str, ws_url: str) -> None:
     """
-    TeXML mínimo para llamadas entrantes.
-    Abre el WebSocket bidireccional con PCMU 8kHz en ambas direcciones.
-    bidirectionalMode=rtp es obligatorio para audio en tiempo real.
+    Contesta una llamada entrante vía Call Control API arrancando el
+    streaming bidireccional (PCMU 8kHz, ambos tracks) al mismo tiempo.
     """
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Connect>
-    <Stream
-      url="{ws_url}"
-      track="both_tracks"
-      bidirectionalMode="rtp"
-      bidirectionalCodec="PCMU"
-      bidirectionalSamplingRate="8000"
-    />
-  </Connect>
-</Response>"""
+    payload = {
+        "stream_url":                         ws_url,
+        "stream_track":                       "both_tracks",
+        "stream_bidirectional_mode":          "rtp",
+        "stream_bidirectional_codec":         "PCMU",
+        "stream_bidirectional_sampling_rate": 8000,
+    }
+
+    logger.info(
+        f"[TELNYX] call/control — contestando entrante "
+        f"call_control_id={call_control_id} stream={ws_url}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post(
+                f"https://api.telnyx.com/v2/calls/{call_control_id}/actions/answer",
+                headers={
+                    "Authorization": f"Bearer {TELNYX_API_KEY}",
+                    "Content-Type":  "application/json",
+                    "Accept":        "application/json",
+                },
+                json=payload,
+            )
+        if resp.status_code not in (200, 201, 202):
+            logger.error(
+                f"[TELNYX] Error al contestar entrante {resp.status_code}: "
+                f"{resp.text[:400]}"
+            )
+        else:
+            logger.info(
+                f"[TELNYX] call/control — entrante contestada "
+                f"call_control_id={call_control_id}"
+            )
+    except httpx.RequestError as e:
+        logger.exception(f"[TELNYX] Error de red al contestar entrante: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -268,13 +303,39 @@ def _is_voicemail_ivr(text: str, human_turns: int) -> tuple[bool, str]:
 @router.post("/incoming")
 async def incoming_call(request: Request):
     """
-    Webhook para llamadas entrantes.
-    Configurar en Telnyx: Portal → tu número → Voice URL → esta URL.
+    Webhook de eventos de Call Control para llamadas entrantes.
+    Configurar en Telnyx: Portal → Call Control App "livre-ia" → Webhook URL
+    → esta URL (no "Voice URL" de TeXML App, que no aplica acá).
+
+    Telnyx no espera contenido en la respuesta (no es TeXML): solo un 200
+    rápido. El control real de la llamada se hace disparando la acción
+    "answer" contra la Call Control API cuando llega call.initiated.
     """
-    host   = BASE_URL.replace("https://", "").replace("http://", "")
-    ws_url = f"wss://{host}/voice-telnyx/stream"
-    logger.info(f"[TELNYX] call/control — llamada entrante → {ws_url}")
-    return Response(content=_build_incoming_texml(ws_url), media_type="application/xml")
+    try:
+        body = await request.json()
+    except Exception as e:
+        logger.error(f"[TELNYX] /incoming — payload inválido: {e}")
+        return Response(status_code=200)  # no reintentar por un parseo roto
+
+    event_type      = body.get("data", {}).get("event_type", "")
+    payload         = body.get("data", {}).get("payload", {})
+    call_control_id = payload.get("call_control_id")
+
+    logger.info(
+        f"[TELNYX] call/control — webhook entrante "
+        f"event={event_type} call_control_id={call_control_id}"
+    )
+
+    if (
+        event_type == "call.initiated"
+        and payload.get("direction") == "incoming"
+        and call_control_id
+    ):
+        host   = BASE_URL.replace("https://", "").replace("http://", "")
+        ws_url = f"wss://{host}/voice-telnyx/stream"
+        await _answer_incoming_call(call_control_id, ws_url)
+
+    return Response(status_code=200)
 
 
 @router.websocket("/stream")
