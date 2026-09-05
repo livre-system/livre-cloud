@@ -19,103 +19,141 @@ FREE_MESSAGE_LIMIT = 20
 
 
 def _get_all_memory(user_id: str) -> str:
-    """Trae toda la memoria del usuario desencriptada."""
+    """Trae toda la memoria estática del usuario (documentos subidos, excluye chat_log)."""
+    import logging
+    log = logging.getLogger(__name__)
     try:
         with get_cursor() as cur:
             cur.execute("""
                 SELECT md.name, mr.data
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
-                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%'
+                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
                 ORDER BY mr.created_at ASC
             """, [user_id])
             rows = cur.fetchall()
+
         if not rows:
+            log.info("[MEMORY DEBUG] _get_all_memory: sin filas (0 docs estáticos)")
             return ""
+
         lines = []
         for r in rows:
-            msg = r["data"].get("message", "")
+            # Soportar tanto dict-cursor como tuple-cursor
+            try:
+                if hasattr(r, "keys") or isinstance(r, dict):
+                    name = r["name"]
+                    data = r["data"]
+                else:
+                    name = r[0]
+                    data = r[1]
+            except Exception as parse_err:
+                log.error(f"[MEMORY DEBUG] _get_all_memory: error parseando fila {r!r}: {parse_err}")
+                continue
+
+            if isinstance(data, str):
+                import json
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    data = {}
+
+            msg = data.get("message", "") if isinstance(data, dict) else ""
             if not msg:
                 continue
             try:
                 msg = decrypt(msg)
             except Exception:
                 pass
-            lines.append(f"[{r['name']}]\n{msg.strip()}")
+            lines.append(f"[{name}]\n{msg.strip()}")
+
+        log.info(f"[MEMORY DEBUG] _get_all_memory: {len(lines)} líneas de memoria estática")
         return "\n\n".join(lines)
+
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"_get_all_memory error: {e}")
+        import logging as _log
+        _log.getLogger(__name__).error(f"[MEMORY DEBUG] _get_all_memory error: {e}", exc_info=True)
         return ""
 
 
 def _search_memory(user_id: str, query: str) -> str:
     """
-    Busca en memoria por similitud semántica.
-    Loguea diagnóstico completo para depuración.
+    Búsqueda semántica sobre memoria del usuario.
+    Logs explícitos para depuración de retrieval.
+    Independiente de _get_all_memory — si esa falla, esta igual corre.
     """
     import logging
     log = logging.getLogger(__name__)
 
-    # 1. Verificar que se generó el query embedding
-    from app.memory.embeddings import get_query_embedding
-    test_emb = get_query_embedding(query)
-    log.info(f"[RETRIEVAL] query_embedding generado: {'SÍ' if test_emb else 'NO'} — query='{query[:80]}'")
+    log.info(f"[MEMORY DEBUG] query={query!r}")
 
-    # 2. Contar filas candidatas totales en memory_rows para este usuario
+    # 1. Generar query embedding
     try:
-        with get_cursor() as cur:
-            cur.execute("""
-                SELECT
-                    md.key,
-                    md.name,
-                    md.id AS document_id,
-                    COUNT(mr.id) AS total_rows,
-                    COUNT(mr.embedding) AS rows_con_embedding
-                FROM memory_documents md
-                LEFT JOIN memory_rows mr ON mr.document_id = md.id
-                WHERE md.user_id = %s
-                GROUP BY md.id, md.key, md.name
-                ORDER BY md.created_at ASC
-            """, [user_id])
-            docs = cur.fetchall()
-        log.info(f"[RETRIEVAL] Documentos del usuario:")
-        for d in docs:
-            log.info(
-                f"  key={d['key']} | name={d['name']} | "
-                f"doc_id={d['document_id']} | "
-                f"rows={d['total_rows']} | con_embedding={d['rows_con_embedding']}"
-            )
+        from app.memory.embeddings import get_query_embedding
+        test_emb = get_query_embedding(query)
+        log.info(f"[MEMORY DEBUG] query_embedding_generado={'SÍ' if test_emb else 'NO'} dims={len(test_emb) if test_emb else 0}")
     except Exception as e:
-        log.error(f"[RETRIEVAL] Error contando candidatos: {e}")
+        log.error(f"[MEMORY DEBUG] ERROR generando query embedding: {e}")
+        test_emb = None
 
-    # 3. Ejecutar búsqueda semántica real
-    rows = search_memory_by_embedding(user_id, query, limit=20, min_similarity=0.30)
-    log.info(f"[RETRIEVAL] Resultados de search_memory_by_embedding: {len(rows)}")
+    if not test_emb:
+        log.error("[MEMORY DEBUG] Sin query embedding — abortando búsqueda semántica")
+        return ""
+
+    # 2. Ejecutar búsqueda semántica
+    try:
+        rows = search_memory_by_embedding(user_id, query, limit=20, min_similarity=0.30)
+    except Exception as e:
+        log.error(f"[MEMORY DEBUG] ERROR en search_memory_by_embedding: {e}", exc_info=True)
+        return ""
+
+    log.info(f"[MEMORY DEBUG] semantic_search_called=SÍ semantic_results_count={len(rows)}")
 
     if not rows:
-        log.warning(f"[RETRIEVAL] CERO resultados — el LLM NO recibirá contexto de memoria")
+        log.warning("[MEMORY DEBUG] semantic_results_count=0 — el LLM NO recibirá contexto semántico")
         return ""
 
     lines = []
-    for i, r in enumerate(rows):
-        msg = r["data"].get("message", "")
-        key = r.get("key", "?")
-        name = r.get("name", "?")
-        similarity = r.get("similarity", 0)
+    for i, r in enumerate(rows, 1):
+        # Acceso robusto: soportar dict-cursor y tuple-cursor
+        try:
+            if hasattr(r, "keys") or isinstance(r, dict):
+                name      = r.get("name", "?")
+                data      = r.get("data", {})
+                similarity = r.get("similarity", 0)
+            else:
+                # tuple: (name, data, similarity)
+                name      = r[0]
+                data      = r[1]
+                similarity = r[2]
+        except Exception as pe:
+            log.error(f"[MEMORY DEBUG] Error parseando resultado {i}: {pe} — fila={r!r}")
+            continue
+
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except Exception:
+                data = {}
+
+        msg = data.get("message", "") if isinstance(data, dict) else ""
         if not msg:
             continue
+
         try:
             msg = decrypt(msg)
         except Exception:
             pass
+
         log.info(
-            f"[RETRIEVAL] [{i+1}] key={key} | name={name} | "
-            f"similarity={similarity:.4f} | preview='{msg[:80]}'"
+            f"[MEMORY DEBUG] result_{i} document_name={name!r} "
+            f"similarity={similarity:.4f} "
+            f"content={msg[:120]!r}"
         )
         lines.append(f"[{name}]\n{msg.strip()}")
 
-    log.info(f"[RETRIEVAL] Total enviado al LLM: {len(lines)} fragmento(s)")
+    log.info(f"[MEMORY DEBUG] semantic_memory_chars={sum(len(l) for l in lines)}")
     return "\n\n".join(lines)
 
 
@@ -123,28 +161,42 @@ def _build_system_prompt(user_id: str, query: str = "") -> str:
     import logging
     log = logging.getLogger(__name__)
 
+    log.info(f"[MEMORY DEBUG] === _build_system_prompt START user={user_id} query={query!r}")
+
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    # Memoria estática: documentos subidos explícitamente (excluyendo chat_log).
-    # Se inyecta siempre — es el contexto base del usuario.
-    static_memory = _get_all_memory(user_id)
+    # Memoria estática: falla de forma aislada — NO bloquea la búsqueda semántica.
+    try:
+        static_memory = _get_all_memory(user_id)
+    except Exception as e:
+        log.error(f"[MEMORY DEBUG] _get_all_memory excepción (ignorada): {e}")
+        static_memory = ""
 
-    # Memoria semántica: búsqueda por similitud sobre el query actual.
-    # Se inyecta solo si el query tiene contenido — es el retrieval relevante.
+    log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
+
+    # Búsqueda semántica: SIEMPRE se ejecuta si hay query, independiente de static_memory.
     semantic_memory = ""
     if query and query.strip():
-        semantic_memory = _search_memory(user_id, query)
+        log.info("[MEMORY DEBUG] semantic_search_called=SÍ")
+        try:
+            semantic_memory = _search_memory(user_id, query)
+        except Exception as e:
+            log.error(f"[MEMORY DEBUG] _search_memory excepción: {e}", exc_info=True)
+            semantic_memory = ""
+    else:
+        log.info("[MEMORY DEBUG] semantic_search_called=NO (query vacío)")
 
-    log.info(
-        f"[PROMPT] static_memory={len(static_memory)} chars | "
-        f"semantic_memory={len(semantic_memory)} chars | "
-        f"query='{query[:80]}'"
-    )
+    log.info(f"[MEMORY DEBUG] semantic_memory_chars={len(semantic_memory)}")
+
+    final_context = (static_memory or "") + (semantic_memory or "")
+    log.info(f"[MEMORY DEBUG] final_context_chars={len(final_context)}")
+
     print(
-        f">>> SYSTEM PROMPT — static={len(static_memory)}c "
-        f"semantic={len(semantic_memory)}c",
+        f">>> [MEMORY DEBUG] static={len(static_memory)}c "
+        f"semantic={len(semantic_memory)}c "
+        f"final={len(final_context)}c",
         flush=True,
     )
 
@@ -155,12 +207,11 @@ def _build_system_prompt(user_id: str, query: str = "") -> str:
 
     if semantic_memory:
         parts.append(
-            f"Información relevante para esta pregunta "
-            f"(recuperada de la memoria por similitud semántica):\n{semantic_memory}"
+            "Información relevante recuperada de la memoria del usuario "
+            f"(búsqueda semántica sobre la pregunta actual):\n{semantic_memory}"
         )
 
     if not static_memory and not semantic_memory:
-        # Sin memoria: el LLM no debe inventar datos personales.
         parts.append(
             "IMPORTANTE: No tienes información personal del usuario en memoria. "
             "No inventes datos ni nombres. Responde solo con lo que sabes."
@@ -168,7 +219,9 @@ def _build_system_prompt(user_id: str, query: str = "") -> str:
 
     parts.append(f"Estilo:\n{style_context['sources']['style']}")
 
-    return "\n\n".join(parts)
+    full_prompt = "\n\n".join(parts)
+    log.info(f"[MEMORY DEBUG] === _build_system_prompt END prompt_chars={len(full_prompt)}")
+    return full_prompt
 
 
 def _is_quota_error(e: Exception) -> bool:
