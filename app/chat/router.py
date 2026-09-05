@@ -50,36 +50,125 @@ def _get_all_memory(user_id: str) -> str:
 
 
 def _search_memory(user_id: str, query: str) -> str:
-    """Busca por embeddings. Si no encuentra nada, devuelve vacío."""
-    rows = search_memory_by_embedding(user_id, query)
+    """
+    Busca en memoria por similitud semántica.
+    Loguea diagnóstico completo para depuración.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    # 1. Verificar que se generó el query embedding
+    from app.memory.embeddings import get_query_embedding
+    test_emb = get_query_embedding(query)
+    log.info(f"[RETRIEVAL] query_embedding generado: {'SÍ' if test_emb else 'NO'} — query='{query[:80]}'")
+
+    # 2. Contar filas candidatas totales en memory_rows para este usuario
+    try:
+        with get_cursor() as cur:
+            cur.execute("""
+                SELECT
+                    md.key,
+                    md.name,
+                    md.id AS document_id,
+                    COUNT(mr.id) AS total_rows,
+                    COUNT(mr.embedding) AS rows_con_embedding
+                FROM memory_documents md
+                LEFT JOIN memory_rows mr ON mr.document_id = md.id
+                WHERE md.user_id = %s
+                GROUP BY md.id, md.key, md.name
+                ORDER BY md.created_at ASC
+            """, [user_id])
+            docs = cur.fetchall()
+        log.info(f"[RETRIEVAL] Documentos del usuario:")
+        for d in docs:
+            log.info(
+                f"  key={d['key']} | name={d['name']} | "
+                f"doc_id={d['document_id']} | "
+                f"rows={d['total_rows']} | con_embedding={d['rows_con_embedding']}"
+            )
+    except Exception as e:
+        log.error(f"[RETRIEVAL] Error contando candidatos: {e}")
+
+    # 3. Ejecutar búsqueda semántica real
+    rows = search_memory_by_embedding(user_id, query, limit=20, min_similarity=0.30)
+    log.info(f"[RETRIEVAL] Resultados de search_memory_by_embedding: {len(rows)}")
+
     if not rows:
+        log.warning(f"[RETRIEVAL] CERO resultados — el LLM NO recibirá contexto de memoria")
         return ""
+
     lines = []
-    for r in rows:
+    for i, r in enumerate(rows):
         msg = r["data"].get("message", "")
+        key = r.get("key", "?")
+        name = r.get("name", "?")
+        similarity = r.get("similarity", 0)
         if not msg:
             continue
         try:
             msg = decrypt(msg)
         except Exception:
             pass
-        lines.append(f"[{r['name']}]\n{msg.strip()[:500]}")
+        log.info(
+            f"[RETRIEVAL] [{i+1}] key={key} | name={name} | "
+            f"similarity={similarity:.4f} | preview='{msg[:80]}'"
+        )
+        lines.append(f"[{name}]\n{msg.strip()}")
+
+    log.info(f"[RETRIEVAL] Total enviado al LLM: {len(lines)} fragmento(s)")
     return "\n\n".join(lines)
 
 
 def _build_system_prompt(user_id: str, query: str = "") -> str:
+    import logging
+    log = logging.getLogger(__name__)
+
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    memory_text = _get_all_memory(user_id)
+    # Memoria estática: documentos subidos explícitamente (excluyendo chat_log).
+    # Se inyecta siempre — es el contexto base del usuario.
+    static_memory = _get_all_memory(user_id)
 
-    print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)
-    return (
-        f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
-        + (f"Contexto operativo:\n{memory_text}\n\n" if memory_text else "")
-        + f"Estilo:\n{style_context['sources']['style']}"
+    # Memoria semántica: búsqueda por similitud sobre el query actual.
+    # Se inyecta solo si el query tiene contenido — es el retrieval relevante.
+    semantic_memory = ""
+    if query and query.strip():
+        semantic_memory = _search_memory(user_id, query)
+
+    log.info(
+        f"[PROMPT] static_memory={len(static_memory)} chars | "
+        f"semantic_memory={len(semantic_memory)} chars | "
+        f"query='{query[:80]}'"
     )
+    print(
+        f">>> SYSTEM PROMPT — static={len(static_memory)}c "
+        f"semantic={len(semantic_memory)}c",
+        flush=True,
+    )
+
+    parts = [f"Fecha y hora actual: {base_context['fecha_actual']}"]
+
+    if static_memory:
+        parts.append(f"Memoria del usuario:\n{static_memory}")
+
+    if semantic_memory:
+        parts.append(
+            f"Información relevante para esta pregunta "
+            f"(recuperada de la memoria por similitud semántica):\n{semantic_memory}"
+        )
+
+    if not static_memory and not semantic_memory:
+        # Sin memoria: el LLM no debe inventar datos personales.
+        parts.append(
+            "IMPORTANTE: No tienes información personal del usuario en memoria. "
+            "No inventes datos ni nombres. Responde solo con lo que sabes."
+        )
+
+    parts.append(f"Estilo:\n{style_context['sources']['style']}")
+
+    return "\n\n".join(parts)
 
 
 def _is_quota_error(e: Exception) -> bool:
@@ -311,15 +400,49 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 # ── Debug ───────────────────────────────────────────────────────────────────
 
 @router.get("/debug/memory")
-def debug_memory(user: dict = Depends(require_auth)):
-    """Muestra cuánto texto de memoria se está mandando al LLM."""
-    test_query = "test"
-    memory_text = _get_all_memory(user["id"])
-    system_prompt = _build_system_prompt(user["id"], test_query)
+def debug_memory(user: dict = Depends(require_auth), q: str = "¿Quién es LUCAS DARIO?"):
+    """
+    Diagnóstico completo de retrieval.
+    Parámetro opcional: ?q=tu+query+de+prueba
+    Por defecto prueba con '¿Quién es LUCAS DARIO?'
+    """
+    static_memory = _get_all_memory(user["id"])
+    semantic_memory = _search_memory(user["id"], q)
+    system_prompt = _build_system_prompt(user["id"], q)
+
+    # Contar filas con y sin embedding
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT
+                md.key,
+                md.name,
+                COUNT(mr.id) AS total_rows,
+                COUNT(mr.embedding) AS rows_con_embedding
+            FROM memory_documents md
+            LEFT JOIN memory_rows mr ON mr.document_id = md.id
+            WHERE md.user_id = %s
+            GROUP BY md.key, md.name
+            ORDER BY md.created_at ASC
+        """, [user["id"]])
+        docs = cur.fetchall()
+
     return {
-        "memory_chars": len(memory_text),
-        "memory_preview": memory_text[:300] if memory_text else "(vacío)",
+        "query_usada": q,
+        "documentos": [
+            {
+                "key": d["key"],
+                "name": d["name"],
+                "total_rows": d["total_rows"],
+                "rows_con_embedding": d["rows_con_embedding"],
+            }
+            for d in docs
+        ],
+        "static_memory_chars": len(static_memory),
+        "static_memory_preview": static_memory[:500] if static_memory else "(vacío)",
+        "semantic_memory_chars": len(semantic_memory),
+        "semantic_memory_preview": semantic_memory[:500] if semantic_memory else "(vacío — revisar logs del servidor para diagnóstico)",
         "total_prompt_chars": len(system_prompt),
+        "system_prompt_preview": system_prompt[:800],
     }
 
 
