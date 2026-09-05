@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from psycopg2.extras import Json
 from app.core.database import get_cursor
 from app.core.encryption import encrypt, decrypt
-from app.memory.embeddings import get_embedding
+from app.memory.embeddings import get_embedding, get_query_embedding
 
 
 def user_exists(user_id: str) -> bool:
@@ -23,7 +23,13 @@ def create_user(user_id: str, email: str | None = None) -> None:
         )
 
 
-def get_or_create_document(user_id: str, key: str, name: str, description: str, chat_id: str | None = None) -> tuple[str, bool]:
+def get_or_create_document(
+    user_id: str,
+    key: str,
+    name: str,
+    description: str,
+    chat_id: str | None = None,
+) -> tuple[str, bool]:
     """Devuelve (document_id, created). created=True si se acaba de crear."""
     with get_cursor() as cur:
         cur.execute(
@@ -47,6 +53,15 @@ def get_or_create_document(user_id: str, key: str, name: str, description: str, 
 
 
 def add_row(document_id: str, data: dict, with_embedding: bool = False) -> dict:
+    """
+    Inserta una fila en memory_rows.
+
+    Si with_embedding=True y hay mensaje, genera el embedding ANTES del INSERT
+    para que quede disponible de inmediato en búsquedas semánticas.
+    El embedding se genera de forma sincrónica aquí; el desacoplamiento
+    async se maneja en la capa de servicio (service.py) cuando se quiere
+    no bloquear la respuesta del chatbot.
+    """
     created_at = datetime.now(timezone.utc)
     encrypted_data = {**data}
     if "message" in encrypted_data:
@@ -78,23 +93,87 @@ def add_row(document_id: str, data: dict, with_embedding: bool = False) -> dict:
     return {**data, "created_at": created_at.isoformat()}
 
 
-def search_memory_by_embedding(user_id: str, query: str, limit: int = 10) -> list[dict]:
-    """Busca en memoria usando similitud de embeddings."""
-    query_embedding = get_embedding(query)
+def add_row_without_embedding(document_id: str, data: dict) -> tuple[str, dict]:
+    """
+    Inserta la fila SIN embedding y devuelve (row_id, row_dict).
+    Usar cuando el embedding se va a generar en background después.
+    """
+    created_at = datetime.now(timezone.utc)
+    encrypted_data = {**data}
+    if "message" in encrypted_data:
+        encrypted_data["message"] = encrypt(encrypted_data["message"])
+
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO memory_rows (document_id, data, created_at)
+            VALUES (%s, %s, %s)
+            RETURNING id;
+            """,
+            (document_id, Json(encrypted_data), created_at),
+        )
+        row_id = str(cur.fetchone()["id"])
+
+    return row_id, {**data, "created_at": created_at.isoformat()}
+
+
+def update_embedding(row_id: str, embedding: list[float]) -> None:
+    """Actualiza SOLO el campo embedding de una fila existente."""
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE memory_rows SET embedding = %s::vector WHERE id = %s;",
+            (str(embedding), row_id),
+        )
+
+
+def search_memory_by_embedding(
+    user_id: str,
+    query: str,
+    limit: int = 20,
+    min_similarity: float = 0.50,
+) -> list[dict]:
+    """
+    Busca en memoria usando similitud coseno de embeddings.
+
+    - Usa get_query_embedding (función semántica correcta para búsqueda).
+    - Aplica threshold min_similarity para descartar resultados irrelevantes.
+    - Busca en TODOS los documentos del usuario (chat_log incluido),
+      no filtra por key — Livre no tiene el prefijo memoria_livre_ de Hash.
+    - Ordena por distancia coseno ascendente (más similar primero).
+    """
+    query_embedding = get_query_embedding(query)
     if not query_embedding:
         return []
     try:
         with get_cursor() as cur:
-            cur.execute("""
-                SELECT md.name, mr.data, 1 - (mr.embedding <=> %s::vector) AS similarity
+            cur.execute(
+                """
+                SELECT
+                    md.name,
+                    md.key,
+                    mr.data,
+                    1 - (mr.embedding <=> %s::vector) AS similarity
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
-                WHERE md.user_id = %s AND mr.embedding IS NOT NULL
+                WHERE md.user_id = %s
+                  AND mr.embedding IS NOT NULL
+                  AND 1 - (mr.embedding <=> %s::vector) >= %s
                 ORDER BY mr.embedding <=> %s::vector
                 LIMIT %s
-            """, (str(query_embedding), user_id, str(query_embedding), limit))
+                """,
+                (
+                    str(query_embedding),
+                    user_id,
+                    str(query_embedding),
+                    min_similarity,
+                    str(query_embedding),
+                    limit,
+                ),
+            )
             return cur.fetchall()
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Error en search_memory_by_embedding: {e}")
         return []
 
 
@@ -146,17 +225,25 @@ def get_documents_with_rows(user_id: str) -> list[dict]:
                 (doc["id"],),
             )
             rows = cur.fetchall()
-            result.append({
-                "id": str(doc["id"]),
-                "key": doc["key"],
-                "name": doc["name"],
-                "description": doc["description"],
-                "created_at": doc["created_at"].isoformat(),
-                "rows": [
-                    {**{k: (decrypt(v) if k == "message" else v) for k, v in r["data"].items()}, "created_at": r["created_at"].isoformat()}
-                    for r in rows
-                ],
-            })
+            result.append(
+                {
+                    "id": str(doc["id"]),
+                    "key": doc["key"],
+                    "name": doc["name"],
+                    "description": doc["description"],
+                    "created_at": doc["created_at"].isoformat(),
+                    "rows": [
+                        {
+                            **{
+                                k: (decrypt(v) if k == "message" else v)
+                                for k, v in r["data"].items()
+                            },
+                            "created_at": r["created_at"].isoformat(),
+                        }
+                        for r in rows
+                    ],
+                }
+            )
         return result
 
 
