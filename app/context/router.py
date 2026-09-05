@@ -18,15 +18,19 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 FREE_MESSAGE_LIMIT = 20
 
 
+import logging as _logging
+_log = _logging.getLogger(__name__)
+
+
 def _get_all_memory(user_id: str) -> str:
-    """Trae toda la memoria del usuario desencriptada."""
+    """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción."""
     try:
         with get_cursor() as cur:
             cur.execute("""
                 SELECT md.name, mr.data
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
-                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%'
+                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
                 ORDER BY mr.created_at ASC
             """, [user_id])
             rows = cur.fetchall()
@@ -34,52 +38,124 @@ def _get_all_memory(user_id: str) -> str:
             return ""
         lines = []
         for r in rows:
-            msg = r["data"].get("message", "")
+            # Soportar dict-cursor y tuple-cursor
+            try:
+                name = r["name"] if hasattr(r, "keys") else r[0]
+                data = r["data"] if hasattr(r, "keys") else r[1]
+            except Exception as pe:
+                _log.error(f"[MEMORY DEBUG] _get_all_memory parse error: {pe} row={r!r}")
+                continue
+            if isinstance(data, str):
+                import json
+                try:
+                    data = json.loads(data)
+                except Exception:
+                    data = {}
+            msg = data.get("message", "") if isinstance(data, dict) else ""
             if not msg:
                 continue
             try:
                 msg = decrypt(msg)
             except Exception:
                 pass
-            lines.append(f"[{r['name']}]\n{msg.strip()}")
+            lines.append(f"[{name}]\n{msg.strip()}")
         return "\n\n".join(lines)
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"_get_all_memory error: {e}")
+        _log.error(f"[MEMORY DEBUG] _get_all_memory error: {e}", exc_info=True)
         return ""
 
 
 def _search_memory(user_id: str, query: str) -> str:
-    """Busca por embeddings. Si no encuentra nada, devuelve vacío."""
-    rows = search_memory_by_embedding(user_id, query)
+    """Búsqueda semántica. Nunca lanza excepción. Logs completos."""
+    _log.info(f"[MEMORY DEBUG] SEARCH START query={query!r}")
+
+    try:
+        rows = search_memory_by_embedding(user_id, query, limit=20, min_similarity=0.30)
+    except Exception as e:
+        _log.error(f"[MEMORY DEBUG] search_memory_by_embedding ERROR: {e}", exc_info=True)
+        return ""
+
+    _log.info(f"[MEMORY DEBUG] SEARCH RESULTS={len(rows)}")
+
     if not rows:
         return ""
+
     lines = []
-    for r in rows:
-        msg = r["data"].get("message", "")
+    for i, r in enumerate(rows, 1):
+        try:
+            name       = r["name"]       if hasattr(r, "keys") else r[0]
+            data       = r["data"]       if hasattr(r, "keys") else r[1]
+            similarity = r["similarity"] if hasattr(r, "keys") else r[2]
+        except Exception as pe:
+            _log.error(f"[MEMORY DEBUG] result parse error {i}: {pe} row={r!r}")
+            continue
+        if isinstance(data, str):
+            import json
+            try:
+                data = json.loads(data)
+            except Exception:
+                data = {}
+        msg = data.get("message", "") if isinstance(data, dict) else ""
         if not msg:
             continue
         try:
             msg = decrypt(msg)
         except Exception:
             pass
-        lines.append(f"[{r['name']}]\n{msg.strip()[:500]}")
+        _log.info(
+            f"[MEMORY DEBUG] result_{i} document_name={name!r} "
+            f"similarity={float(similarity):.4f} "
+            f"content={msg[:120]!r}"
+        )
+        lines.append(f"[{name}]\n{msg.strip()}")
+
+    _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={sum(len(l) for l in lines)}")
     return "\n\n".join(lines)
 
 
 def _build_system_prompt(user_id: str, query: str = "") -> str:
+    _log.info(f"[MEMORY DEBUG] BUILD START user={user_id} QUERY={query!r}")
+
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    memory_text = _get_all_memory(user_id)
+    # Memoria estática — falla aislada, nunca bloquea la búsqueda semántica
+    static_memory = _get_all_memory(user_id)
+    _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
 
-    print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)
-    return (
-        f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
-        + (f"Contexto operativo:\n{memory_text}\n\n" if memory_text else "")
-        + f"Estilo:\n{style_context['sources']['style']}"
+    # Búsqueda semántica — siempre corre si hay query
+    semantic_memory = ""
+    if query and query.strip():
+        semantic_memory = _search_memory(user_id, query)
+    else:
+        _log.info("[MEMORY DEBUG] SEARCH SKIPPED: query vacío")
+
+    _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={len(static_memory) + len(semantic_memory)}")
+    print(
+        f">>> [MEMORY DEBUG] static={len(static_memory)}c semantic={len(semantic_memory)}c",
+        flush=True,
     )
+
+    parts = [f"Fecha y hora actual: {base_context['fecha_actual']}"]
+
+    if static_memory:
+        parts.append(f"Memoria del usuario:\n{static_memory}")
+
+    if semantic_memory:
+        parts.append(
+            "Información relevante recuperada de la memoria "
+            f"(búsqueda semántica):\n{semantic_memory}"
+        )
+
+    if not static_memory and not semantic_memory:
+        parts.append(
+            "IMPORTANTE: No tienes información personal del usuario en memoria. "
+            "No inventes datos. Responde solo con lo que sabes."
+        )
+
+    parts.append(f"Estilo:\n{style_context['sources']['style']}")
+    return "\n\n".join(parts)
 
 
 def _is_quota_error(e: Exception) -> bool:
