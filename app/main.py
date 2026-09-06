@@ -18,6 +18,7 @@ from app.voice.gemini_live import router as voice_gemini_router
 from app.voice.telnyx import router as voice_telnyx_router   # ← nuevo
 from app.voice.elevenlabs_memory import router as elevenlabs_memory_router
 from app.voice.elevenlabs_postcall import router as elevenlabs_postcall_router
+from app.voice.elevenlabs_debug import router as elevenlabs_debug_router
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +62,7 @@ app.include_router(voice_gemini_router)
 app.include_router(voice_telnyx_router)   # ← nuevo
 app.include_router(elevenlabs_memory_router)
 app.include_router(elevenlabs_postcall_router)
+app.include_router(elevenlabs_debug_router)
 
 
 # Servir imágenes subidas al volumen
