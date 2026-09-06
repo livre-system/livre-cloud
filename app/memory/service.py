@@ -265,9 +265,29 @@ def upload_txt_as_memory(
                 if part:
                     chunks.append(part)
 
-    for chunk_text in chunks:
-        if chunk_text.strip():
-            # Embedding sincrónico aquí: es carga de archivo, no tiempo real.
-            add_row(document_id, {"message": chunk_text}, with_embedding=True)
+    total_chunks = len(chunks)
+    log.info(f"[UPLOAD] archivo={filename} | document_id={document_id} | total_chunks={total_chunks}")
 
-    return {"document": key, "created": created, "rows_added": len(chunks)}
+    saved = 0
+    failed = 0
+    for idx, chunk_text in enumerate(chunks, 1):
+        if not chunk_text.strip():
+            continue
+        try:
+            log.info(
+                f"[UPLOAD] chunk {idx}/{total_chunks} | "
+                f"chars={len(chunk_text)} | "
+                f"preview={chunk_text[:80]!r}"
+            )
+            add_row(document_id, {"message": chunk_text}, with_embedding=True)
+            log.info(f"[UPLOAD] chunk {idx}/{total_chunks} — guardado + embedding OK")
+            saved += 1
+        except Exception as e:
+            log.error(f"[UPLOAD] chunk {idx}/{total_chunks} — ERROR: {e}", exc_info=True)
+            failed += 1
+
+    log.info(
+        f"[UPLOAD] COMPLETO — archivo={filename} | "
+        f"guardados={saved} | fallidos={failed} | total={total_chunks}"
+    )
+    return {"document": key, "created": created, "rows_added": saved}
