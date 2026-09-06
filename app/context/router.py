@@ -15,7 +15,7 @@ import app.chat.repository as repo
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-FREE_MESSAGE_LIMIT = 20
+
 
 
 import logging as _logging
@@ -181,17 +181,6 @@ def list_chats(user: dict = Depends(require_auth)):
 @router.post("/new")
 def new_chat(user: dict = Depends(require_auth)):
     """Crea un chat vacío y devuelve su ID."""
-    # Límite plan free: 6 chats
-    from app.core.database import get_cursor
-    with get_cursor() as cur:
-        cur.execute("SELECT plan FROM memory_users WHERE user_id = %s", [user["id"]])
-        u = cur.fetchone()
-    if u and u["plan"] == "free":
-        with get_cursor() as cur:
-            cur.execute("SELECT COUNT(*) as total FROM chats WHERE user_id = %s", [user["id"]])
-            row = cur.fetchone()
-            if row and row["total"] >= 6:
-                raise HTTPException(status_code=403, detail="Límite de chats alcanzado (plan free: 6)")
     chat = repo.create_chat(user["id"])
     return chat
 
@@ -244,14 +233,6 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
             new = repo.create_chat(user["id"])
             chat_id = new["chat_id"]
 
-        # Límite de mensajes plan free
-        with get_cursor() as cur:
-            cur.execute("SELECT plan FROM memory_users WHERE user_id = %s", [user["id"]])
-            u = cur.fetchone()
-        if u and u["plan"] == "free":
-            if repo.count_user_messages(user["id"]) >= FREE_MESSAGE_LIMIT:
-                raise HTTPException(status_code=403, detail="Límite de mensajes alcanzado (plan free: 20)")
-
         # Guardar el mensaje del usuario
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
@@ -298,27 +279,11 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
 @router.post("/stream")
 def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
     try:
-        # Límite plan free: 6 chats (antes de entrar al stream)
         chat_id = body.chat_id
-        with get_cursor() as cur:
-            cur.execute("SELECT plan FROM memory_users WHERE user_id = %s", [user["id"]])
-            u = cur.fetchone()
-        is_free = u and u["plan"] == "free"
 
         if not chat_id:
-            if is_free:
-                with get_cursor() as cur:
-                    cur.execute("SELECT COUNT(*) as total FROM chats WHERE user_id = %s", [user["id"]])
-                    row = cur.fetchone()
-                    if row and row["total"] >= 6:
-                        raise HTTPException(status_code=403, detail="Límite de chats alcanzado (plan free: 6)")
             new = repo.create_chat(user["id"])
             chat_id = new["chat_id"]
-
-        # Límite de mensajes plan free
-        if is_free:
-            if repo.count_user_messages(user["id"]) >= FREE_MESSAGE_LIMIT:
-                raise HTTPException(status_code=403, detail="Límite de mensajes alcanzado (plan free: 20)")
 
         # Guardar mensaje del usuario
         last_user_msg = body.messages[-1] if body.messages else None
