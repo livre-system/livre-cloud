@@ -104,6 +104,20 @@ async def post_call_debug(request: Request):
         f"mensajes={len(transcript)} duracion={duration_secs}s"
     )
 
+    # Log estructura completa para detectar dónde está el transcript
+    log.info(f"[ELEVEN POSTCALL] keys_raiz={list(body.keys())}")
+    log.info(f"[ELEVEN POSTCALL] keys_data={list(data.keys()) if data else 'vacío'}")
+    for k, v in body.items():
+        if isinstance(v, list):
+            log.info(f"[ELEVEN POSTCALL] lista en raiz: key={k!r} len={len(v)}")
+            if v:
+                log.info(f"[ELEVEN POSTCALL] primer item de {k!r}: {str(v[0])[:200]}")
+        elif isinstance(v, dict):
+            log.info(f"[ELEVEN POSTCALL] dict en raiz: key={k!r} subkeys={list(v.keys())}")
+            for k2, v2 in v.items():
+                if isinstance(v2, list) and v2:
+                    log.info(f"[ELEVEN POSTCALL] lista en data.{k2!r}: len={len(v2)} primer_item={str(v2[0])[:200]}")
+
     # ── Validaciones ─────────────────────────────────────────────────────────
     if not conversation_id:
         log.warning("[ELEVEN POSTCALL] sin conversation_id — ignorado")
