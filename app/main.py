@@ -19,6 +19,7 @@ from app.voice.telnyx import router as voice_telnyx_router   # ← nuevo
 from app.voice.elevenlabs_memory import router as elevenlabs_memory_router
 from app.voice.elevenlabs_postcall import router as elevenlabs_postcall_router
 from app.voice.elevenlabs_debug import router as elevenlabs_debug_router
+from app.voice.elevenlabs_trip import router as elevenlabs_trip_router
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +64,7 @@ app.include_router(voice_telnyx_router)   # ← nuevo
 app.include_router(elevenlabs_memory_router)
 app.include_router(elevenlabs_postcall_router)
 app.include_router(elevenlabs_debug_router)
+app.include_router(elevenlabs_trip_router)
 
 
 # Servir imágenes subidas al volumen
