@@ -24,3 +24,10 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 BASE_URL = os.getenv("BASE_URL")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Memoria global de Livre Cloud
+# Toda la memoria operativa de LIVI se almacena bajo este user_id único.
+# El chatbot busca siempre en este espacio, sin aislar por usuario autenticado.
+# ─────────────────────────────────────────────────────────────────────────────
+MEMORY_USER_ID = "elevenlabs_voice"

@@ -8,6 +8,7 @@ from app.compiler.base_compiler import compile_base_context
 from app.compiler.style_compiler import compile_style_context
 from app.memory.service import read_user_memory, save_message_to_memory
 from app.memory.repository import search_memory_by_embedding
+from app.core.config import MEMORY_USER_ID
 from app.core.database import get_cursor
 from app.core.encryption import decrypt
 from app.chat.models import ChatRequest, SynthesizeRequest
@@ -22,8 +23,9 @@ import logging as _logging
 _log = _logging.getLogger(__name__)
 
 
-def _get_all_memory(user_id: str) -> str:
-    """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción."""
+def _get_all_memory(user_id: str = None) -> str:
+    """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción.
+    Usa siempre MEMORY_USER_ID — toda la memoria de LIVI es global en Livre Cloud."""
     try:
         with get_cursor() as cur:
             cur.execute("""
@@ -32,7 +34,7 @@ def _get_all_memory(user_id: str) -> str:
                 JOIN memory_documents md ON md.id = mr.document_id
                 WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
                 ORDER BY mr.created_at ASC
-            """, [user_id])
+            """, [MEMORY_USER_ID])
             rows = cur.fetchall()
         if not rows:
             return ""
@@ -65,12 +67,12 @@ def _get_all_memory(user_id: str) -> str:
         return ""
 
 
-def _search_memory(user_id: str, query: str) -> str:
-    """Búsqueda semántica. Nunca lanza excepción. Logs completos."""
+def _search_memory(user_id: str = None, query: str = "") -> str:
+    """Búsqueda semántica sobre MEMORY_USER_ID global. Nunca lanza excepción."""
     _log.info(f"[MEMORY DEBUG] SEARCH START query={query!r}")
 
     try:
-        rows = search_memory_by_embedding(user_id, query, limit=20, min_similarity=0.30)
+        rows = search_memory_by_embedding(MEMORY_USER_ID, query, limit=20, min_similarity=0.30)
     except Exception as e:
         _log.error(f"[MEMORY DEBUG] search_memory_by_embedding ERROR: {e}", exc_info=True)
         return ""
@@ -113,8 +115,8 @@ def _search_memory(user_id: str, query: str) -> str:
     return "\n\n".join(lines)
 
 
-def _build_system_prompt(user_id: str, query: str = "") -> str:
-    _log.info(f"[MEMORY DEBUG] BUILD START user={user_id} QUERY={query!r}")
+def _build_system_prompt(user_id: str = None, query: str = "") -> str:
+    _log.info(f"[MEMORY DEBUG] BUILD START memory_user={MEMORY_USER_ID} QUERY={query!r}")
 
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
@@ -246,7 +248,7 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
                 repo.update_chat_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        system_prompt = _build_system_prompt(user["id"], query)
+        system_prompt = _build_system_prompt(query=query)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider(body.provider)
 
@@ -297,7 +299,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
                 repo.update_chat_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        system_prompt = _build_system_prompt(user["id"], query)
+        system_prompt = _build_system_prompt(query=query)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider()
 
@@ -355,8 +357,8 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 def debug_memory(user: dict = Depends(require_auth)):
     """Muestra cuánto texto de memoria se está mandando al LLM."""
     test_query = "test"
-    memory_text = _get_all_memory(user["id"])
-    system_prompt = _build_system_prompt(user["id"], test_query)
+    memory_text = _get_all_memory()
+    system_prompt = _build_system_prompt(query=test_query)
     return {
         "memory_chars": len(memory_text),
         "memory_preview": memory_text[:300] if memory_text else "(vacío)",
@@ -410,7 +412,7 @@ async def voice_chat(
         history = repo.get_messages(chat_id, user["id"])
 
         # 5. Generar respuesta con el proveedor normal (Gemini/Grok)
-        system_prompt = _build_system_prompt(user["id"], transcript)
+        system_prompt = _build_system_prompt(query=transcript)
         llm = get_llm_provider()
         messages = [{"role": "system", "content": system_prompt}]
         messages += [{"role": m["role"], "content": m["content"]} for m in history]
