@@ -72,7 +72,7 @@ def main():
     print("✅ Login OK")
 
     # ── Paso 2: Cotización sin passengerUserId (prueba Guest) ────────────────
-    print("\n[2] Llamando trip/create (generatedTravel=0, SIN passengerUserId)...")
+    print("\n[2] Llamando trip/create (generatedTravel=0, passengerUserId=436133)...")
     result = trip_create(
         token=token,
         origin_lat=TEST_ORIGIN_LAT,
@@ -82,9 +82,9 @@ def main():
         destination_lon=TEST_DEST_LON,
         destination_name=TEST_DEST_NAME,
         service_type=TEST_SERVICE_TYPE,
-        passenger_user_id=None,          # ← sin pasajero registrado
-        guest_passenger_name=TEST_GUEST_NAME,
-        generated_travel=0,              # ← solo cotización
+        passenger_user_id=436133,        # ← pasajero técnico Livre Cloud
+        guest_passenger_name=None,
+        generated_travel=0,              # ← solo cotización, NO crea viaje real
     )
 
     print(f"\n  status_code : {result['status_code']}")
@@ -93,8 +93,7 @@ def main():
     if result["error"]:
         print(f"\n❌ MAGIIS rechazó el request:")
         print(f"   {result['error']}")
-        print("\n  CONCLUSIÓN: passengerUserId es obligatorio.")
-        print("  Próximo paso: crear un pasajero técnico en MAGIIS para LIVI.")
+        print("\n  Revisá serviceType o credenciales.")
     else:
         print(f"\n✅ MAGIIS aceptó el request sin passengerUserId")
         print(f"\n  Respuesta (cotizaciones):")
