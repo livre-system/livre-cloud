@@ -219,3 +219,15 @@ def init_db() -> None:
 
             cur.execute("CREATE INDEX IF NOT EXISTS idx_commerce_products_company ON commerce_products(company_id);")
             cur.execute("CREATE INDEX IF NOT EXISTS idx_commerce_orders_company ON commerce_orders(company_id);")
+
+            # ── Usuarios propios de Livre Cloud ────────────────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS livre_users (
+                    id          TEXT        PRIMARY KEY,
+                    email       TEXT        NOT NULL UNIQUE,
+                    name        TEXT        NOT NULL,
+                    password_hash TEXT      NOT NULL,
+                    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                );
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_livre_users_email ON livre_users(email);")
