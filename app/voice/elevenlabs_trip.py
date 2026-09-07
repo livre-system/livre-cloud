@@ -88,7 +88,19 @@ async def elevenlabs_trip(request: Request):
         log.error(f"[ELEVEN TRIP] ERROR parseando JSON: {e}")
         raise HTTPException(status_code=400, detail="JSON inválido")
 
-    # ── 2. Extraer campos del payload de ElevenLabs Webhook Tool ─────────────
+    # ── 2. Log completo del payload para inspección ──────────────────────────
+    import json as _json
+    log.info(f"[ELEVEN TRIP] payload completo: {_json.dumps(body, ensure_ascii=False)[:2000]}")
+    log.info(f"[ELEVEN TRIP] keys_raiz={list(body.keys())}")
+    for k, v in body.items():
+        if isinstance(v, dict):
+            log.info(f"[ELEVEN TRIP] dict[{k!r}] subkeys={list(v.keys())} valor={str(v)[:300]}")
+        elif isinstance(v, list):
+            log.info(f"[ELEVEN TRIP] list[{k!r}] len={len(v)} preview={str(v)[:300]}")
+        else:
+            log.info(f"[ELEVEN TRIP] field[{k!r}]={str(v)[:200]!r}")
+
+    # ── 3. Extraer campos — múltiples ubicaciones posibles ───────────────────
     tool_call_id = body.get("tool_call_id", "")
     tool_name    = body.get("tool_name", "")
     parameters   = body.get("parameters", {}) or {}
@@ -100,12 +112,32 @@ async def elevenlabs_trip(request: Request):
         or ""
     ).strip()
 
-    # origen y destino vienen en parameters
-    origen  = (parameters.get("origen") or "").strip()
-    destino = (parameters.get("destino") or "").strip()
+    # origen y destino: buscar en múltiples ubicaciones posibles
+    # 1. parameters.origen / parameters.destino  (Webhook Tool estándar)
+    # 2. body.origen / body.destino              (JSON simple de prueba)
+    # 3. body.data.origen / body.data.destino    (payload anidado en data)
+    data = body.get("data", {}) or {}
 
-    # whatsapp_user puede venir opcionalmente
-    whatsapp_user = (parameters.get("whatsapp_user") or body.get("user_id") or "").strip()
+    origen = (
+        parameters.get("origen")
+        or body.get("origen")
+        or data.get("origen")
+        or ""
+    ).strip()
+
+    destino = (
+        parameters.get("destino")
+        or body.get("destino")
+        or data.get("destino")
+        or ""
+    ).strip()
+
+    whatsapp_user = (
+        parameters.get("whatsapp_user")
+        or body.get("user_id")
+        or data.get("user_id")
+        or ""
+    ).strip()
 
     log.info(
         f"[ELEVEN TRIP] recibido — "
