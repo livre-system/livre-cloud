@@ -88,13 +88,14 @@ async def post_call_debug(request: Request):
     # ── Extraer campos ───────────────────────────────────────────────────────
     event_type      = body.get("type", "")
     data            = body.get("data", {}) or {}
-    conversation_id = body.get("conversation_id") or data.get("conversation_id") or ""
+    # conversation_id y transcript están en data, NO en body raíz
+    conversation_id = data.get("conversation_id") or body.get("conversation_id") or ""
     agent_id        = data.get("agent_id", "")
     whatsapp_user   = data.get("user_id", "")
     status          = data.get("status", "")
     metadata        = data.get("metadata", {}) or {}
     duration_secs   = metadata.get("call_duration_secs", 0)
-    transcript      = body.get("transcript", []) or []
+    transcript      = data.get("transcript", []) or []  # ← en data, verificado
 
     log.info(
         f"[ELEVEN POSTCALL] recibido — "
@@ -103,20 +104,6 @@ async def post_call_debug(request: Request):
         f"whatsapp_user={whatsapp_user!r} "
         f"mensajes={len(transcript)} duracion={duration_secs}s"
     )
-
-    # Log estructura completa para detectar dónde está el transcript
-    log.info(f"[ELEVEN POSTCALL] keys_raiz={list(body.keys())}")
-    log.info(f"[ELEVEN POSTCALL] keys_data={list(data.keys()) if data else 'vacío'}")
-    for k, v in body.items():
-        if isinstance(v, list):
-            log.info(f"[ELEVEN POSTCALL] lista en raiz: key={k!r} len={len(v)}")
-            if v:
-                log.info(f"[ELEVEN POSTCALL] primer item de {k!r}: {str(v[0])[:200]}")
-        elif isinstance(v, dict):
-            log.info(f"[ELEVEN POSTCALL] dict en raiz: key={k!r} subkeys={list(v.keys())}")
-            for k2, v2 in v.items():
-                if isinstance(v2, list) and v2:
-                    log.info(f"[ELEVEN POSTCALL] lista en data.{k2!r}: len={len(v2)} primer_item={str(v2[0])[:200]}")
 
     # ── Validaciones ─────────────────────────────────────────────────────────
     if not conversation_id:
