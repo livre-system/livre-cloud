@@ -114,8 +114,29 @@ async def post_call_debug(request: Request):
         log.warning(f"[ELEVEN POSTCALL] transcript vacío — conversation_id={conversation_id!r}")
         return {"ok": True, "detail": "transcript vacío"}
 
-    log.info(f"[ELEVEN POSTCALL] conversation_id={conversation_id!r}")
-    log.info(f"[ELEVEN POSTCALL] mensajes={len(transcript)} duracion={duration_secs}s")
+    log.info(f"[POST CALL] START")
+    log.info(f"[POST CALL] conversation_id={conversation_id!r}")
+    log.info(f"[POST CALL] agent_id={agent_id!r}")
+    log.info(f"[POST CALL] transcript_turns={len(transcript)} duracion={duration_secs}s")
+
+    # ── Inspeccionar tool_calls y tool_results en el transcript ──────────────
+    tool_calls_found = 0
+    tool_results_found = 0
+    for turn in transcript:
+        tc = turn.get("tool_calls") or []
+        tr = turn.get("tool_results") or []
+        for tc_item in tc:
+            tool_calls_found += 1
+            tc_name   = tc_item.get("tool_name", "?")
+            tc_params = tc_item.get("parameters", {})
+            log.info(f"[POST CALL TOOL] tool_name={tc_name!r} parameters={str(tc_params)[:300]}")
+        for tr_item in tr:
+            tool_results_found += 1
+            tr_name   = tr_item.get("tool_name", "?")
+            tr_result = tr_item.get("result", "?")
+            log.info(f"[POST CALL RESULT] tool_name={tr_name!r} result={str(tr_result)[:300]}")
+    log.info(f"[POST CALL] tool_calls encontrados={tool_calls_found}")
+    log.info(f"[POST CALL] tool_results encontrados={tool_results_found}")
 
     # ── Crear usuario de sistema ─────────────────────────────────────────────
     if not user_exists(ELEVENLABS_SYSTEM_USER):
@@ -187,6 +208,7 @@ async def post_call_debug(request: Request):
         f"conversation_id={conversation_id!r} "
         f"guardados={saved} saltados={skipped} fallidos={failed}"
     )
+    log.info(f"[POST CALL] memory_rows_guardados={saved}")
 
     # ── Embeddings en background ─────────────────────────────────────────────
     if rows_to_embed:
@@ -196,6 +218,11 @@ async def post_call_debug(request: Request):
             daemon=True,
         ).start()
         log.info(f"[ELEVEN POSTCALL] embeddings iniciados — filas={len(rows_to_embed)}")
+        log.info(f"[POST CALL] embeddings_generados={len(rows_to_embed)} (en background)")
+    else:
+        log.info(f"[POST CALL] embeddings_generados=0")
+
+    log.info(f"[POST CALL] END conversation_id={conversation_id!r}")
 
     return {
         "ok":              True,
