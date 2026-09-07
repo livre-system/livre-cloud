@@ -90,10 +90,13 @@ def main():
     print(f"\n  status_code : {result['status_code']}")
     print(f"  ok          : {result['ok']}")
 
+    print(f"\n  Respuesta completa de MAGIIS:")
+    import json
+    print(json.dumps(result["response"], indent=2, ensure_ascii=False))
+
     if result["error"]:
-        print(f"\n❌ MAGIIS rechazó el request:")
+        print(f"\n❌ MAGIIS rechazó — status={result['status_code']}")
         print(f"   {result['error']}")
-        print("\n  Revisá serviceType o credenciales.")
     else:
         print(f"\n✅ MAGIIS aceptó el request sin passengerUserId")
         print(f"\n  Respuesta (cotizaciones):")
