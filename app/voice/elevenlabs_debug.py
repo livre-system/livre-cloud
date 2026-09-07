@@ -127,13 +127,15 @@ async def post_call_debug(request: Request):
         tr = turn.get("tool_results") or []
         for tc_item in tc:
             tool_calls_found += 1
-            tc_name   = tc_item.get("tool_name", "?")
-            tc_params = tc_item.get("parameters", {})
+            log.info(f"[POST CALL TOOL RAW] {str(tc_item)[:600]}")
+            tc_name   = tc_item.get("tool_name", "?") if isinstance(tc_item, dict) else "?"
+            tc_params = tc_item.get("parameters", {}) if isinstance(tc_item, dict) else {}
             log.info(f"[POST CALL TOOL] tool_name={tc_name!r} parameters={str(tc_params)[:300]}")
         for tr_item in tr:
             tool_results_found += 1
-            tr_name   = tr_item.get("tool_name", "?")
-            tr_result = tr_item.get("result", "?")
+            log.info(f"[POST CALL RESULT RAW] {str(tr_item)[:600]}")
+            tr_name   = tr_item.get("tool_name", "?") if isinstance(tr_item, dict) else "?"
+            tr_result = tr_item.get("result", "?") if isinstance(tr_item, dict) else "?"
             log.info(f"[POST CALL RESULT] tool_name={tr_name!r} result={str(tr_result)[:300]}")
     log.info(f"[POST CALL] tool_calls encontrados={tool_calls_found}")
     log.info(f"[POST CALL] tool_results encontrados={tool_results_found}")
