@@ -12,7 +12,7 @@ class GroqProvider(LLMProvider):
 
     def __init__(self):
         self.api_key = os.getenv("GROQ_API_KEY")
-        self.model = os.getenv("GROQ_MODEL", "llama3-8b-8192")
+        self.model = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
         if not self.api_key:
             raise RuntimeError("No hay GROQ_API_KEY definida en las variables de entorno")
 
