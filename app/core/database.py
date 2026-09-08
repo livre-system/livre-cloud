@@ -59,6 +59,47 @@ def get_cursor_dep():
         _pool.putconn(conn)
 
 
+
+def run_migrations():
+    """Ejecuta scripts .sql en app/migrations/ que no se hayan aplicado aún."""
+    import os
+    import logging
+    log = logging.getLogger(__name__)
+    
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Lock para evitar concurrencia entre instancias
+            cur.execute("SELECT pg_advisory_xact_lock(123456789);")
+            
+            # Crear tabla de control
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            
+            # Obtener archivos
+            migrations_dir = "/app/app/migrations" # Ruta en contenedor
+            # Si estamos en dev (local), corregimos la ruta
+            if not os.path.exists(migrations_dir):
+                migrations_dir = "/home/calambre/Documentos/Clientes/Livre/livre-cloud/app/migrations"
+                
+            files = sorted([f for f in os.listdir(migrations_dir) if f.endswith(".sql")])
+            
+            for f in files:
+                cur.execute("SELECT 1 FROM schema_migrations WHERE version = %s", [f])
+                if cur.fetchone():
+                    continue
+                
+                log.info(f"[MIGRATIONS] Aplicando {f}")
+                with open(os.path.join(migrations_dir, f), 'r') as sql_file:
+                    cur.execute(sql_file.read())
+                
+                cur.execute("INSERT INTO schema_migrations (version) VALUES (%s)", [f])
+                log.info(f"[MIGRATIONS] Aplicado {f} exitosamente")
+
+
 def init_db() -> None:
     """
     Crea las tablas si no existen. Se llama una vez al arrancar la app (main.py).

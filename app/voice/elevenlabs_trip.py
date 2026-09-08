@@ -189,7 +189,7 @@ async def elevenlabs_trip(request: Request):
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")
     except Exception as e:
         log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
-        return {"result": "Error interno al registrar el viaje. Por favor intentá de nuevo."}
+        raise HTTPException(status_code=500, detail="Error interno de base de datos")
 
     _response = f"Viaje registrado correctamente. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")

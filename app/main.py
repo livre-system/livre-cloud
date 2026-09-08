@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    run_migrations()
     ensure_tables()
     await patch_agent_voice()
     yield
