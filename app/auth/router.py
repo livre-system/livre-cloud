@@ -1,8 +1,7 @@
 import uuid
 import bcrypt
-from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from app.core.database import get_cursor
 from app.core.jwt import create_token, require_auth
 
@@ -12,13 +11,13 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # ─── Schemas ──────────────────────────────────────────────────────────────────
 
 class RegisterBody(BaseModel):
-    email: EmailStr
+    username: str
     password: str
     name: str
 
 
 class LoginBody(BaseModel):
-    email: EmailStr
+    username: str
     password: str
 
 
@@ -37,45 +36,46 @@ def _verify_password(plain: str, hashed: str) -> bool:
 @router.post("/register", status_code=201)
 def register(body: RegisterBody):
     """Crea un usuario nuevo de Livre Cloud y devuelve el JWT."""
-    if len(body.password) < 8:
-        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 8 caracteres")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    if len(body.username.strip()) < 3:
+        raise HTTPException(status_code=400, detail="El usuario debe tener al menos 3 caracteres")
 
     user_id = str(uuid.uuid4())
     password_hash = _hash_password(body.password)
 
     with get_cursor() as cur:
-        # Verificar email duplicado
-        cur.execute("SELECT id FROM livre_users WHERE email = %s", [body.email])
+        cur.execute("SELECT id FROM livre_users WHERE username = %s", [body.username])
         if cur.fetchone():
-            raise HTTPException(status_code=409, detail="El email ya está registrado")
+            raise HTTPException(status_code=409, detail="El usuario ya existe")
 
         cur.execute(
             """
-            INSERT INTO livre_users (id, email, name, password_hash)
+            INSERT INTO livre_users (id, username, name, password_hash)
             VALUES (%s, %s, %s, %s)
             """,
-            [user_id, body.email, body.name, password_hash],
+            [user_id, body.username, body.name, password_hash],
         )
 
-    token = create_token(id=user_id, name=body.name, email=body.email)
-    return {"token": token, "user": {"id": user_id, "email": body.email, "name": body.name}}
+    token = create_token(id=user_id, name=body.name, email=body.username)
+    return {"token": token, "user": {"id": user_id, "username": body.username, "name": body.name}}
 
 
 @router.post("/login")
 def login(body: LoginBody):
-    """Autentica con email + password y devuelve el JWT."""
+    """Autentica con username + password y devuelve el JWT."""
     with get_cursor() as cur:
         cur.execute(
-            "SELECT id, name, email, password_hash FROM livre_users WHERE email = %s",
-            [body.email],
+            "SELECT id, name, username, password_hash FROM livre_users WHERE username = %s",
+            [body.username],
         )
         user = cur.fetchone()
 
     if not user or not _verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-    token = create_token(id=user["id"], name=user["name"], email=user["email"])
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"]}}
+    token = create_token(id=user["id"], name=user["name"], email=user["username"])
+    return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"]}}
 
 
 @router.get("/me")
@@ -85,16 +85,16 @@ def me(user: dict = Depends(require_auth)):
 
 @router.post("/payment/pending")
 def save_payment_pending(user: dict = Depends(require_auth)):
-    """Guarda el email del usuario como pendiente de pago."""
+    """Guarda el username del usuario como pendiente de pago."""
     with get_cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS payment_pending (
-                email TEXT PRIMARY KEY,
+                username TEXT PRIMARY KEY,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
         cur.execute("""
-            INSERT INTO payment_pending (email) VALUES (%s)
-            ON CONFLICT (email) DO UPDATE SET created_at = NOW()
+            INSERT INTO payment_pending (username) VALUES (%s)
+            ON CONFLICT (username) DO UPDATE SET created_at = NOW()
         """, [user["email"]])
     return {"ok": True}

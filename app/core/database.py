@@ -223,11 +223,35 @@ def init_db() -> None:
             # ── Usuarios propios de Livre Cloud ────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS livre_users (
-                    id          TEXT        PRIMARY KEY,
-                    email       TEXT        NOT NULL UNIQUE,
-                    name        TEXT        NOT NULL,
-                    password_hash TEXT      NOT NULL,
-                    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+                    id            TEXT        PRIMARY KEY,
+                    username      TEXT        UNIQUE,
+                    email         TEXT        UNIQUE,
+                    name          TEXT        NOT NULL,
+                    password_hash TEXT        NOT NULL,
+                    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
                 );
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_livre_users_email ON livre_users(email);")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_livre_users_username ON livre_users(username);")
+
+            # Migración: agregar columna username si no existe (idempotente)
+            cur.execute("""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'livre_users' AND column_name = 'username'
+                    ) THEN
+                        ALTER TABLE livre_users ADD COLUMN username TEXT UNIQUE;
+                    END IF;
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'livre_users'
+                          AND column_name = 'email'
+                          AND is_nullable = 'NO'
+                    ) THEN
+                        ALTER TABLE livre_users ALTER COLUMN email DROP NOT NULL;
+                    END IF;
+                END
+                $$;
+            """)
