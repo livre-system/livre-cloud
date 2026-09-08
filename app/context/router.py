@@ -16,16 +16,13 @@ import app.chat.repository as repo
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-
-
-
 import logging as _logging
 _log = _logging.getLogger(__name__)
 
 
 def _get_all_memory(user_id: str = None) -> str:
-    """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción.
-    Usa siempre MEMORY_USER_ID — toda la memoria de LIVI es global en Livre Cloud."""
+    """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción."""
+    target_user = user_id or MEMORY_USER_ID
     try:
         with get_cursor() as cur:
             cur.execute("""
@@ -34,13 +31,12 @@ def _get_all_memory(user_id: str = None) -> str:
                 JOIN memory_documents md ON md.id = mr.document_id
                 WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
                 ORDER BY mr.created_at ASC
-            """, [MEMORY_USER_ID])
+            """, [target_user])
             rows = cur.fetchall()
         if not rows:
             return ""
         lines = []
         for r in rows:
-            # Soportar dict-cursor y tuple-cursor
             try:
                 name = r["name"] if hasattr(r, "keys") else r[0]
                 data = r["data"] if hasattr(r, "keys") else r[1]
@@ -68,11 +64,12 @@ def _get_all_memory(user_id: str = None) -> str:
 
 
 def _search_memory(user_id: str = None, query: str = "") -> str:
-    """Búsqueda semántica sobre MEMORY_USER_ID global. Nunca lanza excepción."""
-    _log.info(f"[MEMORY DEBUG] SEARCH START query={query!r}")
+    """Búsqueda semántica. Usa user_id o cae a MEMORY_USER_ID global."""
+    target_user = user_id or MEMORY_USER_ID
+    _log.info(f"[MEMORY DEBUG] SEARCH START memory_user={target_user} query={query!r}")
 
     try:
-        rows = search_memory_by_embedding(MEMORY_USER_ID, query, limit=20, min_similarity=0.30)
+        rows = search_memory_by_embedding(target_user, query, limit=20, min_similarity=0.30)
     except Exception as e:
         _log.error(f"[MEMORY DEBUG] search_memory_by_embedding ERROR: {e}", exc_info=True)
         return ""
@@ -116,17 +113,15 @@ def _search_memory(user_id: str = None, query: str = "") -> str:
 
 
 def _build_system_prompt(user_id: str = None, query: str = "") -> str:
-    _log.info(f"[MEMORY DEBUG] BUILD START memory_user={MEMORY_USER_ID} QUERY={query!r}")
+    _log.info(f"[MEMORY DEBUG] BUILD START memory_user={user_id or MEMORY_USER_ID} QUERY={query!r}")
 
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    # Memoria estática — falla aislada, nunca bloquea la búsqueda semántica
     static_memory = _get_all_memory(user_id)
     _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
 
-    # Búsqueda semántica — siempre corre si hay query
     semantic_memory = ""
     if query and query.strip():
         semantic_memory = _search_memory(user_id, query)
@@ -229,26 +224,23 @@ def delete_chat(chat_id: str, user: dict = Depends(require_auth)):
 @router.post("")
 def chat(body: ChatRequest, user: dict = Depends(require_auth)):
     try:
-        # Crear chat si no viene chat_id
         chat_id = body.chat_id
         if not chat_id:
             new = repo.create_chat(user["id"])
             chat_id = new["chat_id"]
 
-        # Guardar el mensaje del usuario
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
             repo.save_message(chat_id, "user", last_user_msg.content)
             save_message_to_memory(user["id"], "user", last_user_msg.content)
 
-            # Auto-título con las primeras palabras del primer mensaje
             chat = repo.get_chat(chat_id, user["id"])
             if chat and chat["title"] == "Nueva conversación":
                 auto_title = last_user_msg.content[:50].strip()
-                repo.update_chat_title(chat_id, user["id"], auto_title)
+                repo.update_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        system_prompt = _build_system_prompt(query=query)
+        system_prompt = _build_system_prompt(user_id=user["id"], query=query)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider(body.provider)
 
@@ -264,7 +256,6 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
             else:
                 raise
 
-        # Guardar respuesta del asistente
         repo.save_message(chat_id, "assistant", reply)
         save_message_to_memory(user["id"], "assistant", reply)
 
@@ -287,7 +278,6 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
             new = repo.create_chat(user["id"])
             chat_id = new["chat_id"]
 
-        # Guardar mensaje del usuario
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
             repo.save_message(chat_id, "user", last_user_msg.content)
@@ -299,7 +289,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
                 repo.update_chat_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        system_prompt = _build_system_prompt(query=query)
+        system_prompt = _build_system_prompt(user_id=user["id"], query=query)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider()
 
@@ -327,7 +317,6 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
             except Exception as e:
                 yield f"data: [ERROR] {str(e)}\n\n"
             finally:
-                # Guardar respuesta completa
                 if full_reply:
                     complete = "".join(full_reply)
                     repo.save_message(chat_id, "assistant", complete)
@@ -357,8 +346,8 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 def debug_memory(user: dict = Depends(require_auth)):
     """Muestra cuánto texto de memoria se está mandando al LLM."""
     test_query = "test"
-    memory_text = _get_all_memory()
-    system_prompt = _build_system_prompt(query=test_query)
+    memory_text = _get_all_memory(user["id"])
+    system_prompt = _build_system_prompt(user_id=user["id"], query=test_query)
     return {
         "memory_chars": len(memory_text),
         "memory_preview": memory_text[:300] if memory_text else "(vacío)",
@@ -412,7 +401,7 @@ async def voice_chat(
         history = repo.get_messages(chat_id, user["id"])
 
         # 5. Generar respuesta con el proveedor normal (Gemini/Grok)
-        system_prompt = _build_system_prompt(query=transcript)
+        system_prompt = _build_system_prompt(user_id=user["id"], query=transcript)
         llm = get_llm_provider()
         messages = [{"role": "system", "content": system_prompt}]
         messages += [{"role": m["role"], "content": m["content"]} for m in history]
@@ -435,6 +424,7 @@ async def voice_chat(
         import logging
         logging.getLogger(__name__).exception("Error en /chat/voice")
         raise HTTPException(status_code=500, detail="Error en chat de voz")
+
 def synthesize_stream(body: SynthesizeRequest, user: dict = Depends(require_auth)):
     try:
         voice = get_voice_provider()
@@ -457,4 +447,4 @@ def synthesize_stream(body: SynthesizeRequest, user: dict = Depends(require_auth
         import logging
         logging.getLogger(__name__).exception("Error en synthesize")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno del servidor")
-
+""", path="/home/calambre/Documentos/Clientes/Livre/livre-cloud/app/context/router.py")
