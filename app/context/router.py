@@ -145,6 +145,12 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
             f"(búsqueda semántica):\n{semantic_memory}"
         )
 
+    operational_trip = _get_last_operational_trip(user_id)
+    if operational_trip:
+        parts.append(
+            f"Información Operativa Actual: Último viaje: {operational_trip['origen']} a {operational_trip['destino']}."
+        )
+
     if not static_memory and not semantic_memory:
         parts.append(
             "IMPORTANTE: No tienes información personal del usuario en memoria. "
@@ -158,6 +164,20 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
 def _is_quota_error(e: Exception) -> bool:
     msg = str(e)
     return "429" in msg or "503" in msg or "fallaron" in msg
+
+
+def _get_last_operational_trip(user_id: str) -> dict | None:
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT origen, destino, created_at 
+            FROM livi_trips 
+            WHERE user_id = %s OR (user_id IS NULL AND whatsapp_user IN (
+                SELECT whatsapp_user FROM user_whatsapp_mappings WHERE user_id = %s
+            ))
+            ORDER BY created_at DESC 
+            LIMIT 1;""", [user_id, user_id])
+        return cur.fetchone()
+
 
 
 def _get_fallback_provider(provider_name: str):
