@@ -137,7 +137,9 @@ async def elevenlabs_trip(request: Request):
 
     whatsapp_user = (
         parameters.get("whatsapp_user")
+        or body.get("whatsapp_user")
         or body.get("user_id")
+        or data.get("whatsapp_user")
         or data.get("user_id")
         or ""
     ).strip()
