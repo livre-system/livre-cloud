@@ -391,27 +391,29 @@ No asumir que estos valores son intercambiables.
 El router activo de `/chat/stream` es `app/context/router.py`, incluido antes
 que `app/chat/router.py` en `app/main.py`.
 
-Para consultas claramente referidas al último viaje (por ejemplo, "último
-viaje", "viaje anterior" o "viaje más reciente"):
+Las identidades no son equivalentes:
 
 ``` text
-JWT / require_auth → user["id"]
-→ user_whatsapp_mappings.user_id
-→ user_whatsapp_mappings.whatsapp_user
-→ livi_trips.whatsapp_user
-→ ORDER BY livi_trips.created_at DESC LIMIT 1
+PANEL: JWT / require_auth → livre_users.id
+VIAJE: WhatsApp caller ID → LIVI → livi_trips.whatsapp_user
 ```
 
-Estas consultas no deben usar búsqueda semántica para decidir el viaje. La
-fuente operacional es `livi_trips`; si no existe mapping para el usuario
-autenticado, no se deben devolver viajes ni usar datos de otro usuario.
-`livi_trips.user_id` es nullable y no reemplaza el mapping como autorización
-de identidad.
+`livi_trips.whatsapp_user` identifica el número de WhatsApp que originó el
+viaje. No identifica al usuario autenticado del panel y no debe usarse para
+inferir `livre_users.id`.
 
-El panel debe tratar el resultado SQL operacional como autoritativo frente a
-los documentos históricos `Chat log`.
+Para una consulta del panel sobre viajes, solo se pueden devolver viajes con
+una relación explícita y aprobada en datos operativos, por ejemplo un
+`livi_trips.user_id` asignado deliberadamente. No se debe crear ni asumir una
+relación mediante `user_whatsapp_mappings` sin una decisión de negocio previa.
+Si no existe una relación explícita, no devolver viajes de WhatsApp al panel.
 
-## Diagnóstico de producción: mapping LIVI
+Las consultas de "último viaje" no deben usar búsqueda semántica para decidir
+el viaje. La fuente operacional, cuando exista una relación explícita, es
+`livi_trips` ordenada por `created_at DESC`. Los documentos históricos `Chat
+log` no son fuente de verdad operacional.
+
+## Diagnóstico de producción: separación de identidades
 
 Verificación read-only realizada contra PostgreSQL de producción mediante el
 TCP Proxy temporal de Railway. No se ejecutaron INSERT, UPDATE, DELETE,
@@ -423,26 +425,24 @@ El usuario de panel `livreuser` tiene:
 livre_users.id = 4d96ce43-d0c1-41fb-9700-181cf26ca481
 ```
 
-Actualmente no existe ningún registro en `user_whatsapp_mappings` para ese
-`user_id`. Por lo tanto, la relación aprobada todavía está incompleta:
-
-``` text
-livreuser → livre_users.id → [falta mapping] → whatsapp_user → livi_trips
-```
+No existe actualmente un mapping en `user_whatsapp_mappings` para ese usuario.
+Eso no significa que `5491178240367` pertenezca al usuario del panel: es el
+caller ID de WhatsApp del viaje y puede no tener ninguna relación con
+`livre_users`.
 
 En producción:
 
-- `livi_trips.id=7` tiene `whatsapp_user=''` y `user_id=NULL`.
+- `livi_trips.id=7` tiene `whatsapp_user=''` y `user_id=NULL` porque fue creado
+  antes del fix de extracción.
 - Los trips históricos 1 a 7 quedaron con `whatsapp_user=''`.
-- `livi_trips.id=8`, creado después del fix de extracción, tiene
+- `livi_trips.id=8`, creado después del fix, tiene
   `whatsapp_user='5491178240367'` y `user_id=NULL`.
 - El código actual de `app/voice/elevenlabs_trip.py` extrae
-  `body.whatsapp_user`, por lo que el trip 8 confirma que el fix de código
-  está desplegado y funcionando.
+  `body.whatsapp_user` y conserva ese valor en `livi_trips.whatsapp_user`.
 - El webhook post-call recibe el identificador, pero no actualiza
-  `livi_trips`; no debe considerarse mecanismo de reparación de viajes.
+  `livi_trips`.
 
-La asociación de prueba debe hacerse como operación de datos explícita y
-revisada, nunca automáticamente desde un pasajero de WhatsApp. El TCP Proxy
-público usado para esta investigación es temporal y debe desactivarse al
-finalizar.
+No crear `user_whatsapp_mappings` para reparar estos viajes hasta que exista
+una decisión de negocio explícita que defina una relación panel↔WhatsApp. El
+TCP Proxy público usado para esta investigación es temporal y debe
+desactivarse al finalizar.

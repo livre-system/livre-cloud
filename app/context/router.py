@@ -164,7 +164,7 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
     operational_trip = _get_last_operational_trip(user_id) if latest_trip_query else None
     if latest_trip_query and operational_trip:
         parts.append(
-            "FUENTE OPERACIONAL AUTORITATIVA (livi_trips): "
+            "FUENTE OPERACIONAL AUTORITATIVA (livi_trips, relación explícita con el panel): "
             f"Último viaje registrado: trip_id={operational_trip['id']}, "
             f"Origen: {operational_trip['origen']}, "
             f"Destino: {operational_trip['destino']}. "
@@ -196,9 +196,7 @@ def _get_last_operational_trip(user_id: str) -> dict | None:
         cur.execute("""
             SELECT t.id, t.origen, t.destino, t.whatsapp_user, t.created_at
             FROM livi_trips AS t
-            INNER JOIN user_whatsapp_mappings AS m
-                ON m.whatsapp_user = t.whatsapp_user
-            WHERE m.user_id = %s
+            WHERE t.user_id = %s
             ORDER BY t.created_at DESC
             LIMIT 1;""", [user_id])
         return cur.fetchone()

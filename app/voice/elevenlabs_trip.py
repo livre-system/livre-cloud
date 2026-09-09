@@ -45,29 +45,20 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
         return None
 
 
-def _get_user_by_whatsapp(whatsapp_user: str) -> str | None:
-    with get_cursor() as cur:
-        cur.execute("SELECT user_id FROM user_whatsapp_mappings WHERE whatsapp_user = %s LIMIT 1", [whatsapp_user])
-        row = cur.fetchone()
-        return row["user_id"] if row else None
-
-
-
 def _save_trip(
     conversation_id: str,
     origen: str,
     destino: str,
     whatsapp_user: str = "",
     tool_call_id: str = "",
-    user_id: str = None,
 ) -> int:
     """Inserta el viaje y devuelve el id generado."""
     with get_cursor() as cur:
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, whatsapp_user, tool_call_id, status, created_at, updated_at, user_id)
-            VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s, %s)
+                (conversation_id, origen, destino, whatsapp_user, tool_call_id, status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s)
             RETURNING id;
             """,
             (
@@ -78,7 +69,6 @@ def _save_trip(
                 tool_call_id or "",
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
-                user_id,
             ),
         )
         return cur.fetchone()["id"]
@@ -179,14 +169,12 @@ async def elevenlabs_trip(request: Request):
 
     # ── 5. Guardar el viaje ──────────────────────────────────────────────────
     try:
-        user_id = _get_user_by_whatsapp(whatsapp_user)
         trip_id = _save_trip(
             conversation_id=conversation_id,
             origen=origen,
             destino=destino,
             whatsapp_user=whatsapp_user,
             tool_call_id=tool_call_id,
-            user_id=user_id,
         )
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")
     except Exception as e:
