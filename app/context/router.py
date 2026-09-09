@@ -191,14 +191,14 @@ def _is_quota_error(e: Exception) -> bool:
     return "429" in msg or "503" in msg or "fallaron" in msg
 
 
-def _get_last_operational_trip(user_id: str) -> dict | None:
+def _get_last_operational_trip(user_id: str | None = None) -> dict | None:
+    """Devuelve el último viaje general; user_id solo protege la ruta."""
     with get_cursor() as cur:
         cur.execute("""
             SELECT t.id, t.origen, t.destino, t.whatsapp_user, t.created_at
             FROM livi_trips AS t
-            WHERE t.user_id = %s
             ORDER BY t.created_at DESC
-            LIMIT 1;""", [user_id])
+            LIMIT 1;""")
         return cur.fetchone()
 
 
