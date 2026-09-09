@@ -386,6 +386,18 @@ Distinguir siempre:
 
 No asumir que estos valores son intercambiables.
 
+## Asistente del panel
+
+El panel y su chatbot son la misma herramienta para el dueño y el personal
+autorizado. El usuario del panel solo inicia sesión y controla el acceso; no
+representa a un pasajero ni es dueño de los viajes.
+
+El contexto general de la IA del panel se define en
+`app/context/provider.py`. Debe explicar que el asistente consulta la
+operación general de Viaja Livre, puede informar sobre viajes recibidos desde
+WhatsApp y debe usar solo los datos operativos disponibles, sin inventar ni
+mezclar identidades.
+
 ## Último viaje desde el panel
 
 El router activo de `/chat/stream` es `app/context/router.py`, incluido antes
