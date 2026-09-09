@@ -394,24 +394,25 @@ que `app/chat/router.py` en `app/main.py`.
 Las identidades no son equivalentes:
 
 ``` text
-PANEL: JWT / require_auth → livre_users.id
+PANEL: JWT / require_auth → livre_users.id (solo inicio de sesión)
 VIAJE: WhatsApp caller ID → LIVI → livi_trips.whatsapp_user
 ```
 
-`livi_trips.whatsapp_user` identifica el número de WhatsApp que originó el
-viaje. No identifica al usuario autenticado del panel y no debe usarse para
-inferir `livre_users.id`.
+El número de WhatsApp identifica únicamente quién solicitó el viaje y sirve
+para conservar el pedido junto con origen, destino y datos operativos. No
+identifica al usuario autenticado del panel y nunca debe usarse para inferir
+`livre_users.id`. No crear `user_whatsapp_mappings` ni cuentas de panel para
+estos pasajeros.
 
-Para una consulta del panel sobre viajes, solo se pueden devolver viajes con
-una relación explícita y aprobada en datos operativos, por ejemplo un
-`livi_trips.user_id` asignado deliberadamente. No se debe crear ni asumir una
-relación mediante `user_whatsapp_mappings` sin una decisión de negocio previa.
-Si no existe una relación explícita, no devolver viajes de WhatsApp al panel.
+El panel es una interfaz autenticada para consultar la información general de
+los viajes recibidos desde LIVI. Sus consultas operativas deben leer
+`livi_trips` sin filtrar por `livre_users.id` ni exigir una relación entre el
+panel y el pasajero de WhatsApp. El usuario del panel solo controla el acceso
+a la interfaz.
 
 Las consultas de "último viaje" no deben usar búsqueda semántica para decidir
-el viaje. La fuente operacional, cuando exista una relación explícita, es
-`livi_trips` ordenada por `created_at DESC`. Los documentos históricos `Chat
-log` no son fuente de verdad operacional.
+el viaje. La fuente operacional es `livi_trips` ordenada por `created_at DESC`.
+Los documentos históricos `Chat log` no son fuente de verdad operacional.
 
 ## Diagnóstico de producción: separación de identidades
 
