@@ -5,7 +5,7 @@ from pathlib import Path
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
 from app.core.config import SESSION_SECRET
-from app.core.database import init_db
+from app.core.database import init_db, run_migrations
 from app.chat.repository import ensure_tables
 from app.auth.router import router as auth_router
 from app.context.router import router as context_router
