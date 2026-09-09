@@ -167,7 +167,8 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
             "FUENTE OPERACIONAL AUTORITATIVA (livi_trips, relación explícita con el panel): "
             f"Último viaje registrado: trip_id={operational_trip['id']}, "
             f"Origen: {operational_trip['origen']}, "
-            f"Destino: {operational_trip['destino']}. "
+            f"Destino: {operational_trip['destino']}, "
+            f"WhatsApp solicitante: {operational_trip['whatsapp_user'] or 'no informado'}. "
             "Para esta consulta usa exclusivamente estos datos; no uses viajes de la memoria."
         )
     elif latest_trip_query:
