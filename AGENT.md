@@ -398,6 +398,11 @@ operación general de Viaja Livre, puede informar sobre viajes recibidos desde
 WhatsApp y debe usar solo los datos operativos disponibles, sin inventar ni
 mezclar identidades.
 
+Toda la información económica de la empresa se interpreta siempre como pesos
+argentinos (ARS). La IA no debe convertir precios, tarifas, saldos, importes ni
+límites a dólares u otra moneda, aunque el usuario cargue los datos sin indicar
+la moneda.
+
 ## Último viaje desde el panel
 
 El router activo de `/chat/stream` es `app/context/router.py`, incluido antes
