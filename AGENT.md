@@ -410,3 +410,39 @@ de identidad.
 
 El panel debe tratar el resultado SQL operacional como autoritativo frente a
 los documentos históricos `Chat log`.
+
+## Diagnóstico de producción: mapping LIVI
+
+Verificación read-only realizada contra PostgreSQL de producción mediante el
+TCP Proxy temporal de Railway. No se ejecutaron INSERT, UPDATE, DELETE,
+ALTER ni migraciones.
+
+El usuario de panel `livreuser` tiene:
+
+``` text
+livre_users.id = 4d96ce43-d0c1-41fb-9700-181cf26ca481
+```
+
+Actualmente no existe ningún registro en `user_whatsapp_mappings` para ese
+`user_id`. Por lo tanto, la relación aprobada todavía está incompleta:
+
+``` text
+livreuser → livre_users.id → [falta mapping] → whatsapp_user → livi_trips
+```
+
+En producción:
+
+- `livi_trips.id=7` tiene `whatsapp_user=''` y `user_id=NULL`.
+- Los trips históricos 1 a 7 quedaron con `whatsapp_user=''`.
+- `livi_trips.id=8`, creado después del fix de extracción, tiene
+  `whatsapp_user='5491178240367'` y `user_id=NULL`.
+- El código actual de `app/voice/elevenlabs_trip.py` extrae
+  `body.whatsapp_user`, por lo que el trip 8 confirma que el fix de código
+  está desplegado y funcionando.
+- El webhook post-call recibe el identificador, pero no actualiza
+  `livi_trips`; no debe considerarse mecanismo de reparación de viajes.
+
+La asociación de prueba debe hacerse como operación de datos explícita y
+revisada, nunca automáticamente desde un pasajero de WhatsApp. El TCP Proxy
+público usado para esta investigación es temporal y debe desactivarse al
+finalizar.
