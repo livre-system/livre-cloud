@@ -385,3 +385,28 @@ Distinguir siempre:
 4.  `whatsapp_user` = identificador del pasajero guardado en el viaje
 
 No asumir que estos valores son intercambiables.
+
+## Último viaje desde el panel
+
+El router activo de `/chat/stream` es `app/context/router.py`, incluido antes
+que `app/chat/router.py` en `app/main.py`.
+
+Para consultas claramente referidas al último viaje (por ejemplo, "último
+viaje", "viaje anterior" o "viaje más reciente"):
+
+``` text
+JWT / require_auth → user["id"]
+→ user_whatsapp_mappings.user_id
+→ user_whatsapp_mappings.whatsapp_user
+→ livi_trips.whatsapp_user
+→ ORDER BY livi_trips.created_at DESC LIMIT 1
+```
+
+Estas consultas no deben usar búsqueda semántica para decidir el viaje. La
+fuente operacional es `livi_trips`; si no existe mapping para el usuario
+autenticado, no se deben devolver viajes ni usar datos de otro usuario.
+`livi_trips.user_id` es nullable y no reemplaza el mapping como autorización
+de identidad.
+
+El panel debe tratar el resultado SQL operacional como autoritativo frente a
+los documentos históricos `Chat log`.

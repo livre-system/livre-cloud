@@ -13,6 +13,8 @@ from app.core.database import get_cursor
 from app.core.encryption import decrypt
 from app.chat.models import ChatRequest, SynthesizeRequest
 import app.chat.repository as repo
+import re
+import unicodedata
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -112,6 +114,17 @@ def _search_memory(user_id: str = None, query: str = "") -> str:
     return "\n\n".join(lines)
 
 
+def _is_latest_trip_query(query: str) -> bool:
+    normalized = unicodedata.normalize("NFD", query or "")
+    normalized = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized.lower()).strip()
+    return (
+        "ultimo viaje" in normalized
+        or "viaje anterior" in normalized
+        or "viaje mas reciente" in normalized
+    )
+
+
 def _build_system_prompt(user_id: str = None, query: str = "") -> str:
     _log.info(f"[MEMORY DEBUG] BUILD START memory_user={user_id or MEMORY_USER_ID} QUERY={query!r}")
 
@@ -122,9 +135,12 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
     static_memory = _get_all_memory(user_id)
     _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
 
+    latest_trip_query = _is_latest_trip_query(query)
     semantic_memory = ""
-    if query and query.strip():
+    if query and query.strip() and not latest_trip_query:
         semantic_memory = _search_memory(user_id, query)
+    elif latest_trip_query:
+        _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta operacional de último viaje")
     else:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: query vacío")
 
@@ -145,13 +161,22 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
             f"(búsqueda semántica):\n{semantic_memory}"
         )
 
-    operational_trip = _get_last_operational_trip(user_id)
-    if operational_trip:
+    operational_trip = _get_last_operational_trip(user_id) if latest_trip_query else None
+    if latest_trip_query and operational_trip:
         parts.append(
-            f"Información Operativa Actual: Último viaje: {operational_trip['origen']} a {operational_trip['destino']}."
+            "FUENTE OPERACIONAL AUTORITATIVA (livi_trips): "
+            f"Último viaje registrado: trip_id={operational_trip['id']}, "
+            f"Origen: {operational_trip['origen']}, "
+            f"Destino: {operational_trip['destino']}. "
+            "Para esta consulta usa exclusivamente estos datos; no uses viajes de la memoria."
+        )
+    elif latest_trip_query:
+        parts.append(
+            "No hay viajes asociados al usuario autenticado en livi_trips. "
+            "Informa que no hay viajes asociados y no inventes ni uses viajes de otros usuarios."
         )
 
-    if not static_memory and not semantic_memory:
+    if not static_memory and not semantic_memory and not latest_trip_query:
         parts.append(
             "IMPORTANTE: No tienes información personal del usuario en memoria. "
             "No inventes datos. Responde solo con lo que sabes."
@@ -169,13 +194,13 @@ def _is_quota_error(e: Exception) -> bool:
 def _get_last_operational_trip(user_id: str) -> dict | None:
     with get_cursor() as cur:
         cur.execute("""
-            SELECT origen, destino, created_at 
-            FROM livi_trips 
-            WHERE user_id = %s OR (user_id IS NULL AND whatsapp_user IN (
-                SELECT whatsapp_user FROM user_whatsapp_mappings WHERE user_id = %s
-            ))
-            ORDER BY created_at DESC 
-            LIMIT 1;""", [user_id, user_id])
+            SELECT t.id, t.origen, t.destino, t.whatsapp_user, t.created_at
+            FROM livi_trips AS t
+            INNER JOIN user_whatsapp_mappings AS m
+                ON m.whatsapp_user = t.whatsapp_user
+            WHERE m.user_id = %s
+            ORDER BY t.created_at DESC
+            LIMIT 1;""", [user_id])
         return cur.fetchone()
 
 
