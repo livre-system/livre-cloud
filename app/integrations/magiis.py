@@ -159,3 +159,110 @@ def trip_create(
     except Exception as e:
         log.error(f"[MAGIIS] trip/create excepción: {e}", exc_info=True)
         return {"ok": False, "status_code": 0, "response": {}, "error": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Flujo real del panel web
+# ─────────────────────────────────────────────────────────────────────────────
+
+MAGIIS_WEB_BASE_URL = "https://api.apps.magiis.com"
+
+
+def simulate_all(
+    token: str,
+    carrier_user_id: int,
+    passenger_user_id: int,
+    operator_user_id: int,
+    origin: dict,
+    destination: dict,
+    service_type_id: int,
+    vehicle_type_id: int = 1,
+    payment_method: str = "CASH",
+    requester_user_id: int | None = None,
+    pickup_gmt: str = "America/Argentina/Buenos_Aires",
+    pax_qty: int = 1,
+) -> dict:
+    """Cotiza usando el mismo endpoint que el panel web de MAGIIS.
+
+    Este endpoint solo simula la tarifa; no crea ni confirma un viaje.
+    Requiere un Bearer de sesión web y los IDs operativos de MAGIIS.
+    El token nunca se obtiene desde el usuario de la API pública.
+    """
+    if not token:
+        return {"ok": False, "status_code": 0, "response": {}, "error": "MAGIIS_WEB_TOKEN no configurado"}
+
+    payload = {
+        "affiAgreementId": None,
+        "destination": destination,
+        "origin": origin,
+        "firstName": None,
+        "lastName": None,
+        "mail": None,
+        "note": ", ",
+        "passengerUserId": passenger_user_id,
+        "phoneNumber": None,
+        "platform": "Web",
+        "travelPreferences": {
+            "airConditioner": False,
+            "luggage": False,
+            "mascots": False,
+            "vehicleTypeId": vehicle_type_id,
+            "driverUserId": None,
+        },
+        "paymentMethod": payment_method,
+        "carrierUserId": carrier_user_id,
+        "isDelivery": False,
+        "isRental": False,
+        "rentalType": None,
+        "rentalHours": "1",
+        "requesterUserId": requester_user_id if requester_user_id is not None else passenger_user_id,
+        "isProgrammed": False,
+        "dateProgrammed": None,
+        "driverProgrammedId": 0,
+        "waypoints": None,
+        "roundTrip": False,
+        "avoidTolls": False,
+        "avoidHighways": False,
+        "fastestRoute": False,
+        "contractorEmployeeId": None,
+        "operatorUserId": operator_user_id,
+        "pbxCaller": False,
+        "pickupGmt": pickup_gmt,
+        "qrPayment": False,
+        "serviceTypeId": str(service_type_id),
+        "areaId": None,
+        "paxQty": pax_qty,
+    }
+
+    log.info(
+        "[MAGIIS] travels/simulateAll carrier=%s passenger=%s service_type=%s vehicle_type=%s",
+        carrier_user_id,
+        passenger_user_id,
+        service_type_id,
+        vehicle_type_id,
+    )
+
+    try:
+        resp = httpx.post(
+            f"{MAGIIS_WEB_BASE_URL}/carriers/{carrier_user_id}/travels/simulateAll",
+            headers={
+                "Authorization": token,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json=payload,
+            timeout=TIMEOUT,
+        )
+        try:
+            response_data = resp.json()
+        except Exception:
+            response_data = {"raw": resp.text[:1000]}
+        return {
+            "ok": resp.status_code in (200, 201),
+            "status_code": resp.status_code,
+            "response": response_data,
+            "error": None if resp.status_code in (200, 201) else resp.text[:500],
+        }
+    except Exception as e:
+        log.error("[MAGIIS] travels/simulateAll excepción: %s", e, exc_info=True)
+        return {"ok": False, "status_code": 0, "response": {}, "error": str(e)}
