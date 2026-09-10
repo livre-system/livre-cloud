@@ -8,7 +8,7 @@ Qué hace:
   1. Login con MAGIIS_USERNAME / MAGIIS_PASSWORD
   2. Geocodifica las direcciones con GOOGLE_MAPS_API_KEY
   3. Llama trip/create con generatedTravel=0 (cotización)
-  4. Usa el pasajero técnico configurado
+  4. Usa un pasajero invitado
   5. No crea viajes reales
 """
 
@@ -49,11 +49,7 @@ def main():
     check_env()
 
     from app.integrations.google_maps import geocode_address, GeocodingError
-    from app.integrations.magiis import (
-        MAGIIS_PASSENGER_USER_ID,
-        login,
-        trip_create,
-    )
+    from app.integrations.magiis import login, trip_create
 
     # ── Paso 1: Login ────────────────────────────────────────────────────────
     print("\n[1] Autenticando...")
@@ -85,8 +81,8 @@ def main():
         destination_lon=str(destination["longitude"]),
         destination_name=destination["formatted_address"],
         service_type=TEST_SERVICE_TYPE,
-        passenger_user_id=MAGIIS_PASSENGER_USER_ID,
-        guest_passenger_name=None,
+        passenger_user_id=None,
+        guest_passenger_name="Pasajero WhatsApp LIVI",
         generated_travel=0,
     )
 

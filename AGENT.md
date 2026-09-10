@@ -298,11 +298,12 @@ MAGIIS_APP_NAME=livre-system
 
 No exponer ni repetir contraseñas reales.
 
-Passenger técnico:
+Passenger de MAGIIS:
 
 ``` text
-Livre Cloud
-passengerUserId=436133
+Se usará `guestPassengerName` para no crear ni depender de pasajeros
+registrados en MAGIIS. El número de WhatsApp queda solamente en
+`livi_trips.whatsapp_user` como dato del pedido.
 ```
 
 No crear pasajeros dinámicamente.
