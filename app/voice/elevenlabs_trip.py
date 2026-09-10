@@ -79,6 +79,26 @@ def _save_trip(
         return cur.fetchone()["id"]
 
 
+def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
+    """Busca el último viaje MAGIIS activo del pasajero de WhatsApp."""
+    if not whatsapp_user:
+        return None
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM livi_trips
+            WHERE whatsapp_user = %s
+              AND magiis_travel_id IS NOT NULL
+              AND status IN ('created', 'pending')
+              AND COALESCE(magiis_status, '') NOT IN ('cancelled', 'canceled')
+            ORDER BY created_at DESC
+            LIMIT 1;
+            """,
+            [whatsapp_user],
+        )
+        return cur.fetchone()
+
+
 def _update_magiis_state(
     trip_id: int,
     *,
@@ -340,3 +360,74 @@ async def elevenlabs_trip(request: Request):
     # ── 6. Respuesta para ElevenLabs ──────────────────────────────────────────
     # ElevenLabs Webhook Tool requiere { "result": "..." }
     return {"result": _response}
+
+
+@router.post("/cancel")
+async def elevenlabs_cancel(request: Request):
+    """Cancela el último viaje MAGIIS activo del pasajero de WhatsApp."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
+
+    parameters = body.get("parameters", {}) or {}
+    data = body.get("data", {}) or {}
+    whatsapp_user = (
+        parameters.get("whatsapp_user")
+        or body.get("whatsapp_user")
+        or body.get("user_id")
+        or data.get("whatsapp_user")
+        or data.get("user_id")
+        or ""
+    ).strip()
+    reason = (
+        parameters.get("reason")
+        or body.get("reason")
+        or "Cancelación solicitada por el pasajero"
+    ).strip()
+
+    if not whatsapp_user:
+        return {"result": "No pude identificar el número de WhatsApp del pasajero."}
+
+    trip = _get_latest_active_trip(whatsapp_user)
+    if not trip or not trip.get("magiis_travel_id"):
+        return {"result": "No encontré un viaje activo para cancelar."}
+
+    travel_id = int(trip["magiis_travel_id"])
+    try:
+        with httpx.Client(
+            base_url=magiis_web.BASE_URL, timeout=magiis_web.TIMEOUT
+        ) as client:
+            session = magiis_web.login(client)
+            response, _, _ = magiis_web.cancel_travel(
+                session=session,
+                travel_id=travel_id,
+                operator_name=os.getenv("MAGIIS_WEB_OPERATOR_NAME", "Livre"),
+                reason=reason,
+                client=client,
+            )
+        response_body = response.json() if response.content else {}
+        if response.status_code not in (200, 201, 204):
+            raise RuntimeError(
+                f"MAGIIS cancelación HTTP {response.status_code}: {str(response_body)[:500]}"
+            )
+        _update_magiis_state(
+            trip["id"],
+            status="cancelled",
+            travel_id=travel_id,
+            response=str(response_body)[:10000],
+        )
+        log.info(
+            "[ELEVEN CANCEL] cancelled trip_id=%s magiis_travel_id=%s reason=%r",
+            trip["id"], travel_id, reason,
+        )
+        return {"result": "El viaje fue cancelado correctamente."}
+    except Exception as exc:
+        log.error("[ELEVEN CANCEL] error: %s", exc, exc_info=True)
+        _update_magiis_state(
+            trip["id"],
+            status="cancel_error",
+            travel_id=travel_id,
+            error=str(exc)[:500],
+        )
+        return {"result": "No pude cancelar el viaje en MAGIIS."}
