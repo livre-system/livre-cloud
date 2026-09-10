@@ -300,13 +300,14 @@ No exponer ni repetir contraseñas reales.
 
 Passenger de MAGIIS:
 
-``` text
-Se usará `guestPassengerName` para no crear ni depender de pasajeros
-registrados en MAGIIS. El número de WhatsApp queda solamente en
-`livi_trips.whatsapp_user` como dato del pedido.
-```
+La documentación menciona `guestPassengerName` como opcional, pero la prueba
+real contra la cuenta devuelve `The Passenger field is required` cuando se
+envía únicamente ese campo. El ID técnico anterior también devolvió error 500.
+La creación queda bloqueada hasta confirmar un `passengerUserId` válido para
+esta cuenta o la configuración de pasajeros invitados en MAGIIS.
 
-No crear pasajeros dinámicamente.
+El número de WhatsApp queda solamente en `livi_trips.whatsapp_user` como dato
+del pedido y no se usa como pasajero de MAGIIS.
 
 Auth:
 
