@@ -275,55 +275,41 @@ No mezclar pasajero WhatsApp con usuario del panel.
 
 ## MAGIIS
 
-Integración prevista:
+Integración vigente:
 
 ``` text
-ElevenLabs → livi_trips → app/integrations/magiis.py → MAGIIS API
+ElevenLabs → livi_trips → app/integrations/magiis_web.py → MAGIIS Web
 ```
 
-Credenciales configuradas en Railway mediante variables de entorno:
+La API pública (`api.public.magiis.com`) queda descartada completamente. No
+usar `app/integrations/magiis.py`, `generatedTravel` ni sus credenciales para
+este flujo.
+
+MAGIIS Web validado:
+
+- Login Web HTTP 200.
+- `simulateAll` HTTP 200 con `transportTypeId=2` disponible.
+- Creación Web HTTP 200 con `travelId`; última prueba: `Dorrego 25 → Vieytes 968`,
+  `travelId=6672893`, estado inicial `SEARCHING_DRIVER`.
+- No ejecutar audit ni cancel automáticamente.
+- La web realiza autocomplete y luego consulta `GET /places/getPlace?placeId=...`.
+- `simulateAll` recibe la ubicación ya resuelta: coordenadas, `placeId` y
+  `shortName`; no recibe una dirección textual cruda.
+- El núcleo no debe llamar Google Maps para esta resolución ni usar IDs de
+  Nominatim. Falta cerrar el adaptador que convierta el texto de WhatsApp al
+  flujo Web de MAGIIS sin mezclar contratos.
+
+Variables de Railway (no exponer valores):
 
 ``` text
-MAGIIS_USERNAME
-MAGIIS_PASSWORD
-MAGIIS_APP_NAME
+MAGIIS_WEB_USERNAME
+MAGIIS_WEB_PASSWORD
+MAGIIS_WEB_FLOW_ENABLED
+MAGIIS_WEB_CREATE_ENABLED
 ```
 
-Configuración informada:
+No exponer ni repetir contraseñas, tokens ni respuestas sensibles.
 
-``` text
-MAGIIS_USERNAME=livre-system
-MAGIIS_APP_NAME=livre-system
-```
-
-No exponer ni repetir contraseñas reales.
-
-Passenger de MAGIIS:
-
-La documentación menciona `guestPassengerName` como opcional, pero la prueba
-real contra la cuenta devuelve `The Passenger field is required` cuando se
-envía únicamente ese campo. El ID técnico anterior también devolvió error 500.
-La creación queda bloqueada hasta confirmar un `passengerUserId` válido para
-esta cuenta o la configuración de pasajeros invitados en MAGIIS.
-
-El número de WhatsApp queda solamente en `livi_trips.whatsapp_user` como dato
-del pedido y no se usa como pasajero de MAGIIS.
-
-Auth:
-
-``` text
-POST https://api.public.magiis.com/auth/login
-```
-
-Crear viaje:
-
-``` text
-POST https://api.public.magiis.com/trip/create
-```
-
-En pruebas se usó `generatedTravel=0` para no generar un viaje real.
-
-MAGIIS queda en pausa hasta estabilizar identidad/LIVI.
 
 ## Estado actual
 
@@ -334,12 +320,7 @@ funcionando. - Modelo Groq: `openai/gpt-oss-20b`. - `registrar_viaje`. -
 `conversation_id`. - `whatsapp_user`. - Variable ElevenLabs:
 `system__caller_id`.
 
-Pendiente inmediato: 1. Confirmar que `whatsapp_user` llega realmente a
-`/elevenlabs/trip`. 2. Confirmar que se guarda en `livi_trips`. 3.
-Corregir el uso de `elevenlabs_voice` en el contexto de memoria del
-panel. 4. Definir identidad persistente del pasajero WhatsApp para
-memoria/post-call. 5. Conectar esa identidad con memoria LIVI. 6.
-Retomar MAGIIS.
+Pendiente inmediato: 1. Probar el webhook con `MAGIIS_WEB_FLOW_ENABLED=1` sin creación real. 2. Resolver el bloqueo `REQUEST_DENIED` de Google Geocoding y confirmar `placeId` compatibles para Bahía Blanca. 3. Revisar la cotización persistida en `livi_trips`. 4. Habilitar `MAGIIS_WEB_CREATE_ENABLED=1` solo con autorización y prueba controlada. 5. Mantener separadas las identidades de panel y pasajero WhatsApp.
 
 ## Reglas para Hermes
 

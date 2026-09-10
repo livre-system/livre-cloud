@@ -32,6 +32,7 @@ def parse_geocode_response(data: dict) -> dict:
     return {
         "latitude": float(location["lat"]),
         "longitude": float(location["lng"]),
+        "placeId": result.get("place_id"),
         "formatted_address": result.get("formatted_address", ""),
     }
 
