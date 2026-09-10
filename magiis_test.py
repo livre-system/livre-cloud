@@ -6,12 +6,10 @@ Ejecutar desde la raíz del proyecto en Railway console:
 
 Qué hace:
   1. Login con MAGIIS_USERNAME / MAGIIS_PASSWORD
-  2. Llama trip/create con generatedTravel=0 (cotización)
-  3. NO envía passengerUserId (prueba Guest)
-  4. Loguea status y respuesta completa
-  5. Documenta si MAGIIS acepta o rechaza sin passengerUserId
-
-No crea viajes reales. No modifica ningún sistema existente.
+  2. Geocodifica las direcciones con GOOGLE_MAPS_API_KEY
+  3. Llama trip/create con generatedTravel=0 (cotización)
+  4. Usa el pasajero técnico configurado
+  5. No crea viajes reales
 """
 
 import os
@@ -25,32 +23,21 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Coordenadas reales de Bahía Blanca para la prueba
-# España 24, Bahía Blanca
-TEST_ORIGIN_LAT  = "-38.7196"
-TEST_ORIGIN_LON  = "-62.2724"
-TEST_ORIGIN_NAME = "España 24, Bahía Blanca, Buenos Aires, Argentina"
-
-# Uruguay 100, Bahía Blanca
-TEST_DEST_LAT    = "-38.7183"
-TEST_DEST_LON    = "-62.2698"
-TEST_DEST_NAME   = "Uruguay 100, Bahía Blanca, Buenos Aires, Argentina"
-
-TEST_GUEST_NAME  = "Pasajero LIVI Test"
+# Direcciones de Bahía Blanca para la prueba
+TEST_ORIGIN_NAME = "Mitre 300, Bahía Blanca"
+TEST_DEST_NAME   = "Moreno 13, Bahía Blanca"
 TEST_SERVICE_TYPE = 1  # Standard/Regular — ajustar si MAGIIS devuelve error de tipo
 
 
 def check_env():
     missing = []
-    if not os.getenv("MAGIIS_USERNAME"):
-        missing.append("MAGIIS_USERNAME")
-    if not os.getenv("MAGIIS_PASSWORD"):
-        missing.append("MAGIIS_PASSWORD")
+    for name in ("MAGIIS_USERNAME", "MAGIIS_PASSWORD", "GOOGLE_MAPS_API_KEY"):
+        if not os.getenv(name):
+            missing.append(name)
     if missing:
         print(f"\n❌ Variables de entorno faltantes en Railway: {', '.join(missing)}")
         sys.exit(1)
-    print(f"✅ MAGIIS_USERNAME={os.getenv('MAGIIS_USERNAME')}")
-    print(f"✅ MAGIIS_APP_NAME={os.getenv('MAGIIS_APP_NAME', os.getenv('MAGIIS_USERNAME'))}")
+    print("✅ Variables de MAGIIS y Google Maps configuradas")
 
 
 def main():
@@ -61,7 +48,12 @@ def main():
 
     check_env()
 
-    from app.integrations.magiis import login, trip_create
+    from app.integrations.google_maps import geocode_address, GeocodingError
+    from app.integrations.magiis import (
+        MAGIIS_PASSENGER_USER_ID,
+        login,
+        trip_create,
+    )
 
     # ── Paso 1: Login ────────────────────────────────────────────────────────
     print("\n[1] Autenticando...")
@@ -71,20 +63,31 @@ def main():
         sys.exit(1)
     print("✅ Login OK")
 
-    # ── Paso 2: Cotización sin passengerUserId (prueba Guest) ────────────────
-    print("\n[2] Llamando trip/create (generatedTravel=0, passengerUserId=436133)...")
+    # ── Paso 2: Geocodificación ───────────────────────────────────────────────
+    print("\n[2] Geocodificando origen y destino...")
+    try:
+        origin = geocode_address(TEST_ORIGIN_NAME)
+        destination = geocode_address(TEST_DEST_NAME)
+    except GeocodingError as exc:
+        print(f"❌ No se pudo geocodificar una dirección: {exc}")
+        sys.exit(1)
+    print(f"✅ Origen: {origin['formatted_address']}")
+    print(f"✅ Destino: {destination['formatted_address']}")
+
+    # ── Paso 3: Cotización sin crear viaje real ───────────────────────────────
+    print("\n[3] Llamando trip/create (generatedTravel=0)...")
     result = trip_create(
         token=token,
-        origin_lat=TEST_ORIGIN_LAT,
-        origin_lon=TEST_ORIGIN_LON,
-        origin_name=TEST_ORIGIN_NAME,
-        destination_lat=TEST_DEST_LAT,
-        destination_lon=TEST_DEST_LON,
-        destination_name=TEST_DEST_NAME,
+        origin_lat=str(origin["latitude"]),
+        origin_lon=str(origin["longitude"]),
+        origin_name=origin["formatted_address"],
+        destination_lat=str(destination["latitude"]),
+        destination_lon=str(destination["longitude"]),
+        destination_name=destination["formatted_address"],
         service_type=TEST_SERVICE_TYPE,
-        passenger_user_id=436133,        # ← pasajero técnico Livre Cloud
+        passenger_user_id=MAGIIS_PASSENGER_USER_ID,
         guest_passenger_name=None,
-        generated_travel=0,              # ← solo cotización, NO crea viaje real
+        generated_travel=0,
     )
 
     print(f"\n  status_code : {result['status_code']}")
@@ -98,7 +101,7 @@ def main():
         print(f"\n❌ MAGIIS rechazó — status={result['status_code']}")
         print(f"   {result['error']}")
     else:
-        print(f"\n✅ MAGIIS aceptó el request sin passengerUserId")
+        print("\n✅ MAGIIS aceptó el request")
         print(f"\n  Respuesta (cotizaciones):")
         print(json.dumps(result["response"], indent=2, ensure_ascii=False))
 

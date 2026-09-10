@@ -18,6 +18,8 @@ MAGIIS_BASE_URL  = "https://api.public.magiis.com"
 MAGIIS_USERNAME  = os.getenv("MAGIIS_USERNAME", "")
 MAGIIS_PASSWORD  = os.getenv("MAGIIS_PASSWORD", "")
 MAGIIS_APP_NAME  = os.getenv("MAGIIS_APP_NAME", MAGIIS_USERNAME)  # por doc = username
+MAGIIS_PASSENGER_USER_ID = int(os.getenv("MAGIIS_PASSENGER_USER_ID", "436133"))
+MAGIIS_GENERATE_TRAVEL = int(os.getenv("MAGIIS_GENERATE_TRAVEL", "0"))
 
 TIMEOUT = 15  # segundos
 
