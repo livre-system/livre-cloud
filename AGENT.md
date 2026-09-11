@@ -316,6 +316,17 @@ MAGIIS_WEB_CREATE_ENABLED
 No exponer ni repetir contraseñas, tokens ni respuestas sensibles.
 
 
+## Estado reciente del frontend CRM
+
+Repositorio: `livre-chatbot`, rama `main`, frontend desplegado en Vercel.
+
+- Vistas específicas para Viajes, Choferes y Vehículos separadas de la tabla genérica.
+- Filtros CRM conectados al backend y carga paginada del listado.
+- La vista de Vehículos carga 20 registros por página; no debe cargar 200 ni repetir la lista al finalizar.
+- La tabla genérica se limpia y se fuerza a ocultar al abrir una vista específica.
+- Últimos commits relevantes: `8634732`, `bedd19c`, `e568619`, `5e42449`.
+- Validación final realizada: `node --check js/app.js` y `git diff --check`.
+
 ## Estado actual
 
 Completado: - Google OAuth eliminado. - Registro/login propio. - JWT
