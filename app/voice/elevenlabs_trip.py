@@ -233,6 +233,104 @@ def _run_magiis_web(
         return {"created": False, "error": str(exc)}
 
 
+def _run_magiis_quote(origen: str, destino: str) -> dict:
+    """Resuelve las direcciones y ejecuta únicamente simulateAll."""
+    try:
+        with httpx.Client(
+            base_url=magiis_web.BASE_URL, timeout=magiis_web.TIMEOUT
+        ) as client:
+            session = magiis_web.login(client)
+            origin_text = magiis_web.resolve_address(origen)
+            destination_text = magiis_web.resolve_address(destino)
+            origin, session = magiis_web.get_place(
+                session=session,
+                place_id=origin_text.get("placeId"),
+                latitude=origin_text["latitude"],
+                longitude=origin_text["longitude"],
+                client=client,
+            )
+            destination, session = magiis_web.get_place(
+                session=session,
+                place_id=destination_text.get("placeId"),
+                latitude=destination_text["latitude"],
+                longitude=destination_text["longitude"],
+                client=client,
+            )
+            simulation, _, _ = magiis_web.simulate_all(
+                session=session,
+                origin_lat=origin["latitude"],
+                origin_lon=origin["longitude"],
+                origin_name=origin["shortName"] or origen,
+                destination_lat=destination["latitude"],
+                destination_lon=destination["longitude"],
+                destination_name=destination["shortName"] or destino,
+                origin_place_id=origin["placeId"],
+                destination_place_id=destination["placeId"],
+                client=client,
+            )
+            if simulation.status_code not in (200, 201):
+                raise RuntimeError(
+                    f"MAGIIS Web cotización HTTP {simulation.status_code}: "
+                    f"{simulation.text[:300]}"
+                )
+            options = simulation.json()
+            if not isinstance(options, list):
+                raise RuntimeError("MAGIIS Web cotización devolvió una respuesta inválida")
+            selected = next(
+                (item for item in options
+                 if str(item.get("transportTypeId")) == "2"
+                 and item.get("serviceStatus") == "AVAILABLE"),
+                None,
+            )
+            if selected is None:
+                raise RuntimeError("MAGIIS Web no ofreció transportTypeId=2 disponible")
+            price = selected.get("pricePointToPoint")
+            if price is None:
+                raise RuntimeError("MAGIIS Web no devolvió el precio")
+            return {"price": price}
+    except Exception as exc:
+        log.error("[ELEVEN QUOTE] error: %s", exc, exc_info=True)
+        return {"error": str(exc)}
+
+
+@router.post("/quote")
+async def elevenlabs_quote(request: Request):
+    """Cotiza un viaje sin crear el viaje real en MAGIIS."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
+
+    parameters = body.get("parameters", {}) or {}
+    data = body.get("data", {}) or {}
+    origen = (
+        parameters.get("origen") or body.get("origen") or data.get("origen") or ""
+    ).strip()
+    destino = (
+        parameters.get("destino") or body.get("destino") or data.get("destino") or ""
+    ).strip()
+    whatsapp_user = (
+        parameters.get("whatsapp_user")
+        or body.get("whatsapp_user")
+        or data.get("whatsapp_user")
+        or ""
+    ).strip()
+
+    log.info(
+        "[ELEVEN QUOTE] origen=%r destino=%r whatsapp=%r",
+        origen, destino, whatsapp_user,
+    )
+    if not origen:
+        return {"result": "Error: el origen no puede estar vacío."}
+    if not destino:
+        return {"result": "Error: el destino no puede estar vacío."}
+
+    quote = _run_magiis_quote(origen, destino)
+    if quote.get("error"):
+        return {"result": "No pude cotizar el viaje."}
+    return {"result": f"El viaje cuesta ${quote['price']}."}
+
+
 @router.post("/trip")
 async def elevenlabs_trip(request: Request):
     """
