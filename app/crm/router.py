@@ -40,6 +40,8 @@ def resource(
     q: str = Query(default="", max_length=120),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    state: str = Query(default="", max_length=120),
+    travel_date: str = Query(default="", max_length=10),
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
@@ -47,11 +49,18 @@ def resource(
     if not table:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Recurso CRM inexistente")
-    where = ""
+    where_parts = []
     params = []
     if q.strip():
-        where = " WHERE raw_payload::text ILIKE %s"
+        where_parts.append("raw_payload::text ILIKE %s")
         params.append("%" + q.strip() + "%")
+    if resource == "travels" and state.strip():
+        where_parts.append("state = %s")
+        params.append(state.strip())
+    if resource == "travels" and travel_date.strip():
+        where_parts.append("travel_date::date = %s::date")
+        params.append(travel_date.strip())
+    where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
     cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
     total = int(cur.fetchone()["total"])
     columns = "magiis_id, raw_payload, first_seen_at, last_seen_at"
