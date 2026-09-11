@@ -295,9 +295,14 @@ MAGIIS Web validado:
 - La web realiza autocomplete y luego consulta `GET /places/getPlace?placeId=...`.
 - `simulateAll` recibe la ubicación ya resuelta: coordenadas, `placeId` y
   `shortName`; no recibe una dirección textual cruda.
-- El núcleo no debe llamar Google Maps para esta resolución ni usar IDs de
-  Nominatim. Falta cerrar el adaptador que convierta el texto de WhatsApp al
-  flujo Web de MAGIIS sin mezclar contratos.
+- La resolución conserva de `getPlace` únicamente `latitude`, `longitude` y
+  `placeId`. El `shortName` de MAGIIS no reemplaza la dirección confirmada por
+  el pasajero.
+- Al crear el viaje, el payload envía el texto original confirmado. Ejemplo:
+  `destino="dorrego 25"` → `destination.shortName="dorrego 25"`.
+- `transportTypeId`/`vehicleTypeId` queda fijado en `2` para Livre Ahorro.
+- Test preparado en `tests/test_magiis_web_create_travel.py` y validado con 4
+  tests pasando.
 
 Variables de Railway (no exponer valores):
 
