@@ -351,7 +351,7 @@ def get_place(
             "latitude": str(location["lat"]),
             "longitude": str(location["lng"]),
             "placeId": item.get("place_id") or place_id,
-            "shortName": item.get("shortName") or item.get("formattedAddress") or "",
+            "shortName": "",
         }, refreshed
     finally:
         if own_client:
@@ -391,7 +391,7 @@ def simulate_all(
     passenger_user_id: int = PASSENGER_USER_ID,
     operator_user_id: int = OPERATOR_USER_ID,
     service_type_id: str = SERVICE_TYPE_ID,
-    vehicle_type_id: int = 1,
+    vehicle_type_id: int = 2,
     client: httpx.Client | None = None,
     livi_trip_id: int | None = None,
 ) -> tuple[httpx.Response, dict[str, Any], dict[str, Any]]:
