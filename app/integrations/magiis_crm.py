@@ -66,6 +66,21 @@ class MagiisCrmReader:
             self.session = magiis_web.login(self.client)
         raise AssertionError("unreachable")
 
+    def _mutate(self, method: str, path: str, *, payload: Mapping[str, Any]) -> Any:
+        """Ejecuta una mutación Web autenticada y renueva el token una vez."""
+        for attempt in range(2):
+            response = self.client.request(
+                method,
+                path,
+                json=dict(payload),
+                headers={"Authorization": f"Bearer {self.session['token']}"},
+            )
+            if response.status_code not in (401, 403) or attempt == 1:
+                response.raise_for_status()
+                return response.json() if response.content else {"status": "ok"}
+            self.session = magiis_web.login(self.client)
+        raise AssertionError("unreachable")
+
     def _post_report(
         self,
         report_code: str,
@@ -373,6 +388,12 @@ class MagiisCrmReader:
 
     def vehicle(self, vehicle_id: int) -> dict[str, Any]:
         return self._get(f"/vehicles/{vehicle_id}")
+
+    def create_vehicle(self, payload: Mapping[str, Any]) -> Any:
+        return self._mutate("POST", "/vehicles", payload=payload)
+
+    def update_vehicle(self, vehicle_id: int, payload: Mapping[str, Any]) -> Any:
+        return self._mutate("PUT", f"/vehicles/{vehicle_id}", payload=payload)
 
     def vehicle_types(self) -> list[dict[str, Any]]:
         return self._get(

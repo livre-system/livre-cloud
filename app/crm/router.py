@@ -1,7 +1,7 @@
 """API autenticada de consulta para los datos recolectados de MAGIIS."""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Body, Depends, Query, HTTPException
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
 from app.integrations import magiis_web
@@ -193,6 +193,48 @@ def cancel_live_travel(
     if response.status_code >= 400:
         raise HTTPException(status_code=502, detail="MAGIIS no pudo cancelar el viaje")
     return {"travel_id": travel_id, "status": "cancelled", "message": "Viaje cancelado correctamente."}
+
+
+@router.get("/vehicles/live")
+def live_vehicles(
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    q: str = Query(default="", max_length=120),
+    user: dict = Depends(require_auth),
+):
+    """Lista vehículos desde el contrato Web, sin exponer MAGIIS al frontend."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        payload = reader.vehicle_page(page=page, size=size, find=q)
+    page_data = payload.get("page", payload)
+    items = page_data.get("content", []) if isinstance(page_data, dict) else []
+    return {
+        "items": [{"magiis_id": item.get("vehicleId") or item.get("id"), "raw_payload": item} for item in items],
+        "total": page_data.get("totalElements", len(items)),
+        "page": page_data.get("number", page - 1) + 1,
+        "size": page_data.get("size", size),
+    }
+
+
+@router.get("/vehicles/types")
+def live_vehicle_types(user: dict = Depends(require_auth)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return {"items": reader.vehicle_types()}
+
+
+@router.post("/vehicles")
+def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.create_vehicle(payload)
+
+
+@router.put("/vehicles/{vehicle_id}")
+def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict = Depends(require_auth)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.update_vehicle(vehicle_id, payload)
 
 
 @router.get("/{resource}")
