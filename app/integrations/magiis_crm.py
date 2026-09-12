@@ -66,6 +66,180 @@ class MagiisCrmReader:
             self.session = magiis_web.login(self.client)
         raise AssertionError("unreachable")
 
+    def _post_report(
+        self,
+        report_code: str,
+        *,
+        filters: list[dict[str, Any]],
+        page: int = 1,
+        size: int = 1000000,
+        column: str = "",
+        sort: str = "ASC",
+    ) -> dict[str, Any]:
+        payload = {
+            "page": page,
+            "column": column,
+            "sort": sort,
+            "size": size,
+            "reportCode": report_code,
+            "filters": filters,
+        }
+        params = {"page": page, "size": size, "column": column, "sort": sort}
+        for attempt in range(2):
+            response = self.client.post(
+                f"/data/genericReport/{report_code}/paginated",
+                params=params,
+                json=payload,
+                headers={"Authorization": f"Bearer {self.session['token']}"},
+            )
+            if response.status_code not in (401, 403) or attempt == 1:
+                response.raise_for_status()
+                return response.json()
+            self.session = magiis_web.login(self.client)
+        raise AssertionError("unreachable")
+
+    def driver_report_page(
+        self,
+        *,
+        page: int = 1,
+        size: int = 20,
+        driver_code: str = "",
+        driver_name: str = "",
+        phone: str = "",
+        email: str = "",
+        vehicle: str = "",
+        vehicle_type: str = "",
+        operability: str = "",
+        sort: str = "ASC",
+    ) -> dict[str, Any]:
+        """Listado de choferes y filtros del reporte Web 082."""
+        filters = [
+            {"alias": "carrierId", "value": str(self.carrier_id)},
+            {"alias": "driverCode", "value": driver_code},
+            {"alias": "driverName", "value": driver_name},
+            {"alias": "phone", "value": phone},
+            {"alias": "email", "value": email},
+            {"alias": "vehicle", "value": vehicle},
+            {"alias": "vehicleType", "value": vehicle_type},
+            {"alias": "operability", "value": operability},
+        ]
+        return self._post_report(
+            "082", filters=filters, page=page, size=size, column="", sort=sort
+        )
+
+    def driver_detail_web(self, driver_user_id: int) -> dict[str, Any]:
+        """Detalle exacto usado por la pantalla Web de choferes."""
+        return self._get(f"/drivers/{driver_user_id}")
+
+    def driver_report_079(self, *, page: int = 1, size: int = 20) -> dict[str, Any]:
+        return self._post_report(
+            "079",
+            filters=[{"alias": "carrierId", "value": str(self.carrier_id)}],
+            page=page,
+            size=size,
+            column="id",
+            sort="DESC",
+        )
+
+    def driver_report_108d(
+        self, *, page: int = 1, size: int = 20, vehicle_id: str = ""
+    ) -> dict[str, Any]:
+        return self._post_report(
+            "108D",
+            filters=[
+                {"alias": "carrierId", "value": str(self.carrier_id)},
+                {"alias": "vehicleId", "value": vehicle_id},
+                {"alias": "driverCom", "value": ""},
+                {"alias": "driverComByCost", "value": ""},
+            ],
+            page=page,
+            size=size,
+            column="id",
+            sort="DESC",
+        )
+
+    def driver_report_114(self, *, page: int = 1, size: int = 20) -> dict[str, Any]:
+        return self._post_report(
+            "114",
+            filters=[{"alias": "CARRIERID", "value": str(self.carrier_id)}],
+            page=page,
+            size=size,
+            column="id",
+            sort="DESC",
+        )
+
+    def unlinked_vehicle_owners(self, *, find: str = "") -> list[dict[str, Any]]:
+        return self._get(
+            f"/carriers/{self.carrier_id}/vehicleOwners/unlinkedToDriver",
+            params={"find": find},
+        )
+
+    def carrier_vehicles(self, *, domain: str = "") -> list[dict[str, Any]]:
+        return self._get(
+            f"/carriers/{self.carrier_id}/vehicles", params={"domain": domain}
+        )
+
+    def vehicle_types_web(self) -> list[dict[str, Any]]:
+        return self._get(f"/vehicles/{self.carrier_id}/types")
+
+    def vehicle_detail_web(self, vehicle_id: int) -> dict[str, Any]:
+        return self._get(f"/vehicles/{vehicle_id}")
+
+    def vehicle_drivers(self, vehicle_id: int) -> list[dict[str, Any]]:
+        return self._get(
+            f"/carriers/{self.carrier_id}/vehicleOwners/vehicle/{vehicle_id}/drivers"
+        )
+
+    def checking_account_driver_movements(self) -> list[dict[str, Any]]:
+        return self._get(
+            f"/checking-accounts/carrier/{self.carrier_id}/movements",
+            params={"type": "driver", "carrierId": self.carrier_id},
+        )
+
+    def checking_account_client_totals(self) -> dict[str, Any]:
+        return self._get(f"/checking-accounts/carrier/{self.carrier_id}/clients/totals")
+
+    def checking_account_clients(
+        self, *, page: int = 1, size: int = 50, find: str = ""
+    ) -> dict[str, Any]:
+        return self._get(
+            f"/checking-accounts/carrier/{self.carrier_id}/clients/paginated",
+            params={
+                "page": page,
+                "size": size,
+                "column": "id",
+                "sort": "ASC",
+                "find": find,
+            },
+        )
+
+    def countries(self) -> list[dict[str, Any]]:
+        return self._get("/multiregion/countries")
+
+    def states(self, country_id: int) -> list[dict[str, Any]]:
+        return self._get(f"/multiregion/states/countryId/{country_id}")
+
+    def documents(self, entity: str) -> list[dict[str, Any]]:
+        if entity not in {"DRIVER", "VEHICLE"}:
+            raise ValueError("entity must be DRIVER or VEHICLE")
+        return self._get(f"/data/documents/{entity}")
+
+    def driver_account_movements(
+        self, driver_user_id: int, *, page: int = 1, size: int = 50,
+        start_date: str = "", end_date: str = ""
+    ) -> dict[str, Any]:
+        return self._get(
+            f"/carriers/{self.carrier_id}/drivers/{driver_user_id}/checkingAccountMovements/paginated",
+            params={
+                "page": page,
+                "size": size,
+                "column": "creationDate",
+                "sort": "DESC",
+                "startDate": start_date,
+                "endDate": end_date,
+            },
+        )
+
     def travel_page(
         self,
         *,
@@ -237,11 +411,6 @@ class MagiisCrmReader:
 
     def vehicles(self) -> list[dict[str, Any]]:
         return self._get(f"/carriers/{self.carrier_id}/vehicles")
-
-    def vehicle_drivers(self, vehicle_id: int) -> list[dict[str, Any]]:
-        return self._get(
-            f"/carriers/{self.carrier_id}/vehicleOwners/vehicle/{vehicle_id}/drivers"
-        )
 
     def contractors_page(
         self, *, page: int = 1, size: int = 20, sort: str = "ASC"

@@ -32,6 +32,42 @@ def operational(user: dict = Depends(require_auth)):
         }
 
 
+@router.get("/drivers/live")
+def live_drivers(
+    page: int = Query(default=1, ge=1, le=10000),
+    size: int = Query(default=20, ge=1, le=100),
+    driver_code: str = Query(default="", max_length=120),
+    driver_name: str = Query(default="", max_length=120),
+    phone: str = Query(default="", max_length=120),
+    email: str = Query(default="", max_length=160),
+    vehicle: str = Query(default="", max_length=120),
+    vehicle_type: str = Query(default="", max_length=120),
+    operability: str = Query(default="", max_length=120),
+    user: dict = Depends(require_auth),
+):
+    """Listado en vivo de choferes, replicando el reporte Web 082."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.driver_report_page(
+            page=page,
+            size=size,
+            driver_code=driver_code,
+            driver_name=driver_name,
+            phone=phone,
+            email=email,
+            vehicle=vehicle,
+            vehicle_type=vehicle_type,
+            operability=operability,
+        )
+
+
+@router.get("/drivers/{driver_user_id}/detail")
+def live_driver_detail(driver_user_id: int, user: dict = Depends(require_auth)):
+    """Detalle en vivo del chofer según la ruta observada en el Web."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.driver_detail_web(driver_user_id)
+
 @router.get("/operational/driver/{driver_user_id}")
 def operational_driver(driver_user_id: int, user: dict = Depends(require_auth)):
     session = magiis_web.login()
