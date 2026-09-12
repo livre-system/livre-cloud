@@ -123,9 +123,35 @@ class MagiisCrmReader:
             {"alias": "vehicleType", "value": vehicle_type},
             {"alias": "operability", "value": operability},
         ]
-        return self._post_report(
+        payload = self._post_report(
             "082", filters=filters, page=page, size=size, column="", sort=sort
         )
+        page_data = payload.get("page", payload)
+        content = page_data.get("content", []) if isinstance(page_data, Mapping) else []
+        items = []
+        for entry in content:
+            row = entry.get("row", entry) if isinstance(entry, Mapping) else {}
+            items.append({
+                "driverUserId": row.get("Col1"),
+                "driverIdForCarrier": row.get("Col2"),
+                "driverName": row.get("Col3"),
+                "phoneNumber": row.get("Col4"),
+                "driverUserEmail": row.get("Col5"),
+                "vehicleId": row.get("Col6"),
+                "vehicleBrand": row.get("Col7"),
+                "vehicleModel": row.get("Col8"),
+                "vehicleDomain": row.get("Col9"),
+                "vehicleType": row.get("Col10"),
+                "operability": row.get("Col11"),
+                "rating": row.get("Col12"),
+                "vehicleDescription": row.get("Col13"),
+            })
+        return {
+            "items": items,
+            "total": page_data.get("totalElements", len(items)),
+            "page": page_data.get("number", page - 1) + 1,
+            "size": page_data.get("size", size),
+        }
 
     def driver_detail_web(self, driver_user_id: int) -> dict[str, Any]:
         """Detalle exacto usado por la pantalla Web de choferes."""
