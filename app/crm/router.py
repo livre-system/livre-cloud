@@ -1,4 +1,6 @@
 """API autenticada de consulta para los datos recolectados de MAGIIS."""
+from datetime import date, timedelta
+
 from fastapi import APIRouter, Depends, Query
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
@@ -56,6 +58,54 @@ def summary(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     )
     row = dict(cur.fetchone())
     return {k: int(v) if k in _RESOURCES and v is not None else v for k, v in row.items()}
+
+
+@router.get("/travels/live")
+def live_travels(
+    page: int = Query(default=1, ge=1, le=10000),
+    size: int = Query(default=20, ge=1, le=100),
+    q: str = Query(default="", max_length=120),
+    state: str = Query(default="", max_length=120),
+    programmed: str = Query(default="", max_length=20),
+    date_from: str = Query(default="", max_length=10),
+    date_to: str = Query(default="", max_length=10),
+    vip: bool = Query(default=False),
+    user: dict = Depends(require_auth),
+):
+    """Consulta en vivo de gestión de viajes, solo lectura contra MAGIIS."""
+    today = date.today()
+    travel_date_from = date_from or today.isoformat()
+    travel_date_to = date_to or (today + timedelta(days=31)).isoformat()
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        page_data = reader.travel_page(
+            page=page,
+            size=size,
+            travel_date_from=travel_date_from,
+            travel_date_to=travel_date_to,
+            state=state,
+            programmed=programmed,
+            find=q,
+            is_pax_vip=vip,
+        )
+        totals = reader.travel_totals(
+            travel_date_from=travel_date_from,
+            travel_date_to=travel_date_to,
+            find=q,
+            programmed=programmed,
+            is_pax_vip=vip,
+        )
+    page_info = page_data.get("page", page_data)
+    return {
+        "source": "magiis",
+        "items": page_info.get("content", []),
+        "page": page_info.get("number", page - 1) + 1,
+        "size": page_info.get("size", size),
+        "total": page_info.get("totalElements", 0),
+        "totals": totals,
+        "date_from": travel_date_from,
+        "date_to": travel_date_to,
+    }
 
 
 @router.get("/{resource}")
