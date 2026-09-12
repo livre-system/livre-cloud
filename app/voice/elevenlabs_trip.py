@@ -156,6 +156,7 @@ def _run_magiis_web(
     origen: str,
     destino: str,
     date_programmed: str | None = None,
+    service_type_id: str | None = None,
 ) -> dict:
     """Resuelve texto en la capa Web y cotiza/crea el viaje."""
     try:
@@ -196,12 +197,12 @@ def _run_magiis_web(
             options = body if isinstance(body, list) else []
             selected = next(
                 (item for item in options
-                 if str(item.get("transportTypeId")) == "2"
+                 if str(item.get("transportTypeId")) == str(service_type_id or "2")
                  and item.get("serviceStatus") == "AVAILABLE"),
                 None,
             )
             if selected is None:
-                raise RuntimeError("MAGIIS Web no ofreció transportTypeId=2 disponible")
+                raise RuntimeError("MAGIIS Web no ofreció el servicio seleccionado disponible")
 
             if os.getenv("MAGIIS_WEB_CREATE_ENABLED", "0") != "1":
                 _update_magiis_state(
@@ -279,18 +280,10 @@ def _run_magiis_quote(origen: str, destino: str) -> dict:
             options = simulation.json()
             if not isinstance(options, list):
                 raise RuntimeError("MAGIIS Web cotización devolvió una respuesta inválida")
-            selected = next(
-                (item for item in options
-                 if str(item.get("transportTypeId")) == "2"
-                 and item.get("serviceStatus") == "AVAILABLE"),
-                None,
-            )
-            if selected is None:
-                raise RuntimeError("MAGIIS Web no ofreció transportTypeId=2 disponible")
-            price = selected.get("pricePointToPoint")
-            if price is None:
-                raise RuntimeError("MAGIIS Web no devolvió el precio")
-            return {"price": price}
+            available = [item for item in options if item.get("serviceStatus") == "AVAILABLE"]
+            if not available:
+                raise RuntimeError("MAGIIS Web no ofreció servicios disponibles")
+            return {"price": available[0].get("pricePointToPoint"), "options": available}
     except Exception as exc:
         log.error("[ELEVEN QUOTE] error: %s", exc, exc_info=True)
         return {"error": str(exc)}
@@ -331,7 +324,7 @@ async def elevenlabs_quote(request: Request):
     quote = _run_magiis_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
-    return {"result": f"El viaje cuesta ${quote['price']}."}
+    return {"result": f"El viaje cuesta ${quote['price']}.", "options": quote.get("options", [])}
 
 
 @router.post("/trip")
@@ -392,6 +385,13 @@ async def elevenlabs_trip(request: Request):
         or ""
     ).strip() or None
 
+    service_type_id = str(
+        parameters.get("service_type_id")
+        or body.get("service_type_id")
+        or data.get("service_type_id")
+        or "2"
+    )
+
     whatsapp_user = (
         parameters.get("whatsapp_user")
         or body.get("whatsapp_user")
@@ -450,7 +450,7 @@ async def elevenlabs_trip(request: Request):
 
     magiis_result = {"created": False, "disabled": True}
     if os.getenv("MAGIIS_WEB_FLOW_ENABLED", "0") == "1":
-        magiis_result = _run_magiis_web(trip_id, origen, destino, date_programmed)
+        magiis_result = _run_magiis_web(trip_id, origen, destino, date_programmed, service_type_id)
 
     if magiis_result.get("created"):
         _response = (
