@@ -385,6 +385,23 @@ Distinguir siempre:
 
 No asumir que estos valores son intercambiables.
 
+## Límites de integración MAGIIS
+
+- Nunca modificar ni tocar el webhook de ElevenLabs (`app/voice/elevenlabs_trip.py`).
+- Nunca modificar `app/integrations/magiis_web.py`.
+- `magiis_web.py` solo puede recolectar y exponer datos, contratos y respuestas
+  necesarios para usarlos desde el flujo autorizado.
+- `magiis_web.py` no se comunica directamente con WhatsApp ni con ElevenLabs.
+- WhatsApp y ElevenLabs no se comunican directamente con MAGIIS.
+- El panel es el único intermediario que envía viajes a MAGIIS.
+- El identificador de WhatsApp sirve únicamente para saber quién solicitó el
+  viaje y relacionarlo con el CRM; no se usa como identificador del cliente en
+  MAGIIS.
+- Mantener separado el cliente MAGIIS `Livre Cloud` (`436133`) de la identidad
+  del pasajero de WhatsApp.
+- Antes de editar cualquier integración, verificar estos límites y reportar
+  exactamente qué archivos se modificarán.
+
 ## Asistente del panel
 
 El panel y su chatbot son la misma herramienta para el dueño y el personal
