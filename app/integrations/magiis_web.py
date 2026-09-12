@@ -141,6 +141,8 @@ def create_travel(
     operator_user_id: int = OPERATOR_USER_ID,
     service_type_id: str = SERVICE_TYPE_ID,
     origin_token: str = "INVALID_TOKEN",
+    is_programmed: bool = False,
+    date_programmed: str | None = None,
     client: httpx.Client | None = None,
 ) -> tuple[httpx.Response, dict[str, Any], dict[str, Any]]:
     """Prepara POST /travels; no se invoca desde las pruebas de cotización."""
@@ -169,8 +171,8 @@ def create_travel(
         "isRental": False,
         "rentalHours": "1",
         "requesterUserId": passenger_user_id,
-        "isProgrammed": False,
-        "dateProgrammed": None,
+        "isProgrammed": is_programmed,
+        "dateProgrammed": date_programmed,
         "driverProgrammedId": 0,
         "recurringValue": None,
         "recurringEnd": None,

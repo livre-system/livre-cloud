@@ -155,6 +155,7 @@ def _run_magiis_web(
     trip_id: int,
     origen: str,
     destino: str,
+    date_programmed: str | None = None,
 ) -> dict:
     """Resuelve texto en la capa Web y cotiza/crea el viaje."""
     try:
@@ -213,6 +214,8 @@ def _run_magiis_web(
                 origin={**origin, "shortName": origin["shortName"] or origen},
                 destination={**destination, "shortName": destination["shortName"] or destino},
                 client=client,
+                is_programmed=bool(date_programmed),
+                date_programmed=date_programmed,
             )
             created_body = created.json()
             travel_id = _find_travel_id(created_body)
@@ -382,6 +385,13 @@ async def elevenlabs_trip(request: Request):
         or ""
     ).strip()
 
+    date_programmed = (
+        parameters.get("date_programmed")
+        or body.get("date_programmed")
+        or data.get("date_programmed")
+        or ""
+    ).strip() or None
+
     whatsapp_user = (
         parameters.get("whatsapp_user")
         or body.get("whatsapp_user")
@@ -440,7 +450,7 @@ async def elevenlabs_trip(request: Request):
 
     magiis_result = {"created": False, "disabled": True}
     if os.getenv("MAGIIS_WEB_FLOW_ENABLED", "0") == "1":
-        magiis_result = _run_magiis_web(trip_id, origen, destino)
+        magiis_result = _run_magiis_web(trip_id, origen, destino, date_programmed)
 
     if magiis_result.get("created"):
         _response = (
