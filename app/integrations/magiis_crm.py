@@ -16,6 +16,7 @@ from app.integrations import magiis_web
 
 CRM_BASE_URL = magiis_web.BASE_URL
 CRM_TIMEOUT = magiis_web.TIMEOUT
+CRM_MMC_BASE_URL = "https://svc.magiis.com"
 
 
 class MagiisCrmReader:
@@ -35,10 +36,15 @@ class MagiisCrmReader:
             base_url=CRM_BASE_URL,
             timeout=CRM_TIMEOUT,
         )
+        self.mmc_client = httpx.Client(
+            base_url=CRM_MMC_BASE_URL,
+            timeout=CRM_TIMEOUT,
+        )
 
     def close(self) -> None:
         if self._owns_client:
             self.client.close()
+        self.mmc_client.close()
 
     def __enter__(self) -> "MagiisCrmReader":
         return self
@@ -129,7 +135,9 @@ class MagiisCrmReader:
     def passenger(self, passenger_id: int) -> dict[str, Any]:
         return self._get(f"/carriers/{self.carrier_id}/clients/{passenger_id}")
 
-    def driver_dashboard(self, *, page: int = 1, size: int = 999999) -> dict[str, Any]:
+    def driver_dashboard(
+        self, *, page: int = 1, size: int = 999999, vehicle_id_switch: bool = False
+    ) -> dict[str, Any]:
         return self._get(
             f"/carriers/{self.carrier_id}/drivers/dashboard",
             params={
@@ -140,12 +148,14 @@ class MagiisCrmReader:
                 "value": "",
                 "states": "",
                 "driverId": "",
-                "vehicleIdSwitch": "false",
+                "vehicleIdSwitch": str(vehicle_id_switch).lower(),
             },
         )
 
     def driver(self, driver_user_id: int) -> dict[str, Any]:
-        return self._get(f"/drivers/{driver_user_id}")
+        return self._get(
+            f"/carriers/{self.carrier_id}/drivers/{driver_user_id}/dashboard/driver"
+        )
 
     def vehicle_page(
         self, *, page: int = 1, size: int = 20, find: str = "", sort: str = "ASC"
@@ -177,7 +187,50 @@ class MagiisCrmReader:
         return self._get(f"/carriers/{self.carrier_id}/clients/totalClients")
 
     def driver_totals(self) -> dict[str, Any]:
-        return self._get(f"/carriers/{self.carrier_id}/drivers/totalDrivers")
+        return self._get(
+            f"/carriers/{self.carrier_id}/drivers/totalDrivers",
+            params={"driverId": ""},
+        )
+
+    def operational_report(self) -> dict[str, Any]:
+        """Replica el POST del reporte 042 usado por Control operacional."""
+        payload = {
+            "page": 1,
+            "column": "",
+            "sort": "DESC",
+            "size": 1000000,
+            "reportCode": "042",
+            "filters": [{"alias": "carrierId", "value": str(self.carrier_id)}],
+        }
+        for attempt in range(2):
+            response = self.client.post(
+                "/data/genericReport/042/paginated",
+                params={"page": 1, "size": 1000000, "column": "", "sort": "DESC"},
+                json=payload,
+                headers={"Authorization": f"Bearer {self.session['token']}"},
+            )
+            if response.status_code not in (401, 403) or attempt == 1:
+                response.raise_for_status()
+                return response.json()
+            self.session = magiis_web.login(self.client)
+        raise AssertionError("unreachable")
+
+    def chats_all(self) -> dict[str, Any]:
+        """Replica la consulta MMC de chats, sin mutar conversaciones."""
+        for attempt in range(2):
+            response = self.mmc_client.get(
+                "/mmc/chats/all",
+                params={"carrierId": self.carrier_id, "role": "CARRIER"},
+                headers={
+                    "Authorization": f"Bearer {self.session['token']}",
+                    "Accept": "application/json",
+                },
+            )
+            if response.status_code not in (401, 403) or attempt == 1:
+                response.raise_for_status()
+                return response.json()
+            self.session = magiis_web.login(self.client)
+        raise AssertionError("unreachable")
 
     def drivers_for_combo(self) -> list[dict[str, Any]]:
         return self._get(f"/carriers/{self.carrier_id}/drivers/driversForCombo")

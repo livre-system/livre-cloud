@@ -2,6 +2,8 @@
 from fastapi import APIRouter, Depends, Query
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
+from app.integrations import magiis_web
+from app.integrations.magiis_crm import MagiisCrmReader
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -11,6 +13,28 @@ _RESOURCES = {
     "vehicles": "magiis_crm_vehicles",
     "travels": "magiis_crm_travels",
 }
+
+
+@router.get("/operational")
+def operational(user: dict = Depends(require_auth)):
+    """Contrato server-side del panel Control operacional de MAGIIS Web."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return {
+            "status": reader.operational_status(),
+            "driver_totals": reader.driver_totals(),
+            "drivers": reader.driver_dashboard(vehicle_id_switch=False),
+            "drivers_by_vehicle": reader.driver_dashboard(vehicle_id_switch=True),
+            "report_042": reader.operational_report(),
+            "chats": reader.chats_all(),
+        }
+
+
+@router.get("/operational/driver/{driver_user_id}")
+def operational_driver(driver_user_id: int, user: dict = Depends(require_auth)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.driver(driver_user_id)
 
 
 @router.get("/summary")

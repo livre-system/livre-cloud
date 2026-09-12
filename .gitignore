@@ -6,4 +6,4 @@ app/memory/memory_index.json
 app/memory/*.backup
 __pycache__/
 .venv/
-apps.magiis.com.har
+*.har

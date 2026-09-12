@@ -463,3 +463,12 @@ No crear `user_whatsapp_mappings` para reparar estos viajes hasta que exista
 una decisión de negocio explícita que defina una relación panel↔WhatsApp. El
 TCP Proxy público usado para esta investigación es temporal y debe
 desactivarse al finalizar.
+
+## Control operacional MAGIIS Web
+
+El frontend del panel llama únicamente a `GET /crm/operational` y el backend
+replica server-side las consultas de solo lectura observadas en el HAR: estado
+del carrier, totales y dashboards de choferes, reporte 042 y chats MMC. Los
+detalles individuales se exponen en `GET /crm/operational/driver/{id}`.
+Las credenciales se leen de `MAGIIS_WEB_USERNAME` y `MAGIIS_WEB_PASSWORD`; no
+se copian tokens del HAR ni se exponen al navegador.
