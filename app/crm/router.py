@@ -1,7 +1,7 @@
 """API autenticada de consulta para los datos recolectados de MAGIIS."""
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
 from app.integrations import magiis_web
@@ -106,6 +106,26 @@ def live_travels(
         "date_from": travel_date_from,
         "date_to": travel_date_to,
     }
+
+
+@router.put("/travels/{travel_id}/cancel")
+def cancel_live_travel(
+    travel_id: int,
+    reason: str = Query(default="Cancelación solicitada desde Gestión de Viajes", max_length=250),
+    user: dict = Depends(require_auth),
+):
+    """Cancela un viaje activo usando el contrato Web observado en MAGIIS."""
+    session = magiis_web.login()
+    response, _, _ = magiis_web.cancel_travel(
+        session=session,
+        travel_id=travel_id,
+        operator_name=user.get("name") or "Livre",
+        reason=reason,
+        canceled_by="CARRIER_MANAGER",
+    )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="MAGIIS no pudo cancelar el viaje")
+    return {"travel_id": travel_id, "status": "cancelled", "message": "Viaje cancelado correctamente."}
 
 
 @router.get("/{resource}")

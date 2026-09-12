@@ -262,6 +262,7 @@ def cancel_travel(
     travel_id: int,
     operator_name: str,
     reason: str = "Cancelación solicitada por el pasajero",
+    canceled_by: str = "CARRIER",
     user_id: int = OPERATOR_USER_ID,
     client: httpx.Client | None = None,
 ) -> tuple[httpx.Response, dict[str, Any], dict[str, Any]]:
@@ -270,7 +271,7 @@ def cancel_travel(
         "travelId": travel_id,
         "carrierUserId": str(CARRIER_USER_ID),
         "reasonForCancellation": reason,
-        "canceledBy": "CARRIER",
+        "canceledBy": canceled_by,
         "name": operator_name,
         "userId": user_id,
         "checkPassengerCancelation": False,
