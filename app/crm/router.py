@@ -225,9 +225,12 @@ def live_vehicle_types(user: dict = Depends(require_auth)):
 
 @router.post("/vehicles")
 def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth)):
+    # La identidad del carrier queda en backend; el navegador no decide el carrier.
+    provider_payload = dict(payload)
+    provider_payload["carrierUserId"] = str(magiis_web.CARRIER_USER_ID)
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
-        return reader.create_vehicle(payload)
+        return reader.create_vehicle(provider_payload)
 
 
 @router.put("/vehicles/{vehicle_id}")
