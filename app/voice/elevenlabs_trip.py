@@ -12,12 +12,14 @@ Payload esperado (Webhook Tool de ElevenLabs):
   "parameters": {
     "origen": "España 24",
     "destino": "Uruguay 100",
-    "conversation_id": "conv_..."   ← opcional, también viene en raíz
+    "conversation_id": "conv_..."
+    "confirmado": true        ← obligatorio para registrar/enviar
   },
   "conversation_id": "conv_..."
 }
 
-Idempotente: un conversation_id = un viaje. Si ElevenLabs reintenta, devuelve OK.
+Flujo: sin `confirmado` devuelve solo la cotización; con `confirmado=true`
+registra el viaje y lo envía a MAGIIS.
 Conecta el pedido con MAGIIS Web cuando `MAGIIS_WEB_FLOW_ENABLED=1`.
 La creación real requiere además `MAGIIS_WEB_CREATE_ENABLED=1`.
 """
@@ -131,6 +133,13 @@ def _update_magiis_state(
                 trip_id,
             ),
         )
+
+
+def _is_confirmation(value: object) -> bool:
+    """Acepta solo una confirmación explícita del pasajero/agente."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "si", "sí", "confirmado", "confirmar"}
 
 
 def _find_travel_id(value: object) -> int | None:
@@ -392,6 +401,16 @@ async def elevenlabs_trip(request: Request):
         or ""
     ).strip() or None
 
+    confirmed = _is_confirmation(
+        parameters.get("confirmado")
+        or parameters.get("confirmar")
+        or parameters.get("confirmed")
+        or body.get("confirmado")
+        or body.get("confirmar")
+        or data.get("confirmado")
+        or data.get("confirmar")
+    )
+
     whatsapp_user = (
         parameters.get("whatsapp_user")
         or body.get("whatsapp_user")
@@ -414,6 +433,18 @@ async def elevenlabs_trip(request: Request):
     if not destino:
         log.warning("[ELEVEN TRIP] destino vacío")
         return {"result": "Error: el destino no puede estar vacío."}
+
+    if not confirmed:
+        quote = _run_magiis_quote(origen, destino)
+        if quote.get("error"):
+            log.warning("[ELEVEN TRIP] cotización fallida antes de confirmar")
+            return {"result": "No pude obtener la cotización todavía. No registré ni envié el viaje."}
+        return {
+            "result": (
+                f"La cotización del viaje es de ${quote['price']}. "
+                "¿Confirmás el viaje?"
+            )
+        }
 
     if not conversation_id:
         log.warning("[ELEVEN TRIP] sin conversation_id — generando uno de fallback")
