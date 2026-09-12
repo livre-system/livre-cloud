@@ -108,6 +108,37 @@ def live_travels(
     }
 
 
+@router.get("/passengers")
+def live_passengers(
+    page: int = Query(default=1, ge=1, le=10000),
+    size: int = Query(default=20, ge=1, le=100),
+    q: str = Query(default="", max_length=120),
+    user: dict = Depends(require_auth),
+):
+    """Consulta en vivo de clientes, solo lectura contra MAGIIS."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        page_data = reader.passenger_page(page=page, size=size, find=q.strip())
+        totals = reader.client_totals()
+    page_info = page_data.get("page", page_data)
+    return {
+        "source": "magiis",
+        "items": page_info.get("content", []),
+        "page": page_info.get("number", page - 1) + 1,
+        "size": page_info.get("size", size),
+        "total": page_info.get("totalElements", 0),
+        "totals": totals,
+    }
+
+
+@router.get("/passengers/{passenger_id}")
+def live_passenger(passenger_id: int, user: dict = Depends(require_auth)):
+    """Detalle de un cliente, solo lectura contra MAGIIS."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.passenger(passenger_id)
+
+
 @router.put("/travels/{travel_id}/cancel")
 def cancel_live_travel(
     travel_id: int,
