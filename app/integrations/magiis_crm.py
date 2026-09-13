@@ -287,6 +287,23 @@ class MagiisCrmReader:
             },
         )
 
+    def travel_history_page(self, *, page: int = 1, size: int = 50, date_from: str = "", date_to: str = "", state: str = "", find: str = "") -> dict[str, Any]:
+        """Histórico del panel Web de MAGIIS: reporte 023."""
+        def web_date(value: str) -> str:
+            parts = value.split('-')
+            return '/'.join(reversed(parts)) if len(parts) == 3 else value
+        filters = [
+            {"alias": "carrieraccount_Id", "value": str(self.carrier_id)},
+            {"alias": "owner_id", "value": ""},
+            {"alias": "dateFrom", "value": web_date(date_from)},
+            {"alias": "dateTo", "value": web_date(date_to)},
+            {"alias": "STATE", "value": state},
+            {"alias": "CHANNEL", "value": ""},
+            {"alias": "PAYMENTMETHOD", "value": ""},
+            {"alias": "SEARCH_STRING", "value": f"%{find}%"},
+        ]
+        return self._post_report("023", filters=filters, page=page, size=size, column="3", sort="DESC")
+
     def travel_page(
         self,
         *,

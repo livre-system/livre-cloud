@@ -144,6 +144,30 @@ def live_travels(
     }
 
 
+@router.get("/travel-history")
+def travel_history(
+    page: int = Query(default=1, ge=1, le=10000),
+    size: int = Query(default=50, ge=1, le=100),
+    q: str = Query(default="", max_length=120),
+    state: str = Query(default="", max_length=120),
+    date_from: str = Query(default="", max_length=10),
+    date_to: str = Query(default="", max_length=10),
+    user: dict = Depends(require_auth),
+):
+    """Histórico de viajes del reporte Web 023 de MAGIIS, solo lectura."""
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        result = reader.travel_history_page(page=page, size=size, date_from=date_from, date_to=date_to, state=state, find=q)
+    page_info = result.get("page", result)
+    return {
+        "source": "magiis",
+        "items": page_info.get("content", []),
+        "page": page_info.get("number", page - 1) + 1,
+        "size": page_info.get("size", size),
+        "total": page_info.get("totalElements", 0),
+    }
+
+
 @router.get("/passengers")
 def live_passengers(
     page: int = Query(default=1, ge=1, le=10000),
