@@ -421,6 +421,18 @@ class MagiisCrmReader:
     def create_driver(self, payload: Mapping[str, Any]) -> Any:
         return self._mutate("POST", "/drivers", payload=payload)
 
+    def vehicle_owner_page(self, *, page: int = 1, size: int = 50, find: str = "") -> dict[str, Any]:
+        return self._get(f"/carriers/{self.carrier_id}/vehicleOwners/paginated", params={"page": page, "size": size, "column": "id", "sort": "ASC", "find": find})
+
+    def vehicle_owner(self, owner_id: int) -> dict[str, Any]:
+        return self._get(f"/carriers/{self.carrier_id}/vehicleOwners/{owner_id}")
+
+    def create_vehicle_owner(self, payload: Mapping[str, Any]) -> Any:
+        return self._mutate("POST", f"/carriers/{self.carrier_id}/vehicleOwners", payload=payload)
+
+    def update_vehicle_owner(self, owner_id: int, payload: Mapping[str, Any]) -> Any:
+        return self._mutate("PUT", f"/carriers/{self.carrier_id}/vehicleOwners/{owner_id}", payload=payload)
+
     def update_vehicle(self, vehicle_id: int, payload: Mapping[str, Any]) -> Any:
         return self._mutate("PUT", f"/vehicles/{vehicle_id}", payload=payload)
 

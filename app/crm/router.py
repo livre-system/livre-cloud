@@ -15,6 +15,7 @@ _RESOURCES = {
     "drivers": "magiis_crm_drivers",
     "vehicles": "magiis_crm_vehicles",
     "travels": "magiis_crm_travels",
+    "vehicle_owners": "magiis_crm_vehicle_owners",
 }
 
 
@@ -330,6 +331,45 @@ def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_a
         response = reader.create_driver(provider_payload)
     _persist_created_record(cur, "magiis_crm_drivers", response, provider_payload, ("driverUserId", "driverId", "driver_id", "id"))
     return response
+
+
+@router.get("/vehicle-owners")
+def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        result = reader.vehicle_owner_page(page=page, size=size, find=q.strip())
+    page_data = result.get("page", result)
+    items = page_data.get("content", []) if isinstance(page_data, dict) else []
+    for item in items:
+        owner_id = _find_provider_id(item, ("id", "vehicleOwnerId"))
+        if owner_id is not None:
+            cur.execute("""INSERT INTO magiis_crm_vehicle_owners (magiis_id, raw_payload) VALUES (%s, %s::jsonb) ON CONFLICT (magiis_id) DO UPDATE SET raw_payload=EXCLUDED.raw_payload, last_seen_at=now()""", (owner_id, json.dumps(item, separators=(",", ":"))))
+    return {"items": [{"magiis_id": item.get("id"), "raw_payload": item} for item in items], "total": page_data.get("totalElements", len(items)), "page": page, "size": page_data.get("size", size)}
+
+
+@router.get("/vehicle-owners/{owner_id}")
+def live_vehicle_owner(owner_id: int, user: dict = Depends(require_auth)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.vehicle_owner(owner_id)
+
+
+@router.post("/vehicle-owners")
+def create_live_vehicle_owner(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    provider_payload = dict(payload)
+    provider_payload["carrierId"] = str(magiis_web.CARRIER_USER_ID)
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        response = reader.create_vehicle_owner(provider_payload)
+    _persist_created_record(cur, "magiis_crm_vehicle_owners", response, provider_payload, ("vehicleOwnerId", "id"))
+    return response
+
+
+@router.put("/vehicle-owners/{owner_id}")
+def update_live_vehicle_owner(owner_id: int, payload: dict = Body(...), user: dict = Depends(require_auth)):
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.update_vehicle_owner(owner_id, payload)
 
 
 @router.put("/vehicles/{vehicle_id}")
