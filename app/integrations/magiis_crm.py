@@ -81,6 +81,13 @@ class MagiisCrmReader:
             self.session = magiis_web.login(self.client)
         raise AssertionError("unreachable")
 
+    def confirm_email(self, *, email: str, role: str) -> Any:
+        return self._mutate("POST", "/users/searchEmailExists/", payload={
+            "email": email,
+            "role": role,
+            "carrierId": self.carrier_id,
+        })
+
     def _post_report(
         self,
         report_code: str,

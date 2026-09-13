@@ -337,14 +337,31 @@ def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_a
 def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
-        result = reader.vehicle_owner_page(page=page, size=size, find=q.strip())
-    page_data = result.get("page", result)
-    items = page_data.get("content", []) if isinstance(page_data, dict) else []
+        result = reader.vehicle_owner_page(page=1, size=50, find=q.strip())
+        page_data = result.get("page", result)
+        items = list(page_data.get("content", [])) if isinstance(page_data, dict) else []
+        total_pages = int(page_data.get("totalPages", 1)) if isinstance(page_data, dict) else 1
+        for current_page in range(2, total_pages + 1):
+            next_result = reader.vehicle_owner_page(page=current_page, size=50, find=q.strip())
+            next_data = next_result.get("page", next_result)
+            items.extend(next_data.get("content", []) if isinstance(next_data, dict) else [])
     for item in items:
         owner_id = _find_provider_id(item, ("id", "vehicleOwnerId"))
         if owner_id is not None:
             cur.execute("""INSERT INTO magiis_crm_vehicle_owners (magiis_id, raw_payload) VALUES (%s, %s::jsonb) ON CONFLICT (magiis_id) DO UPDATE SET raw_payload=EXCLUDED.raw_payload, last_seen_at=now()""", (owner_id, json.dumps(item, separators=(",", ":"))))
-    return {"items": [{"magiis_id": item.get("id"), "raw_payload": item} for item in items], "total": page_data.get("totalElements", len(items)), "page": page, "size": page_data.get("size", size)}
+    return {"items": [{"magiis_id": item.get("id"), "raw_payload": item} for item in items], "total": len(items), "page": 1, "size": len(items)}
+
+
+@router.post("/confirm-email")
+def confirm_crm_email(payload: dict = Body(...), user: dict = Depends(require_auth)):
+    email = str(payload.get("email", "")).strip()
+    role = str(payload.get("role", "")).strip().upper()
+    if not email or role not in {"DRIVER", "VEHICLEOWNER"}:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=422, detail="Email y rol son obligatorios")
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.confirm_email(email=email, role=role)
 
 
 @router.get("/vehicle-owners/{owner_id}")
