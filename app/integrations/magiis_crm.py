@@ -100,6 +100,9 @@ class MagiisCrmReader:
             "filters": filters,
         }
         params = {"page": page, "size": size, "column": column, "sort": sort}
+        if report_code == "023":
+            params["isOrderer"] = "true"
+            payload["isOrderer"] = True
         for attempt in range(2):
             response = self.client.post(
                 f"/data/genericReport/{report_code}/paginated",

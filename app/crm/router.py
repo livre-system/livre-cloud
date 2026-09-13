@@ -159,9 +159,11 @@ def travel_history(
     with MagiisCrmReader(session) as reader:
         result = reader.travel_history_page(page=page, size=size, date_from=date_from, date_to=date_to, state=state, find=q)
     page_info = result.get("page", result)
+    content = page_info.get("content", []) if isinstance(page_info, dict) else []
+    items = [entry.get("row", entry) if isinstance(entry, dict) else entry for entry in content]
     return {
         "source": "magiis",
-        "items": page_info.get("content", []),
+        "items": items,
         "page": page_info.get("number", page - 1) + 1,
         "size": page_info.get("size", size),
         "total": page_info.get("totalElements", 0),
