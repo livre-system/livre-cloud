@@ -160,7 +160,12 @@ def travel_history(
         result = reader.travel_history_page(page=page, size=size, date_from=date_from, date_to=date_to, state=state, find=q)
     page_info = result.get("page", result)
     content = page_info.get("content", []) if isinstance(page_info, dict) else []
-    items = [entry.get("row", entry) if isinstance(entry, dict) else entry for entry in content]
+    items = []
+    for entry in content:
+        row = entry.get("row", entry) if isinstance(entry, dict) else entry
+        if isinstance(row, list):
+            row = {f"Col{index + 1}": value for index, value in enumerate(row)}
+        items.append(row)
     return {
         "source": "magiis",
         "items": items,
