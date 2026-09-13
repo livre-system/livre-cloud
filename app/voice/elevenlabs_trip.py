@@ -217,6 +217,7 @@ def _run_magiis_web(
                 client=client,
                 is_programmed=bool(date_programmed),
                 date_programmed=date_programmed,
+                service_type_id=str(service_type_id or "2"),
             )
             created_body = created.json()
             travel_id = _find_travel_id(created_body)
@@ -280,10 +281,21 @@ def _run_magiis_quote(origen: str, destino: str) -> dict:
             options = simulation.json()
             if not isinstance(options, list):
                 raise RuntimeError("MAGIIS Web cotización devolvió una respuesta inválida")
-            available = [item for item in options if item.get("serviceStatus") == "AVAILABLE"]
+            available = [
+                item for item in options
+                if str(item.get("transportTypeId")) in {"1", "2"}
+                and item.get("serviceStatus") == "AVAILABLE"
+            ]
             if not available:
-                raise RuntimeError("MAGIIS Web no ofreció servicios disponibles")
-            return {"price": available[0].get("pricePointToPoint"), "options": available}
+                raise RuntimeError("MAGIIS Web no ofreció Premium ni Ahorro disponibles")
+            ahorro_or_premium = next(
+                (item for item in available if str(item.get("transportTypeId")) == "2"),
+                available[0],
+            )
+            return {
+                "price": ahorro_or_premium.get("pricePointToPoint"),
+                "options": available,
+            }
     except Exception as exc:
         log.error("[ELEVEN QUOTE] error: %s", exc, exc_info=True)
         return {"error": str(exc)}
