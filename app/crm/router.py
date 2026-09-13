@@ -1,4 +1,5 @@
 """API autenticada de consulta para los datos recolectados de MAGIIS."""
+import json
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
@@ -16,6 +17,41 @@ _RESOURCES = {
     "travels": "magiis_crm_travels",
 }
 
+
+def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
+    """Busca el id real devuelto por MAGIIS, incluso si viene anidado."""
+    if isinstance(value, dict):
+        for key in keys:
+            candidate = value.get(key)
+            if candidate not in (None, ""):
+                try:
+                    return int(candidate)
+                except (TypeError, ValueError):
+                    pass
+        for child in value.values():
+            found = _find_provider_id(child, keys)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_provider_id(child, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _persist_created_record(cur, table: str, response: object, fallback: dict, id_keys: tuple[str, ...]) -> None:
+    """Replica inmediatamente una alta exitosa en la tabla local de CRM."""
+    provider_id = _find_provider_id(response, id_keys)
+    if provider_id is None:
+        return
+    raw_payload = response if isinstance(response, (dict, list)) else fallback
+    cur.execute(
+        f"""INSERT INTO {table} (magiis_id, raw_payload)
+            VALUES (%s, %s::jsonb)
+            ON CONFLICT (magiis_id) DO UPDATE SET raw_payload = EXCLUDED.raw_payload, last_seen_at = now()""",
+        (provider_id, json.dumps(raw_payload, separators=(",", ":"))),
+    )
 
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth)):
@@ -273,23 +309,27 @@ def live_vehicle_types(user: dict = Depends(require_auth)):
 
 
 @router.post("/vehicles")
-def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth)):
+def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     # La identidad del carrier queda en backend; el navegador no decide el carrier.
     provider_payload = dict(payload)
     provider_payload["carrierUserId"] = str(magiis_web.CARRIER_USER_ID)
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
-        return reader.create_vehicle(provider_payload)
+        response = reader.create_vehicle(provider_payload)
+    _persist_created_record(cur, "magiis_crm_vehicles", response, provider_payload, ("vehicleId", "vehicle_id", "id"))
+    return response
 
 
 @router.post("/drivers")
-def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_auth)):
+def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     # El carrier se fija en backend para no confiar en datos enviados por el navegador.
     provider_payload = dict(payload)
     provider_payload["carrierUserId"] = int(magiis_web.CARRIER_USER_ID)
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
-        return reader.create_driver(provider_payload)
+        response = reader.create_driver(provider_payload)
+    _persist_created_record(cur, "magiis_crm_drivers", response, provider_payload, ("driverUserId", "driverId", "driver_id", "id"))
+    return response
 
 
 @router.put("/vehicles/{vehicle_id}")
