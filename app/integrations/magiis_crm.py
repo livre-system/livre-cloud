@@ -138,8 +138,12 @@ class MagiisCrmReader:
             {"alias": "vehicleType", "value": vehicle_type},
             {"alias": "operability", "value": operability},
         ]
+        # El Web de MAGIIS usa un tamaño de 1.000.000 para este reporte.
+        # Si se pide el tamaño de la tabla (20/50/100), MAGIIS devuelve solo
+        # esa página y el panel termina mostrando 50 aunque el total real sea
+        # 184. Traemos el reporte completo y paginamos acá.
         payload = self._post_report(
-            "082", filters=filters, page=page, size=size, column="", sort=sort
+            "082", filters=filters, page=1, size=1000000, column="", sort=sort
         )
         page_data = payload.get("page", payload)
         content = page_data.get("content", []) if isinstance(page_data, Mapping) else []
@@ -161,11 +165,13 @@ class MagiisCrmReader:
                 "rating": row.get("Col12"),
                 "vehicleDescription": row.get("Col13"),
             })
+        start = max(0, page - 1) * size
+        total = page_data.get("totalElements", len(items))
         return {
-            "items": items,
-            "total": page_data.get("totalElements", len(items)),
-            "page": page_data.get("number", page - 1) + 1,
-            "size": page_data.get("size", size),
+            "items": items[start:start + size],
+            "total": total,
+            "page": page,
+            "size": size,
         }
 
     def driver_detail_web(self, driver_user_id: int) -> dict[str, Any]:
