@@ -282,6 +282,16 @@ def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_
         return reader.create_vehicle(provider_payload)
 
 
+@router.post("/drivers")
+def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_auth)):
+    # El carrier se fija en backend para no confiar en datos enviados por el navegador.
+    provider_payload = dict(payload)
+    provider_payload["carrierUserId"] = int(magiis_web.CARRIER_USER_ID)
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        return reader.create_driver(provider_payload)
+
+
 @router.put("/vehicles/{vehicle_id}")
 def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict = Depends(require_auth)):
     session = magiis_web.login()
