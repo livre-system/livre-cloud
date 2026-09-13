@@ -27,6 +27,7 @@ def operational(user: dict = Depends(require_auth)):
             "driver_totals": reader.driver_totals(),
             "drivers": reader.driver_dashboard(vehicle_id_switch=False),
             "drivers_by_vehicle": reader.driver_dashboard(vehicle_id_switch=True),
+            "driver_statuses": reader.driver_report_page(page=1, size=1000000),
             "report_042": reader.operational_report(),
             "chats": reader.chats_all(),
         }
@@ -157,7 +158,9 @@ def travel_history(
     """Histórico de viajes del reporte Web 023 de MAGIIS, solo lectura."""
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
-        result = reader.travel_history_page(page=page, size=size, date_from=date_from, date_to=date_to, state=state, find=q)
+        # El reporte 023 trae la sumatoria que el panel muestra debajo de la tabla.
+        # Se consulta una vez completo para no sumar solo la página visible.
+        result = reader.travel_history_page(page=1, size=1000000, date_from=date_from, date_to=date_to, state=state, find=q)
     page_info = result.get("page", result)
     content = page_info.get("content", []) if isinstance(page_info, dict) else []
     items = []
@@ -166,12 +169,27 @@ def travel_history(
         if isinstance(row, list):
             row = {f"Col{index + 1}": value for index, value in enumerate(row)}
         items.append(row)
+    def amount(index: int) -> float:
+        total = 0.0
+        for row in items:
+            value = row.get(f"Col{index}")
+            if isinstance(value, (int, float)):
+                total += float(value)
+            elif isinstance(value, str):
+                try:
+                    total += float(value.replace("$", "").replace("ARS", "").replace(".", "").replace(",", ".").strip())
+                except ValueError:
+                    pass
+        return round(total, 2)
+    total = len(items)
+    start = (page - 1) * size
     return {
         "source": "magiis",
-        "items": items,
-        "page": page_info.get("number", page - 1) + 1,
-        "size": page_info.get("size", size),
-        "total": page_info.get("totalElements", 0),
+        "items": items[start:start + size],
+        "page": page,
+        "size": size,
+        "total": total,
+        "summary": {"trips": total, "final_amount_ars": amount(11), "amount_ars": amount(14), "budget_ars": amount(15)},
     }
 
 

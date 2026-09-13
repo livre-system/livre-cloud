@@ -485,7 +485,10 @@ desactivarse al finalizar.
 
 El frontend del panel llama únicamente a `GET /crm/operational` y el backend
 replica server-side las consultas de solo lectura observadas en el HAR: estado
-del carrier, totales y dashboards de choferes, reporte 042 y chats MMC. Los
-detalles individuales se exponen en `GET /crm/operational/driver/{id}`.
+del carrier, totales, reporte 082 de estados de choferes, dashboards de choferes,
+reporte 042 y chats MMC. Los detalles individuales se exponen en
+`GET /crm/operational/driver/{id}`. El reporte 082 no expone una mutación de
+estado en el HAR capturado; por eso el panel no inventa un PUT/PATCH para
+actualizarlos.
 Las credenciales se leen de `MAGIIS_WEB_USERNAME` y `MAGIIS_WEB_PASSWORD`; no
 se copian tokens del HAR ni se exponen al navegador.
