@@ -492,3 +492,45 @@ estado en el HAR capturado; por eso el panel no inventa un PUT/PATCH para
 actualizarlos.
 Las credenciales se leen de `MAGIIS_WEB_USERNAME` y `MAGIIS_WEB_PASSWORD`; no
 se copian tokens del HAR ni se exponen al navegador.
+
+### Asignación automática de viajes
+
+En `HARS/nuevoviaje.har`, después de crear un viaje, el panel consulta:
+
+- `GET /carriers/2421/parameter?key=DISABLED_AUTO_ASSIGN`
+- `GET /carriers/2421/parameter?key=INSTANT_ASSIGNMENT`
+
+Ambos parámetros respondieron `false` en el HAR capturado. Esto indica que la
+configuración observada no deshabilita la asignación automática y tampoco activa
+la asignación instantánea. No asumir todavía que el viaje se toma solo por esos
+flags: hay que confirmar en el HAR de creación y en la respuesta/estado del
+viaje cuál es el mecanismo efectivo de asignación en MAGIIS. No inventar un
+endpoint de aceptación ni modificar esa configuración sin evidencia adicional.
+
+## Estado actual verificado
+
+El backend CRM ya expone integración operativa con MAGIIS Web para:
+
+- viajes en vivo e histórico, con filtros, paginación y cancelación;
+- pasajeros;
+- choferes, incluyendo listado, filtros, detalle y alta;
+- vehículos, incluyendo listado, tipos, alta y actualización;
+- propietarios de vehículos, incluyendo listado, búsqueda, detalle, alta,
+  edición y confirmación de email;
+- control operacional y reportes observados en el contrato Web.
+
+Las altas de choferes, vehículos y propietarios se espejan en las tablas locales
+correspondientes cuando la operación externa devuelve un identificador.
+
+El frontend CRM incluye vistas separadas para control operacional, viajes,
+histórico, choferes, vehículos y propietarios, además de filtros, paginación,
+altas, modo oscuro, adaptación mobile/PWA y mapa de viajes con ruta real.
+La cotización permite seleccionar Livre Premium o Livre Ahorro y registrar
+viajes programados desde el panel.
+
+Pendiente conocido:
+
+- integrar ubicación GPS operacional de vehículos en tiempo real;
+- implementar edición de choferes cuando MAGIIS Web exponga un contrato válido;
+- completar la edición de vehículos en la interfaz del panel, cuyo endpoint
+  backend ya existe.
