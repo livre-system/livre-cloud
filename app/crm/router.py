@@ -41,6 +41,58 @@ def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
     return None
 
 
+def _sync_trip_assignment(cur, item: dict) -> bool:
+    """Guarda asignación de MAGIIS sin borrar datos ya recolectados."""
+    travel_id = _find_provider_id(item, ("travelId",))
+    if travel_id is None:
+        return False
+    assignment_payload = {
+        key: item.get(key)
+        for key in (
+            "travelId",
+            "state",
+            "driverId",
+            "driverFirstName",
+            "driverLastName",
+            "vehicleDomain",
+            "vehicleMark",
+            "vehicleModel",
+            "carPlate",
+        )
+        if item.get(key) is not None
+    }
+    cur.execute(
+        """
+        UPDATE livi_trips
+        SET magiis_status = COALESCE(%s, magiis_status),
+            magiis_driver_id = COALESCE(%s, magiis_driver_id),
+            magiis_driver_first_name = COALESCE(NULLIF(%s, ''), magiis_driver_first_name),
+            magiis_driver_last_name = COALESCE(NULLIF(%s, ''), magiis_driver_last_name),
+            magiis_vehicle_domain = COALESCE(NULLIF(%s, ''), magiis_vehicle_domain),
+            magiis_vehicle_mark = COALESCE(NULLIF(%s, ''), magiis_vehicle_mark),
+            magiis_vehicle_model = COALESCE(NULLIF(%s, ''), magiis_vehicle_model),
+            magiis_car_plate = COALESCE(NULLIF(%s, ''), magiis_car_plate),
+            magiis_response = %s,
+            magiis_updated_at = NOW(),
+            updated_at = NOW()
+        WHERE magiis_travel_id = %s
+        """,
+        (
+            item.get("state"),
+            _find_provider_id(item, ("driverId",)),
+            str(item.get("driverFirstName") or ""),
+            str(item.get("driverLastName") or ""),
+            str(item.get("vehicleDomain") or ""),
+            str(item.get("vehicleMark") or ""),
+            str(item.get("vehicleModel") or ""),
+            str(item.get("carPlate") or ""),
+            json.dumps(assignment_payload, ensure_ascii=False),
+            travel_id,
+        ),
+    )
+    return cur.rowcount > 0
+
+
 def _persist_created_record(cur, table: str, response: object, fallback: dict, id_keys: tuple[str, ...]) -> None:
     """Replica inmediatamente una alta exitosa en la tabla local de CRM."""
     provider_id = _find_provider_id(response, id_keys)
@@ -145,6 +197,7 @@ def live_travels(
     date_to: str = Query(default="", max_length=10),
     vip: bool = Query(default=False),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
     """Consulta en vivo de gestión de viajes, solo lectura contra MAGIIS."""
     today = date.today()
@@ -170,13 +223,16 @@ def live_travels(
             is_pax_vip=vip,
         )
     page_info = page_data.get("page", page_data)
+    items = page_info.get("content", [])
+    synced = sum(_sync_trip_assignment(cur, item) for item in items)
     return {
         "source": "magiis",
-        "items": page_info.get("content", []),
+        "items": items,
         "page": page_info.get("number", page - 1) + 1,
         "size": page_info.get("size", size),
         "total": page_info.get("totalElements", 0),
         "totals": totals,
+        "assignments_synced": synced,
         "date_from": travel_date_from,
         "date_to": travel_date_to,
     }
