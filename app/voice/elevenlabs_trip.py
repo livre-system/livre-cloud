@@ -339,6 +339,67 @@ async def elevenlabs_quote(request: Request):
     return {"result": f"El viaje cuesta ${quote['price']}.", "options": quote.get("options", [])}
 
 
+@router.post("/status")
+async def elevenlabs_trip_status(request: Request):
+    """Devuelve al agente el estado y la asignación del último viaje activo."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
+
+    parameters = body.get("parameters", {}) or {}
+    data = body.get("data", {}) or {}
+    whatsapp_user = (
+        parameters.get("whatsapp_user")
+        or body.get("whatsapp_user")
+        or body.get("user_id")
+        or data.get("whatsapp_user")
+        or data.get("user_id")
+        or ""
+    ).strip()
+    if not whatsapp_user:
+        return {"result": "No pude identificar al pasajero de WhatsApp."}
+
+    trip = _get_latest_active_trip(whatsapp_user)
+    if not trip:
+        return {"result": "No encontré un viaje activo para este pasajero."}
+
+    driver = " ".join(
+        part for part in (
+            trip.get("magiis_driver_first_name"),
+            trip.get("magiis_driver_last_name"),
+        ) if part
+    ).strip()
+    vehicle = " ".join(
+        part for part in (
+            trip.get("magiis_vehicle_mark"),
+            trip.get("magiis_vehicle_model"),
+        ) if part
+    ).strip()
+    plate = trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain")
+
+    if not driver and not vehicle and not plate:
+        return {
+            "result": "El viaje está registrado y todavía estamos buscando un conductor.",
+            "status": trip.get("magiis_status") or trip.get("status"),
+        }
+
+    assignment = []
+    if driver:
+        assignment.append(f"conductor {driver}")
+    if vehicle:
+        assignment.append(f"vehículo {vehicle}")
+    if plate:
+        assignment.append(f"patente {plate}")
+    return {
+        "result": "Ya hay una asignación: " + ", ".join(assignment) + ".",
+        "status": trip.get("magiis_status") or trip.get("status"),
+        "driver": driver or None,
+        "vehicle": vehicle or None,
+        "plate": plate or None,
+    }
+
+
 @router.post("/trip")
 async def elevenlabs_trip(request: Request):
     """
