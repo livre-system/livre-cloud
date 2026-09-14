@@ -145,11 +145,17 @@ temporalmente para LIVI hasta definir la identidad del pasajero.
 
 ## ElevenLabs / LIVI
 
-Endpoint:
+Endpoints:
 
 ``` text
 POST /elevenlabs/trip
+POST /elevenlabs/status
 ```
+
+`/elevenlabs/status` devuelve el estado del último viaje activo para
+`system__caller_id`, incluyendo conductor, vehículo y patente cuando MAGIIS
+ya los asignó y Gestión de Viajes sincronizó esos datos en `livi_trips`.
+No crea ni cancela viajes.
 
 Archivo:
 
