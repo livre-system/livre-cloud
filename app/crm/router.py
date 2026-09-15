@@ -238,6 +238,46 @@ def live_travels(
     }
 
 
+@router.get("/agency-commissions")
+def agency_commissions(
+    date_from: str = Query(default="", max_length=10),
+    date_to: str = Query(default="", max_length=10),
+    owner_id: str = Query(default="", max_length=30),
+    page: int = Query(default=1, ge=1, le=10000),
+    size: int = Query(default=20, ge=1, le=100),
+    user: dict = Depends(require_auth),
+):
+    """Comisiones de agencia del panel Web, solo lectura contra MAGIIS."""
+    today = date.today().isoformat()
+    # El panel envía fechas DD/MM/YYYY al reporte, no fechas ISO.
+    def report_date(value: str) -> str:
+        if not value:
+            value = today
+        try:
+            return date.fromisoformat(value).strftime("%d/%m/%Y")
+        except ValueError:
+            return value
+
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        owners = reader.agency_commission_owners()
+        report = reader.agency_commission_report(
+            date_from=report_date(date_from),
+            date_to=report_date(date_to),
+            owner_id=owner_id,
+            page=page,
+            size=size,
+        )
+    return {
+        "source": "magiis",
+        "date_from": date_from or today,
+        "date_to": date_to or today,
+        "owner_id": owner_id,
+        "owners": owners,
+        **report,
+    }
+
+
 @router.get("/travel-history")
 def travel_history(
     page: int = Query(default=1, ge=1, le=10000),

@@ -184,6 +184,56 @@ class MagiisCrmReader:
             "size": size,
         }
 
+    def agency_commission_owners(self) -> list[dict[str, Any]]:
+        """Lista de propietarios disponible en el panel de comisiones."""
+        return self._get(f"/carrierOwnerLiquidations/{self.carrier_id}/findOwners")
+
+    def agency_commission_report(
+        self,
+        *,
+        date_from: str,
+        date_to: str,
+        owner_id: str = "",
+        page: int = 1,
+        size: int = 20,
+    ) -> dict[str, Any]:
+        """Detalle 021 y totales 021T, según el panel Web de MAGIIS."""
+        filters = [
+            {"alias": "carrierId", "value": str(self.carrier_id)},
+            {"alias": "dateFrom", "value": date_from},
+            {"alias": "dateTo", "value": date_to},
+            {"alias": "ownerId", "value": owner_id},
+        ]
+        detail = self._post_report("021", filters=filters, page=page, size=size, column="id", sort="DESC")
+        total = self._post_report("021T", filters=filters, page=1, size=1, column="id", sort="DESC")
+        detail_page = detail.get("page", detail)
+        rows = []
+        for entry in detail_page.get("content", []) if isinstance(detail_page, Mapping) else []:
+            row = entry.get("row", {}) if isinstance(entry, Mapping) else {}
+            rows.append({
+                "travel_id": row.get("Col1"),
+                "vehicle": row.get("Col2"),
+                "vehicle_model": row.get("Col3"),
+                "owner": row.get("Col4"),
+                "total": row.get("Col5"),
+                "commission": row.get("Col6"),
+                "commission_percent": row.get("Col7"),
+            })
+        total_row = ((total.get("page", total).get("content", []) or [{}])[0] or {}).get("row", {})
+        return {
+            "items": rows,
+            "total": detail_page.get("totalElements", len(rows)) if isinstance(detail_page, Mapping) else len(rows),
+            "page": page,
+            "size": size,
+            "totals": {
+                "trips": total_row.get("Col1", "0"),
+                "vehicles": total_row.get("Col2", "0"),
+                "total": total_row.get("Col3", "0"),
+                "commission": total_row.get("Col4", "0"),
+                "commission_percent": total_row.get("Col5", "0"),
+            },
+        }
+
     def driver_detail_web(self, driver_user_id: int) -> dict[str, Any]:
         """Detalle exacto usado por la pantalla Web de choferes."""
         return self._get(f"/drivers/{driver_user_id}")
