@@ -295,6 +295,10 @@ def _run_magiis_quote(origen: str, destino: str) -> dict:
             return {
                 "price": ahorro_or_premium.get("pricePointToPoint"),
                 "options": available,
+                "locations": {
+                    "origin": origin,
+                    "destination": destination,
+                },
             }
     except Exception as exc:
         log.error("[ELEVEN QUOTE] error: %s", exc, exc_info=True)
@@ -336,7 +340,11 @@ async def elevenlabs_quote(request: Request):
     quote = _run_magiis_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
-    return {"result": f"El viaje cuesta ${quote['price']}.", "options": quote.get("options", [])}
+    return {
+        "result": f"El viaje cuesta ${quote['price']}.",
+        "options": quote.get("options", []),
+        "locations": quote.get("locations", {}),
+    }
 
 
 @router.post("/status")
