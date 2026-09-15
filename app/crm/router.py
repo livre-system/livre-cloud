@@ -429,6 +429,16 @@ def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_a
     return response
 
 
+@router.post("/clients")
+def create_live_client(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    provider_payload = dict(payload)
+    session = magiis_web.login()
+    with MagiisCrmReader(session) as reader:
+        response = reader.create_passenger(provider_payload)
+    _persist_created_record(cur, "magiis_crm_passengers", response, provider_payload, ("passengerUserId", "id", "passengerId"))
+    return response
+
+
 @router.get("/vehicle-owners")
 def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     session = magiis_web.login()

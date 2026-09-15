@@ -475,6 +475,9 @@ class MagiisCrmReader:
     def create_vehicle(self, payload: Mapping[str, Any]) -> Any:
         return self._mutate("POST", "/vehicles", payload=payload)
 
+    def create_passenger(self, payload: Mapping[str, Any]) -> Any:
+        return self._mutate("POST", f"/carriers/{self.carrier_id}/clients", payload=payload)
+
     def create_driver(self, payload: Mapping[str, Any]) -> Any:
         return self._mutate("POST", "/drivers", payload=payload)
 
