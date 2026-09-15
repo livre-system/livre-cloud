@@ -1,5 +1,7 @@
 """Geocodificación con OpenStreetMap Nominatim, sin API key."""
 
+import unicodedata
+
 import httpx
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
@@ -15,12 +17,23 @@ def geocode_address(address: str, city: str = "Bahía Blanca") -> dict:
     if not address or not address.strip():
         raise GeocodingError("dirección vacía")
 
+    city_key = "".join(
+        char for char in unicodedata.normalize("NFKD", city.lower())
+        if not unicodedata.combining(char)
+    )
+    address_key = "".join(
+        char for char in unicodedata.normalize("NFKD", address.lower())
+        if not unicodedata.combining(char)
+    )
+    query = address if city_key in address_key else f"{address}, {city}"
+
     try:
         response = httpx.get(
             NOMINATIM_URL,
             params={
-                "q": f"{address}, {city}, Buenos Aires, Argentina",
+                "q": f"{query}, Buenos Aires, Argentina",
                 "format": "jsonv2",
+                "addressdetails": 1,
                 "limit": 2,
                 "countrycodes": "ar",
             },
@@ -36,8 +49,20 @@ def geocode_address(address: str, city: str = "Bahía Blanca") -> dict:
 
     if not results:
         raise GeocodingError(f"dirección no encontrada: {address}")
-    if len(results) != 1:
-        raise GeocodingError(f"resultados ambiguos para la dirección: {address}")
+    if len(results) > 1:
+        # Nominatim puede devolver varios POI en el mismo domicilio (por
+        # ejemplo, municipalidad y cajero en Alsina 65). Eso no es una
+        # ambigüedad de recorrido: comparten calle y número.
+        locations = {
+            (
+                item.get("address", {}).get("road"),
+                item.get("address", {}).get("house_number"),
+            )
+            for item in results
+        }
+        locations.discard((None, None))
+        if len(locations) != 1:
+            raise GeocodingError(f"resultados ambiguos para la dirección: {address}")
 
     result = results[0]
     try:
