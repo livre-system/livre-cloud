@@ -291,3 +291,55 @@ def upload_txt_as_memory(
         f"guardados={saved} | fallidos={failed} | total={total_chunks}"
     )
     return {"document": key, "created": created, "rows_added": saved}
+
+
+def extract_uploaded_file(filename: str, content: bytes, content_type: str | None = None) -> str:
+    """Extrae texto de formatos que pueden cargarse desde el front."""
+    import io
+    from pathlib import Path
+
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in {".txt", ".md", ".csv", ".json", ".xml", ".html", ".log"}:
+        try:
+            return content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("El archivo de texto debe estar en UTF-8") from exc
+
+    if suffix == ".pdf":
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(content))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        text = "\n\n".join(page.strip() for page in pages if page.strip())
+        if not text:
+            raise ValueError("El PDF no contiene texto extraíble; requiere OCR")
+        return text
+
+    if suffix in {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp"}:
+        try:
+            from PIL import Image
+            import pytesseract
+
+            return pytesseract.image_to_string(
+                Image.open(io.BytesIO(content)), lang="spa+eng"
+            ).strip()
+        except ImportError as exc:
+            raise ValueError("OCR no disponible en el servidor") from exc
+        except Exception as exc:
+            raise ValueError("No se pudo leer el texto de la imagen") from exc
+
+    raise ValueError("Formato no soportado. Usá TXT, PDF, CSV, JSON o una imagen")
+
+
+def upload_file_as_memory(
+    user_id: str,
+    filename: str,
+    content: bytes,
+    content_type: str | None = None,
+    chat_id: str | None = None,
+) -> dict:
+    """Entrada única para cargas manuales desde el front."""
+    text = extract_uploaded_file(filename, content, content_type)
+    if not text.strip():
+        raise ValueError("No se encontró texto para cargar en la memoria")
+    return upload_txt_as_memory(user_id, filename, text, chat_id=chat_id)

@@ -8,7 +8,7 @@ from app.memory.service import (
     write_user_memory,
     delete_user_document,
     rename_user_document,
-    upload_txt_as_memory,
+    upload_file_as_memory,
     export_memory,
 )
 from pydantic import BaseModel
@@ -96,16 +96,13 @@ async def upload_memory(
     file: UploadFile = File(...),
     user: dict = Depends(require_auth),
 ):
-    if not file.filename.endswith(".txt"):
-        raise HTTPException(status_code=400, detail="Solo se aceptan archivos .txt")
-
     content = await file.read()
     try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="El archivo debe estar en UTF-8")
-
-    return upload_txt_as_memory(user["id"], file.filename, text, chat_id=None)
+        return upload_file_as_memory(
+            user["id"], file.filename or "archivo", content, file.content_type, chat_id=None
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/graph")

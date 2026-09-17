@@ -1,7 +1,11 @@
-import asyncio, json, pg8000.dbapi, httpx
+import asyncio, json, os, sys, pg8000.dbapi, httpx
+from pathlib import Path
 from urllib.parse import urlsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 V = json.load(open('/tmp/railway-vars.json'))
+os.environ.setdefault('DATABASE_URL', V['DATABASE_URL'])
 DB = urlsplit(V['DATABASE_URL'])
 
 async def fetch_all(c, h, name, path, params, key):
@@ -50,4 +54,15 @@ for name,(items,key) in data.items():
     conn.commit(); counts[name]=len(valid); print('persisted',name,len(valid),flush=True)
 with conn.cursor() as q:
     q.execute("update magiis_crm_sync_runs set status='completed',finished_at=now(),resources=%s::jsonb where id=%s",(json.dumps(counts),rid))
-conn.commit(); print('completed',rid,counts); conn.close()
+conn.commit(); print('completed',rid,counts)
+
+# La proyección semántica es best-effort: el CRM ya quedó persistido aunque
+# OpenAI, pgvector o la memoria no estén disponibles en esta ejecución.
+try:
+    from app.memory.magiis import sync_magiis_memory
+    memory_result = sync_magiis_memory()
+    print('memory_projection', json.dumps(memory_result, ensure_ascii=False), flush=True)
+except Exception as exc:
+    print('memory_projection_failed', type(exc).__name__, flush=True)
+
+conn.close()
