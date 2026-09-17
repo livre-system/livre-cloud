@@ -1,7 +1,9 @@
 """API autenticada de consulta para los datos recolectados de MAGIIS."""
 import json
+import logging
 from datetime import date, timedelta
 
+import httpx
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
@@ -10,6 +12,7 @@ from app.integrations.magiis_crm import MagiisCrmReader
 from app.crm.sync import sync_all
 
 router = APIRouter(prefix="/crm", tags=["crm"])
+log = logging.getLogger(__name__)
 
 _RESOURCES = {
     "passengers": "magiis_crm_passengers",
@@ -112,6 +115,13 @@ def operational(user: dict = Depends(require_auth)):
     """Contrato server-side del panel Control operacional de MAGIIS Web."""
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
+        try:
+            chats = reader.chats_all()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            log.warning("MAGIIS no expone chats; se continúa con datos operativos")
+            chats = {}
         return {
             "status": reader.operational_status(),
             "driver_totals": reader.driver_totals(),
@@ -119,7 +129,7 @@ def operational(user: dict = Depends(require_auth)):
             "drivers_by_vehicle": reader.driver_dashboard(vehicle_id_switch=True),
             "driver_statuses": reader.driver_report_page(page=1, size=1000000),
             "report_042": reader.operational_report(),
-            "chats": reader.chats_all(),
+            "chats": chats,
         }
 
 
