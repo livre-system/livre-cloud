@@ -536,7 +536,49 @@ viajes programados desde el panel.
 
 Pendiente conocido:
 
-- integrar ubicación GPS operacional de vehículos en tiempo real;
+- validar en producción la disponibilidad y frescura de las ubicaciones GPS operativas;
 - implementar edición de choferes cuando MAGIIS Web exponga un contrato válido;
 - completar la edición de vehículos en la interfaz del panel, cuyo endpoint
   backend ya existe.
+
+## Estado actual: geolocalización y mapas
+
+La geolocalización de direcciones del panel usa OpenStreetMap Nominatim sin API
+key (`app/integrations/nominatim.py`). El backend restringe la búsqueda a
+Argentina, agrega Bahía Blanca cuando corresponde y rechaza resultados
+realmente ambiguos; varios puntos de interés que comparten calle y número se
+aceptan como una misma ubicación. `magiis_web.resolve_address()` conserva las
+coordenadas y deja que MAGIIS Web resuelva el `placeId` cuando corresponde.
+
+El panel de viajes (`livre-chatbot/js/app.js`) tiene dos usos separados:
+
+- El mapa de creación ubica origen y destino mientras se escriben, conserva el
+  texto original confirmado y muestra ambos puntos.
+- Después de cotizar, usa las coordenadas devueltas por MAGIIS y, si existe,
+  dibuja la ruta real desde `routeMap`/`overviewPolyline`, con marcadores de
+  origen y destino.
+
+El mapa de viajes usa Leaflet con teselas Esri claras y fallback topográfico.
+El visor operacional usa Leaflet y teselas OpenStreetMap, no requiere API key,
+consume únicamente `GET /crm/operational` y muestra las últimas coordenadas
+(`lastPlace`) informadas por MAGIIS para los vehículos. Incluye marcadores
+agrupados, filtros visuales, actualización manual y refresco automático cada 15
+segundos. La ubicación operacional debe seguir tratándose como dato recibido
+de MAGIIS: no se debe inventar ni completar una coordenada faltante.
+
+Archivos relevantes:
+
+``` text
+Backend: app/integrations/nominatim.py
+         app/integrations/magiis_web.py
+         app/crm/router.py
+Frontend: livre-chatbot/js/app.js
+          livre-chatbot/index.html
+          livre-chatbot/css/style.css
+```
+
+Últimos cambios verificados en el frontend: visor operacional agregado al
+sidebar, clustering de vehículos, refresco periódico y cambio de proveedor de
+teselas para evitar una API key requerida. El frontend está limpio y alineado
+con `origin/main`; el backend mantiene únicamente capturas no trackeadas en
+`images/`.
