@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from openai import OpenAI
 
 log = logging.getLogger(__name__)
@@ -41,21 +42,29 @@ def get_embedding(text: str, input_type: str = "passage") -> list[float] | None:
         return None
     if not text or not text.strip():
         return None
-    try:
-        client = _get_client()
-        res = client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=text[:8000],
-        )
-        values = res.data[0].embedding
-        log.info(
-            f"Embedding generado OK — model={EMBEDDING_MODEL}, "
-            f"dims={len(values)}, input_type={input_type}"
-        )
-        return values
-    except Exception as e:
-        log.error(f"Error generando embedding (input_type={input_type}): {e}")
-        return None
+    client = _get_client()
+    for attempt in range(1, 4):
+        try:
+            res = client.embeddings.create(
+                model=EMBEDDING_MODEL,
+                input=text[:8000],
+            )
+            values = res.data[0].embedding
+            log.info(
+                f"Embedding generado OK — model={EMBEDDING_MODEL}, "
+                f"dims={len(values)}, input_type={input_type}, attempt={attempt}"
+            )
+            return values
+        except Exception as e:
+            if attempt == 3:
+                log.error(
+                    f"Error generando embedding (input_type={input_type}, "
+                    f"attempts={attempt}): {e}",
+                    exc_info=True,
+                )
+                return None
+            time.sleep(2 ** (attempt - 1))
+    return None
 
 
 def get_query_embedding(text: str) -> list[float] | None:
