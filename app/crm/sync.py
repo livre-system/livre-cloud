@@ -140,7 +140,7 @@ def sync_all() -> dict[str, Any]:
                 counts["travels"], counts["travels_deleted"] = _sync_travels(cur, travels)
                 cur.execute("UPDATE magiis_crm_sync_runs SET status='completed', finished_at=now(), resources=%s::jsonb WHERE id=%s", (json.dumps(counts), run_id))
                 log.info("MAGIIS CRM sincronizado: %s", counts)
-                return {"status": "completed", "run_id": run_id, "resources": counts}
+                result = {"status": "completed", "run_id": run_id, "resources": counts}
             except Exception as exc:
                 log.exception("Falló sincronización MAGIIS CRM")
                 if run_id is not None:
@@ -153,3 +153,9 @@ def sync_all() -> dict[str, Any]:
                 raise
             finally:
                 cur.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_KEY,))
+    from app.memory.magiis import sync_magiis_memory
+
+    memory_result = sync_magiis_memory()
+    result["memory"] = memory_result
+    log.info("Memoria MAGIIS actualizada con embeddings: %s", memory_result)
+    return result

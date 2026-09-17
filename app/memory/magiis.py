@@ -128,6 +128,7 @@ def sync_magiis_memory(user_id: str = MEMORY_USER_ID) -> dict[str, Any]:
             "vehiculos": (_read_table("magiis_crm_vehicles"), "magiis_vehicles", "Vehículos MAGIIS"),
             "pasajeros": (_read_table("magiis_crm_passengers"), "magiis_passengers", "Pasajeros MAGIIS"),
             "viajes": (_travel_rows(), "magiis_travels", "Viajes MAGIIS"),
+            "propietarios": (_read_table("magiis_crm_vehicle_owners"), "magiis_vehicle_owners", "Propietarios de vehículos MAGIIS"),
         }
         for kind, (rows, key, name) in sources.items():
             records = [_record_text("viaje" if kind == "viajes" else kind[:-1], row) for row in rows]
