@@ -566,6 +566,16 @@ agrupados, filtros visuales, actualización manual y refresco automático cada 1
 segundos. La ubicación operacional debe seguir tratándose como dato recibido
 de MAGIIS: no se debe inventar ni completar una coordenada faltante.
 
+Incidente corregido en producción (17/09/2026): MAGIIS respondió `404` para
+`GET https://svc.magiis.com/mmc/chats/all`. El backend hacía esa consulta
+obligatoria dentro de `/crm/operational`, provocando `500` y bloqueando también
+el mapa. `app/crm/router.py` ahora tolera únicamente ese `404`, registra una
+advertencia y continúa con los datos operativos; otros errores siguen siendo
+fatales. Commit desplegado: `8174e93`. Railway confirmó posteriormente
+`GET /crm/operational` → `200 OK` y las consultas de estado, choferes y reporte
+→ `200 OK`. No inventar coordenadas ni convertir la ausencia de chats en una
+falla del mapa.
+
 Archivos relevantes:
 
 ``` text
