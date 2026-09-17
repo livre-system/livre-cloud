@@ -7,6 +7,7 @@ from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
 from app.integrations import magiis_web
 from app.integrations.magiis_crm import MagiisCrmReader
+from app.crm.sync import sync_all
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -163,6 +164,12 @@ def operational_driver(driver_user_id: int, user: dict = Depends(require_auth)):
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
         return reader.driver(driver_user_id)
+
+
+@router.post("/sync")
+def sync_crm(user: dict = Depends(require_auth)):
+    """Fuerza una reconciliación completa MAGIIS → CRM local."""
+    return sync_all()
 
 
 @router.get("/summary")

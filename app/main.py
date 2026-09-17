@@ -22,6 +22,8 @@ from app.voice.elevenlabs_debug import router as elevenlabs_debug_router
 from app.voice.elevenlabs_trip import router as elevenlabs_trip_router
 from app.crm.router import router as crm_router
 import logging
+import asyncio
+import os
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -33,7 +35,26 @@ async def lifespan(app: FastAPI):
     run_migrations()
     ensure_tables()
     await patch_agent_voice()
-    yield
+    sync_task = None
+    if os.getenv("MAGIIS_CRM_SYNC_ENABLED", "true").lower() not in {"0", "false", "no"}:
+        from app.crm.sync import sync_all
+
+        async def sync_loop():
+            interval = max(60, int(os.getenv("MAGIIS_CRM_SYNC_INTERVAL_SECONDS", "900")))
+            while True:
+                try:
+                    await asyncio.to_thread(sync_all)
+                except Exception:
+                    log.exception("Sincronización automática MAGIIS CRM falló")
+                await asyncio.sleep(interval)
+
+        sync_task = asyncio.create_task(sync_loop())
+    try:
+        yield
+    finally:
+        if sync_task:
+            sync_task.cancel()
+            await asyncio.gather(sync_task, return_exceptions=True)
 
 
 app = FastAPI(title="Livre Cloud", lifespan=lifespan)
