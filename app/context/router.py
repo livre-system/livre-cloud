@@ -24,16 +24,16 @@ _log = _logging.getLogger(__name__)
 
 def _get_all_memory(user_id: str = None) -> str:
     """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción."""
-    target_user = user_id or MEMORY_USER_ID
+    target_users = list(dict.fromkeys([user_id, MEMORY_USER_ID])) if user_id else [MEMORY_USER_ID]
     try:
         with get_cursor() as cur:
             cur.execute("""
                 SELECT md.name, mr.data
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
-                WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%%'
+                WHERE md.user_id = ANY(%s) AND md.key NOT LIKE 'chat_log%%'
                 ORDER BY mr.created_at ASC
-            """, [target_user])
+            """, (target_users,))
             rows = cur.fetchall()
         if not rows:
             return ""
@@ -66,12 +66,19 @@ def _get_all_memory(user_id: str = None) -> str:
 
 
 def _search_memory(user_id: str = None, query: str = "") -> str:
-    """Búsqueda semántica. Usa user_id o cae a MEMORY_USER_ID global."""
-    target_user = user_id or MEMORY_USER_ID
-    _log.info(f"[MEMORY DEBUG] SEARCH START memory_user={target_user} query={query!r}")
+    """Busca en memoria del usuario y en la proyección operacional global."""
+    target_users = list(dict.fromkeys([user_id, MEMORY_USER_ID])) if user_id else [MEMORY_USER_ID]
+    _log.info(f"[MEMORY DEBUG] SEARCH START memory_users={target_users} query={query!r}")
 
     try:
-        rows = search_memory_by_embedding(target_user, query, limit=20, min_similarity=0.30)
+        rows = []
+        for target_user in target_users:
+            rows.extend(search_memory_by_embedding(target_user, query, limit=50, min_similarity=0.30))
+        rows.sort(
+            key=lambda row: float(row["similarity"] if hasattr(row, "keys") else row[2]),
+            reverse=True,
+        )
+        rows = rows[:50]
     except Exception as e:
         _log.error(f"[MEMORY DEBUG] search_memory_by_embedding ERROR: {e}", exc_info=True)
         return ""
