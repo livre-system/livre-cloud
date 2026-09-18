@@ -21,6 +21,7 @@ from app.voice.elevenlabs_postcall import router as elevenlabs_postcall_router
 from app.voice.elevenlabs_debug import router as elevenlabs_debug_router
 from app.voice.elevenlabs_trip import router as elevenlabs_trip_router
 from app.crm.router import router as crm_router
+from app.mobility.router import router as mobility_router
 import logging
 import asyncio
 import os
@@ -90,6 +91,7 @@ app.include_router(elevenlabs_postcall_router)
 app.include_router(elevenlabs_debug_router)
 app.include_router(elevenlabs_trip_router)
 app.include_router(crm_router)
+app.include_router(mobility_router)
 
 
 # Servir imágenes subidas al volumen
