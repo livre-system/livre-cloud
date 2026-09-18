@@ -63,6 +63,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://livre-chatbot.vercel.app",
+        "https://livre-system.github.io",
     ],
     allow_credentials=True,
     allow_methods=["*"],

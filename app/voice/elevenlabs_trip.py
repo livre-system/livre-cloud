@@ -24,6 +24,7 @@ La creación real requiere además `MAGIIS_WEB_CREATE_ENABLED=1`.
 
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 
 import httpx
@@ -34,6 +35,15 @@ from app.integrations import magiis_web
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/elevenlabs", tags=["elevenlabs"])
+
+TRACKING_BASE_URL = os.getenv(
+    "PASSENGER_TRACKING_BASE_URL",
+    "https://livre-system.github.io/livre-pasajeros/",
+).rstrip("/")
+
+
+def _tracking_url(token: str | None) -> str | None:
+    return f"{TRACKING_BASE_URL}/?token={token}" if token else None
 
 
 def _get_existing_trip(conversation_id: str) -> dict | None:
@@ -56,14 +66,15 @@ def _save_trip(
     destino: str,
     whatsapp_user: str = "",
     tool_call_id: str = "",
-) -> int:
-    """Inserta el viaje y devuelve el id generado."""
+) -> tuple[int, str]:
+    """Inserta el viaje y devuelve el id y token privado de seguimiento."""
+    tracking_token = secrets.token_urlsafe(32)
     with get_cursor() as cur:
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, whatsapp_user, tool_call_id, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, 'pending', %s, %s)
+                (conversation_id, origen, destino, whatsapp_user, tool_call_id, tracking_token, status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s)
             RETURNING id;
             """,
             (
@@ -72,11 +83,12 @@ def _save_trip(
                 destino,
                 whatsapp_user or "",
                 tool_call_id or "",
+                tracking_token,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
         )
-        return cur.fetchone()["id"]
+        return cur.fetchone()["id"], tracking_token
 
 
 def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
@@ -408,6 +420,53 @@ async def elevenlabs_trip_status(request: Request):
     }
 
 
+@router.get("/tracking/{tracking_token}")
+def passenger_tracking(tracking_token: str):
+    """Devuelve sólo los datos públicos mínimos del viaje para el mapa."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, origen, destino, status, magiis_status,
+                   magiis_driver_first_name, magiis_driver_last_name,
+                   magiis_vehicle_mark, magiis_vehicle_model,
+                   magiis_car_plate, magiis_vehicle_domain,
+                   magiis_updated_at
+            FROM livi_trips
+            WHERE tracking_token = %s
+            LIMIT 1;
+            """,
+            [tracking_token],
+        )
+        trip = cur.fetchone()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
+
+    driver = " ".join(
+        part for part in (
+            trip.get("magiis_driver_first_name"),
+            trip.get("magiis_driver_last_name"),
+        ) if part
+    ).strip() or None
+    vehicle = " ".join(
+        part for part in (
+            trip.get("magiis_vehicle_mark"),
+            trip.get("magiis_vehicle_model"),
+        ) if part
+    ).strip() or None
+    return {
+        "trip_id": trip["id"],
+        "origin": trip["origen"],
+        "destination": trip["destino"],
+        "status": trip.get("magiis_status") or trip.get("status"),
+        "driver": driver,
+        "vehicle": vehicle,
+        "plate": trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain"),
+        "location": None,
+        "location_updated_at": trip.get("magiis_updated_at"),
+        "source": "pending_gps",
+    }
+
+
 @router.post("/trip")
 async def elevenlabs_trip(request: Request):
     """
@@ -512,12 +571,13 @@ async def elevenlabs_trip(request: Request):
             "result": (
                 f"Viaje ya registrado. "
                 f"Origen: {existing['origen']} → Destino: {existing['destino']}."
-            )
+            ),
+            "tracking_url": _tracking_url(existing.get("tracking_token")),
         }
 
     # ── 5. Guardar el viaje ──────────────────────────────────────────────────
     try:
-        trip_id = _save_trip(
+        trip_id, tracking_token = _save_trip(
             conversation_id=conversation_id,
             origen=origen,
             destino=destino,
@@ -548,7 +608,12 @@ async def elevenlabs_trip(request: Request):
 
     # ── 6. Respuesta para ElevenLabs ──────────────────────────────────────────
     # ElevenLabs Webhook Tool requiere { "result": "..." }
-    return {"result": _response}
+    tracking_url = _tracking_url(tracking_token)
+    return {
+        "result": f"{_response} Link de seguimiento: {tracking_url}",
+        "tracking_url": tracking_url,
+        "trip_id": trip_id,
+    }
 
 
 @router.post("/cancel")
