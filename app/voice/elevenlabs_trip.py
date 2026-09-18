@@ -384,19 +384,13 @@ async def elevenlabs_trip_status(request: Request):
     if not trip:
         return {"result": "No encontré un viaje activo para este pasajero."}
 
-    driver = " ".join(
-        part for part in (
-            trip.get("magiis_driver_first_name"),
-            trip.get("magiis_driver_last_name"),
-        ) if part
-    ).strip()
-    vehicle = " ".join(
-        part for part in (
-            trip.get("magiis_vehicle_mark"),
-            trip.get("magiis_vehicle_model"),
-        ) if part
-    ).strip()
-    plate = trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain")
+    driver = trip.get("tracking_driver_name") or trip.get("magiis_driver_first_name")
+    vehicle_parts = [
+        trip.get("tracking_vehicle_model") or trip.get("magiis_vehicle_model"),
+        trip.get("tracking_vehicle_color") or trip.get("magiis_vehicle_color"),
+    ]
+    vehicle = " ".join(part for part in vehicle_parts if part).strip()
+    plate = trip.get("tracking_plate") or trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain")
 
     if not driver and not vehicle and not plate:
         return {
@@ -427,9 +421,12 @@ def passenger_tracking(tracking_token: str):
         cur.execute(
             """
             SELECT id, origen, destino, status, magiis_status,
-                   magiis_driver_first_name, magiis_driver_last_name,
-                   magiis_vehicle_mark, magiis_vehicle_model,
-                   magiis_car_plate, magiis_vehicle_domain,
+                   tracking_driver_name, tracking_plate,
+                   tracking_vehicle_color, tracking_vehicle_model,
+                   tracking_latitude, tracking_longitude,
+                   tracking_location_updated_at, tracking_location_visible_at,
+                   magiis_driver_first_name, magiis_vehicle_model,
+                   magiis_vehicle_color, magiis_car_plate, magiis_vehicle_domain,
                    magiis_updated_at
             FROM livi_trips
             WHERE tracking_token = %s
@@ -441,18 +438,26 @@ def passenger_tracking(tracking_token: str):
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
 
-    driver = " ".join(
-        part for part in (
-            trip.get("magiis_driver_first_name"),
-            trip.get("magiis_driver_last_name"),
-        ) if part
-    ).strip() or None
-    vehicle = " ".join(
-        part for part in (
-            trip.get("magiis_vehicle_mark"),
-            trip.get("magiis_vehicle_model"),
-        ) if part
-    ).strip() or None
+    driver = trip.get("tracking_driver_name") or trip.get("magiis_driver_first_name") or None
+    vehicle_parts = [
+        trip.get("tracking_vehicle_model") or trip.get("magiis_vehicle_model"),
+        trip.get("tracking_vehicle_color") or trip.get("magiis_vehicle_color"),
+    ]
+    vehicle = " ".join(part for part in vehicle_parts if part).strip() or None
+    plate = trip.get("tracking_plate") or trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain")
+    location = None
+    if trip.get("tracking_latitude") is not None and trip.get("tracking_longitude") is not None:
+        location = {
+            "latitude": trip["tracking_latitude"],
+            "longitude": trip["tracking_longitude"],
+        }
+    location_updated_at = trip.get("tracking_location_updated_at")
+    visible_at = trip.get("tracking_location_visible_at")
+    if visible_at and visible_at.tzinfo is None:
+        visible_at = visible_at.replace(tzinfo=timezone.utc)
+    if visible_at and visible_at > datetime.now(timezone.utc):
+        location = None
+        location_updated_at = None
     return {
         "trip_id": trip["id"],
         "origin": trip["origen"],
@@ -460,10 +465,10 @@ def passenger_tracking(tracking_token: str):
         "status": trip.get("magiis_status") or trip.get("status"),
         "driver": driver,
         "vehicle": vehicle,
-        "plate": trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain"),
-        "location": None,
-        "location_updated_at": trip.get("magiis_updated_at"),
-        "source": "pending_gps",
+        "plate": plate,
+        "location": location,
+        "location_updated_at": location_updated_at,
+        "source": "crm",
     }
 
 

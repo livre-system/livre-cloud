@@ -1,6 +1,7 @@
 """API autenticada de consulta para los datos recolectados de MAGIIS."""
 import json
 import logging
+import math
 from datetime import date, timedelta
 
 import httpx
@@ -61,6 +62,7 @@ def _sync_trip_assignment(cur, item: dict) -> bool:
             "vehicleDomain",
             "vehicleMark",
             "vehicleModel",
+            "vehicleColor",
             "carPlate",
         )
         if item.get(key) is not None
@@ -75,7 +77,12 @@ def _sync_trip_assignment(cur, item: dict) -> bool:
             magiis_vehicle_domain = COALESCE(NULLIF(%s, ''), magiis_vehicle_domain),
             magiis_vehicle_mark = COALESCE(NULLIF(%s, ''), magiis_vehicle_mark),
             magiis_vehicle_model = COALESCE(NULLIF(%s, ''), magiis_vehicle_model),
+            magiis_vehicle_color = COALESCE(NULLIF(%s, ''), magiis_vehicle_color),
             magiis_car_plate = COALESCE(NULLIF(%s, ''), magiis_car_plate),
+            tracking_driver_name = COALESCE(NULLIF(%s, ''), tracking_driver_name),
+            tracking_plate = COALESCE(NULLIF(%s, ''), tracking_plate),
+            tracking_vehicle_color = COALESCE(NULLIF(%s, ''), tracking_vehicle_color),
+            tracking_vehicle_model = COALESCE(NULLIF(%s, ''), tracking_vehicle_model),
             magiis_response = %s,
             magiis_updated_at = NOW(),
             updated_at = NOW()
@@ -89,7 +96,12 @@ def _sync_trip_assignment(cur, item: dict) -> bool:
             str(item.get("vehicleDomain") or ""),
             str(item.get("vehicleMark") or ""),
             str(item.get("vehicleModel") or ""),
+            str(item.get("vehicleColor") or ""),
             str(item.get("carPlate") or ""),
+            str(item.get("driverFirstName") or ""),
+            str(item.get("carPlate") or item.get("vehicleDomain") or ""),
+            str(item.get("vehicleColor") or ""),
+            str(item.get("vehicleModel") or ""),
             json.dumps(assignment_payload, ensure_ascii=False),
             travel_id,
         ),
@@ -109,6 +121,62 @@ def _persist_created_record(cur, table: str, response: object, fallback: dict, i
             ON CONFLICT (magiis_id) DO UPDATE SET raw_payload = EXCLUDED.raw_payload, last_seen_at = now()""",
         (provider_id, json.dumps(raw_payload, separators=(",", ":"))),
     )
+
+@router.post("/trips/{trip_id}/tracking")
+def update_trip_tracking(
+    trip_id: int,
+    payload: dict = Body(...),
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Actualiza desde el CRM la ubicación y los datos públicos del chofer."""
+    def text(key: str, max_length: int = 120) -> str | None:
+        value = payload.get(key)
+        if value is None:
+            return None
+        value = str(value).strip()
+        return value[:max_length] or None
+
+    latitude = payload.get("latitude")
+    longitude = payload.get("longitude")
+    if latitude is not None or longitude is not None:
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="Coordenadas inválidas")
+        if not (math.isfinite(latitude) and math.isfinite(longitude)):
+            raise HTTPException(status_code=422, detail="Coordenadas inválidas")
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            raise HTTPException(status_code=422, detail="Coordenadas fuera de rango")
+
+    driver_name = text("driver_first_name")
+    plate = text("plate")
+    vehicle_color = text("vehicle_color")
+    vehicle_model = text("vehicle_model")
+    cur.execute(
+        """
+        UPDATE livi_trips
+        SET tracking_driver_name = COALESCE(NULLIF(%s, ''), tracking_driver_name),
+            tracking_plate = COALESCE(NULLIF(%s, ''), tracking_plate),
+            tracking_vehicle_color = COALESCE(NULLIF(%s, ''), tracking_vehicle_color),
+            tracking_vehicle_model = COALESCE(NULLIF(%s, ''), tracking_vehicle_model),
+            tracking_latitude = COALESCE(%s, tracking_latitude),
+            tracking_longitude = COALESCE(%s, tracking_longitude),
+            tracking_location_updated_at = CASE WHEN %s IS NULL THEN tracking_location_updated_at ELSE NOW() END,
+            tracking_location_visible_at = CASE WHEN %s IS NULL THEN tracking_location_visible_at ELSE NOW() + INTERVAL '15 seconds' END,
+            updated_at = NOW()
+        WHERE id = %s
+        RETURNING tracking_location_visible_at
+        """,
+        (driver_name, plate, vehicle_color, vehicle_model,
+         latitude, longitude, latitude, latitude, trip_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado")
+    return {"status": "updated", "trip_id": trip_id, "location_visible_at": row[0]}
+
 
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth)):

@@ -89,17 +89,27 @@ def _sync_travels(cur, items: list[dict[str, Any]]) -> tuple[int, int]:
             continue
         ids.add(travel_id)
         travel_date = item.get("travelDate") or item.get("creationDate")
+        driver_name = str(item.get("driverFirstName") or "").strip() or None
+        plate = str(item.get("carPlate") or item.get("vehicleDomain") or "").strip() or None
+        vehicle_model = str(item.get("vehicleModel") or "").strip() or None
+        vehicle_color = str(item.get("vehicleColor") or "").strip() or None
         cur.execute(
             """INSERT INTO magiis_crm_travels
-                (magiis_id, raw_payload, travel_date, state, passenger_magiis_id, driver_magiis_id)
-                VALUES (%s, %s::jsonb, %s, %s, %s, %s)
+                (magiis_id, raw_payload, travel_date, state, passenger_magiis_id, driver_magiis_id,
+                 tracking_driver_name, tracking_plate, tracking_vehicle_color, tracking_vehicle_model)
+                VALUES (%s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (magiis_id) DO UPDATE SET
                   raw_payload=EXCLUDED.raw_payload, travel_date=EXCLUDED.travel_date,
                   state=EXCLUDED.state, passenger_magiis_id=EXCLUDED.passenger_magiis_id,
-                  driver_magiis_id=EXCLUDED.driver_magiis_id, last_seen_at=now()""",
+                  driver_magiis_id=EXCLUDED.driver_magiis_id,
+                  tracking_driver_name=COALESCE(EXCLUDED.tracking_driver_name, magiis_crm_travels.tracking_driver_name),
+                  tracking_plate=COALESCE(EXCLUDED.tracking_plate, magiis_crm_travels.tracking_plate),
+                  tracking_vehicle_color=COALESCE(EXCLUDED.tracking_vehicle_color, magiis_crm_travels.tracking_vehicle_color),
+                  tracking_vehicle_model=COALESCE(EXCLUDED.tracking_vehicle_model, magiis_crm_travels.tracking_vehicle_model),
+                  last_seen_at=now()""",
             (travel_id, json.dumps(item, ensure_ascii=False, separators=(",", ":")),
              travel_date, item.get("state"), _id(item, "passengerId", "passengerUserId"),
-             _id(item, "driverId", "driverUserId")),
+             _id(item, "driverId", "driverUserId"), driver_name, plate, vehicle_color, vehicle_model),
         )
     if not ids:
         raise RuntimeError("MAGIIS devolvió cero IDs válidos para travels; no se reconcilia")
