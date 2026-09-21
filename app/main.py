@@ -64,6 +64,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://livre-chatbot.vercel.app",
+        "https://livre-pasajeros.vercel.app",
         "https://livre-system.github.io",
     ],
     allow_origin_regex=r"https://livre-conductor(?:-[a-z0-9-]+)?\.vercel\.app",
