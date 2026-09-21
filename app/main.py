@@ -22,42 +22,13 @@ from app.voice.elevenlabs_debug import router as elevenlabs_debug_router
 from app.voice.elevenlabs_trip import router as elevenlabs_trip_router
 from app.crm.router import router as crm_router
 from app.mobility.router import router as mobility_router
-import logging
-import asyncio
-import os
-
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger(__name__)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
     run_migrations()
     ensure_tables()
     await patch_agent_voice()
-    sync_task = None
-    # Livre opera con despacho interno. El CRM externo se integra después de validar
-    # este flujo y nunca debe bloquear ni reintentar durante las pruebas.
-    if os.getenv("MAGIIS_CRM_SYNC_ENABLED", "false").lower() not in {"0", "false", "no"}:
-        from app.crm.sync import sync_all
-
-        async def sync_loop():
-            interval = max(60, int(os.getenv("MAGIIS_CRM_SYNC_INTERVAL_SECONDS", "900")))
-            while True:
-                try:
-                    await asyncio.to_thread(sync_all)
-                except Exception:
-                    log.exception("Sincronización automática MAGIIS CRM falló")
-                await asyncio.sleep(interval)
-
-        sync_task = asyncio.create_task(sync_loop())
-    try:
-        yield
-    finally:
-        if sync_task:
-            sync_task.cancel()
-            await asyncio.gather(sync_task, return_exceptions=True)
+    yield
 
 
 app = FastAPI(title="Livre Cloud", lifespan=lifespan)
