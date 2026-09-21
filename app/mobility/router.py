@@ -254,7 +254,7 @@ def driver_update_status(
         """,
         (payload.status, trip_id),
     )
-    return _driver_trip_or_404(cur, trip_id, user)
+    return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
 
 
 @router.post("/driver/trips/{trip_id}/location", response_model=DriverTrip)
@@ -278,4 +278,4 @@ def driver_update_location(
         """,
         (payload.latitude, payload.longitude, trip_id),
     )
-    return _driver_trip_or_404(cur, trip_id, user)
+    return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
