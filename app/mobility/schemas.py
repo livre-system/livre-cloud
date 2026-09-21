@@ -24,6 +24,21 @@ class StatusUpdate(BaseModel):
     status: TripStatus
 
 
+class TripRequest(BaseModel):
+    origin: str = Field(min_length=3, max_length=240)
+    destination: str = Field(min_length=3, max_length=240)
+    passenger: str = Field(default="Pasajero de prueba", min_length=2, max_length=120)
+    whatsapp_user: str = Field(default="web-test", min_length=2, max_length=120)
+
+
+class TripRequestResponse(BaseModel):
+    trip_id: int
+    tracking_token: str
+    tracking_url: str
+    status: str
+    message: str
+
+
 class PublicTrip(BaseModel):
     id: int
     origin: str

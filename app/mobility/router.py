@@ -3,11 +3,23 @@
 Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente.
 """
 
+import os
+import secrets
+import uuid
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
-from app.mobility.schemas import DriverTrip, LocationUpdate, PublicTrip, StatusUpdate
+from app.mobility.schemas import (
+    DriverTrip,
+    LocationUpdate,
+    PublicTrip,
+    StatusUpdate,
+    TripRequest,
+    TripRequestResponse,
+)
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 
@@ -42,6 +54,40 @@ def _public_trip(trip) -> PublicTrip:
         latitude=trip["tracking_latitude"],
         longitude=trip["tracking_longitude"],
         location_updated_at=trip["tracking_location_updated_at"],
+    )
+
+
+@router.post("/requests", response_model=TripRequestResponse, status_code=201)
+def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
+    """Creates a passenger request for controlled web-flow testing."""
+    origin = payload.origin.strip()
+    destination = payload.destination.strip()
+    if origin.casefold() == destination.casefold():
+        raise HTTPException(status_code=422, detail="El origen y el destino deben ser distintos")
+    local_terms = ("bahía blanca", "bahia blanca", "ingeniero white", "white", "cerri", "general daniel cerro")
+    if not any(term in origin.casefold() for term in local_terms) or not any(term in destination.casefold() for term in local_terms):
+        raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
+
+    tracking_token = secrets.token_urlsafe(32)
+    conversation_id = f"web_{uuid.uuid4()}"
+    cur.execute(
+        """
+        INSERT INTO livi_trips
+            (conversation_id, origen, destino, whatsapp_user, tracking_token, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, 'searching', NOW(), NOW())
+        RETURNING id, tracking_token, status
+        """,
+        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token),
+    )
+    trip = cur.fetchone()
+    passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros.vercel.app")
+    tracking_url = f"{passenger_url.rstrip('/')}?token={quote(tracking_token)}"
+    return TripRequestResponse(
+        trip_id=trip["id"],
+        tracking_token=trip["tracking_token"],
+        tracking_url=tracking_url,
+        status=trip["status"],
+        message="Pedido recibido. Falta asignar un conductor desde el CRM.",
     )
 
 
