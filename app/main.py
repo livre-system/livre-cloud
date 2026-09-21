@@ -37,7 +37,9 @@ async def lifespan(app: FastAPI):
     ensure_tables()
     await patch_agent_voice()
     sync_task = None
-    if os.getenv("MAGIIS_CRM_SYNC_ENABLED", "true").lower() not in {"0", "false", "no"}:
+    # Livre opera con despacho interno. El CRM externo se integra después de validar
+    # este flujo y nunca debe bloquear ni reintentar durante las pruebas.
+    if os.getenv("MAGIIS_CRM_SYNC_ENABLED", "false").lower() not in {"0", "false", "no"}:
         from app.crm.sync import sync_all
 
         async def sync_loop():

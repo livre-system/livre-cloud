@@ -59,7 +59,7 @@ def _public_trip(trip) -> PublicTrip:
 
 @router.post("/requests", response_model=TripRequestResponse, status_code=201)
 def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
-    """Creates a passenger request for controlled web-flow testing."""
+    """Creates and internally assigns a passenger request to Livre's driver pool."""
     origin = payload.origin.strip()
     destination = payload.destination.strip()
     if origin.casefold() == destination.casefold():
@@ -68,16 +68,30 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
     if not any(term in origin.casefold() for term in local_terms) or not any(term in destination.casefold() for term in local_terms):
         raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
 
+    cur.execute(
+        """
+        SELECT u.id, u.name
+        FROM livre_users u
+        JOIN livre_driver_accounts a ON a.user_id = u.id
+        WHERE u.username = 'livreuser' AND a.active = TRUE
+        LIMIT 1
+        """
+    )
+    driver = cur.fetchone()
+    if not driver:
+        raise HTTPException(status_code=503, detail="No hay un conductor Livre disponible")
+
     tracking_token = secrets.token_urlsafe(32)
     conversation_id = f"web_{uuid.uuid4()}"
     cur.execute(
         """
         INSERT INTO livi_trips
-            (conversation_id, origen, destino, whatsapp_user, tracking_token, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, 'searching', NOW(), NOW())
+            (conversation_id, origen, destino, whatsapp_user, tracking_token,
+             assigned_driver_user_id, tracking_driver_name, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'assigned', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
-        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token),
+        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token, driver["id"], driver["name"]),
     )
     trip = cur.fetchone()
     passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros.vercel.app")
@@ -87,7 +101,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         tracking_token=trip["tracking_token"],
         tracking_url=tracking_url,
         status=trip["status"],
-        message="Pedido recibido. Falta asignar un conductor desde el CRM.",
+        message="Pedido recibido y asignado a un conductor Livre.",
     )
 
 
@@ -176,7 +190,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                t.tracking_latitude, t.tracking_longitude,
                t.tracking_location_updated_at
         FROM livi_trips t
-        JOIN livre_driver_accounts a ON a.magiis_driver_id = t.magiis_driver_id
+        JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
         """,
         (trip_id, user["id"]),
@@ -214,7 +228,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                t.tracking_latitude, t.tracking_longitude,
                t.tracking_location_updated_at
         FROM livi_trips t
-        JOIN livre_driver_accounts a ON a.magiis_driver_id = t.magiis_driver_id
+        JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         WHERE a.user_id = %s AND a.active = TRUE
           AND t.status NOT IN ('completed', 'cancelled')
         ORDER BY t.created_at DESC
