@@ -9,7 +9,8 @@ funcionalidades existentes.
 ## Arquitectura
 
 ``` text
-Pasajero → WhatsApp → LIVI / ElevenLabs → Livre Cloud (Railway) → livi_trips → MAGIIS
+Pasajero → WhatsApp / livre-pasajeros → Livre Cloud (Railway) → livi_trips
+→ despacho interno Livre → livre-conductor → GPS / seguimiento
 ```
 
 Frontend: Vercel. Backend: FastAPI en Railway. Memoria/embeddings:
@@ -310,38 +311,26 @@ identidad persistente del pasajero de WhatsApp.
 
 No mezclar pasajero WhatsApp con usuario del panel.
 
-## MAGIIS
+## MAGIIS (fuera del flujo operativo actual)
 
-Integración vigente:
+MAGIIS no fue eliminado del repositorio ni de la base de datos, pero está
+desactivado y no participa en los pedidos, asignaciones, estados ni GPS de
+Livre. La cuenta fue dada de baja por scraping de su web. No reintentar login
+web, scraping ni llamadas a sus endpoints hasta contar con autorización y una
+API oficial.
+
+La integración histórica permanece documentada para una eventual revisión:
 
 ``` text
-ElevenLabs → livi_trips → app/integrations/magiis_web.py → MAGIIS Web
+ElevenLabs → livi_trips → app/integrations/magiis_web.py → MAGIIS Web (histórico,
+desactivado)
 ```
 
 La API pública (`api.public.magiis.com`) queda descartada completamente. No
 usar `app/integrations/magiis.py`, `generatedTravel` ni sus credenciales para
 este flujo.
 
-MAGIIS Web validado:
-
-- Login Web HTTP 200.
-- `simulateAll` HTTP 200 con `transportTypeId=2` disponible.
-- Creación Web HTTP 200 con `travelId`; última prueba: `Dorrego 25 → Vieytes 968`,
-  `travelId=6672893`, estado inicial `SEARCHING_DRIVER`.
-- No ejecutar audit ni cancel automáticamente.
-- La web realiza autocomplete y luego consulta `GET /places/getPlace?placeId=...`.
-- `simulateAll` recibe la ubicación ya resuelta: coordenadas, `placeId` y
-  `shortName`; no recibe una dirección textual cruda.
-- La resolución conserva de `getPlace` únicamente `latitude`, `longitude` y
-  `placeId`. El `shortName` de MAGIIS no reemplaza la dirección confirmada por
-  el pasajero.
-- Al crear el viaje, el payload envía el texto original confirmado. Ejemplo:
-  `destino="dorrego 25"` → `destination.shortName="dorrego 25"`.
-- `transportTypeId`/`vehicleTypeId` queda fijado en `2` para Livre Ahorro.
-- Test preparado en `tests/test_magiis_web_create_travel.py` y validado con 4
-  tests pasando.
-
-Variables de Railway (no exponer valores):
+No usar ni activar durante el flujo interno las variables históricas:
 
 ``` text
 MAGIIS_WEB_USERNAME
@@ -350,7 +339,9 @@ MAGIIS_WEB_FLOW_ENABLED
 MAGIIS_WEB_CREATE_ENABLED
 ```
 
-No exponer ni repetir contraseñas, tokens ni respuestas sensibles.
+No exponer ni repetir contraseñas, tokens ni respuestas sensibles. Aunque esas
+variables sigan configuradas en Railway, el backend no inicia el sincronizador
+externo.
 
 
 ## Estado reciente del frontend CRM
@@ -373,7 +364,11 @@ funcionando. - Modelo Groq: `openai/gpt-oss-20b`. - `registrar_viaje`. -
 `conversation_id`. - `whatsapp_user`. - Variable ElevenLabs:
 `system__caller_id`.
 
-Pendiente inmediato: 1. Probar el webhook con `MAGIIS_WEB_FLOW_ENABLED=1` sin creación real. 2. Resolver el bloqueo `REQUEST_DENIED` de Google Geocoding y confirmar `placeId` compatibles para Bahía Blanca. 3. Revisar la cotización persistida en `livi_trips`. 4. Habilitar `MAGIIS_WEB_CREATE_ENABLED=1` solo con autorización y prueba controlada. 5. Mantener separadas las identidades de panel y pasajero WhatsApp.
+Pendiente inmediato: 1. Completar el rediseño de las apps de pasajero y
+conductor. 2. Mantener validado el flujo interno en Bahía Blanca. 3. Preparar
+un exportador/adaptador al CRM solamente después de validar el flujo propio y
+con autorización. 4. Mantener separadas las identidades de panel y pasajero
+WhatsApp.
 
 ## Reglas para Hermes
 
@@ -381,8 +376,8 @@ NO: - reemplazar `main.py` completo - rehacer arquitectura - borrar
 tablas - borrar embeddings/memorias - cambiar `text-embedding-3-small` -
 reintroducir Google OAuth - usar email como identidad interna - usar
 WhatsApp como `livre_users.id` - crear usuarios de panel para pasajeros
-WhatsApp - tocar MAGIIS mientras se resuelve identidad/memoria -
-modificar muchos subsistemas a la vez
+WhatsApp - reactivar MAGIIS sin autorización oficial - modificar muchos
+subsistemas a la vez
 
 SÍ: - inspeccionar primero - cambiar lo mínimo - preservar
 compatibilidad - usar `livre_users.id` para usuarios del panel -
@@ -435,8 +430,9 @@ No asumir que estos valores son intercambiables.
   explícita o cuando la tarea lo requiera de forma comprobable; no hacer
   refactors para resolver tareas de las apps.
 - Antes de modificar una integración externa, verificar el contrato real, el
-  código actual y el efecto de la petición. No repetir peticiones innecesarias
-  a MAGIIS ni ejecutar efectos reales sin autorización.
+  código actual y el efecto de la petición. No llamar, reintentar login ni
+  ejecutar scraping contra MAGIIS. Cualquier reactivación requiere API oficial
+  y autorización explícita.
 - El identificador de WhatsApp sirve para relacionar el pedido con el viaje y
   el CRM; no es el identificador del cliente en MAGIIS ni el usuario del panel.
 - Mantener separado el cliente MAGIIS `Livre Cloud` (`436133`) de la identidad
@@ -454,6 +450,28 @@ livre-pasajeros → seguimiento y futura app del pasajero
 livre-conductor → futura app del conductor
 livre-cloud     → núcleo backend, API propia y modelo operativo
 ```
+
+### Flujo interno operativo actual
+
+MAGIIS queda fuera del flujo, pero sus tablas, columnas y código histórico no
+se eliminan. Livre Cloud asigna los nuevos pedidos internamente a un conductor
+activo de `livre_driver_accounts`; en el entorno de prueba el conductor es
+`livreuser`.
+
+Flujo validado en producción para Bahía Blanca:
+
+``` text
+livre-pasajeros
+→ POST /mobility/requests
+→ livi_trips + assigned_driver_user_id
+→ livre-conductor /mobility/driver/trips
+→ estado y GPS autenticados
+→ seguimiento del pasajero
+```
+
+El sincronizador externo no se inicia aunque queden variables históricas de
+MAGIIS configuradas en Railway. El CRM se integrará después de validar el
+flujo propio, mediante un adaptador autorizado que no bloquee la operación.
 
 El repositorio `livre-conductor` existe en GitHub y debe mantenerse como
 checkout separado en `Documentos/Clientes/Livre/livre-conductor`. Si la carpeta
