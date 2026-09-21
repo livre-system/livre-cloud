@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
-from app.mobility.schemas import LocationUpdate, PublicTrip, StatusUpdate
+from app.mobility.schemas import DriverTrip, LocationUpdate, PublicTrip, StatusUpdate
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 
@@ -118,3 +118,104 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
     return _public_trip(trip)
+
+
+def _driver_trip_or_404(cur, trip_id: int, user: dict):
+    """Returns a trip only when it is assigned to the authenticated driver."""
+    cur.execute(
+        """
+        SELECT t.id, t.origen, t.destino, t.status,
+               t.tracking_driver_name, t.tracking_plate,
+               t.tracking_vehicle_model, t.tracking_vehicle_color,
+               t.tracking_latitude, t.tracking_longitude,
+               t.tracking_location_updated_at
+        FROM livi_trips t
+        JOIN livre_driver_accounts a ON a.magiis_driver_id = t.magiis_driver_id
+        WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
+        """,
+        (trip_id, user["id"]),
+    )
+    trip = cur.fetchone()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Viaje no asignado a este conductor")
+    return trip
+
+
+def _driver_trip(trip) -> DriverTrip:
+    return DriverTrip(
+        id=trip["id"],
+        origin=trip["origen"],
+        destination=trip["destino"],
+        status=trip["status"],
+        driver_name=trip["tracking_driver_name"],
+        plate=trip["tracking_plate"],
+        vehicle_model=trip["tracking_vehicle_model"],
+        vehicle_color=trip["tracking_vehicle_color"],
+        latitude=trip["tracking_latitude"],
+        longitude=trip["tracking_longitude"],
+        location_updated_at=trip["tracking_location_updated_at"],
+    )
+
+
+@router.get("/driver/trips", response_model=list[DriverTrip])
+def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
+    """Lists current trips assigned to the authenticated driver."""
+    cur.execute(
+        """
+        SELECT t.id, t.origen, t.destino, t.status,
+               t.tracking_driver_name, t.tracking_plate,
+               t.tracking_vehicle_model, t.tracking_vehicle_color,
+               t.tracking_latitude, t.tracking_longitude,
+               t.tracking_location_updated_at
+        FROM livi_trips t
+        JOIN livre_driver_accounts a ON a.magiis_driver_id = t.magiis_driver_id
+        WHERE a.user_id = %s AND a.active = TRUE
+          AND t.status NOT IN ('completed', 'cancelled')
+        ORDER BY t.created_at DESC
+        """,
+        (user["id"],),
+    )
+    return [_driver_trip(row) for row in cur.fetchall()]
+
+
+@router.post("/driver/trips/{trip_id}/status", response_model=DriverTrip)
+def driver_update_status(
+    trip_id: int,
+    payload: StatusUpdate,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Updates status only for a trip assigned to the authenticated driver."""
+    _driver_trip_or_404(cur, trip_id, user)
+    cur.execute(
+        """
+        UPDATE livi_trips SET status = %s, updated_at = NOW()
+        WHERE id = %s
+        """,
+        (payload.status, trip_id),
+    )
+    return _driver_trip_or_404(cur, trip_id, user)
+
+
+@router.post("/driver/trips/{trip_id}/location", response_model=DriverTrip)
+def driver_update_location(
+    trip_id: int,
+    payload: LocationUpdate,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Stores GPS only for a trip assigned to the authenticated driver."""
+    _driver_trip_or_404(cur, trip_id, user)
+    cur.execute(
+        """
+        UPDATE livi_trips
+        SET tracking_latitude = %s,
+            tracking_longitude = %s,
+            tracking_location_updated_at = NOW(),
+            tracking_location_visible_at = NOW() + INTERVAL '15 seconds',
+            updated_at = NOW()
+        WHERE id = %s
+        """,
+        (payload.latitude, payload.longitude, trip_id),
+    )
+    return _driver_trip_or_404(cur, trip_id, user)

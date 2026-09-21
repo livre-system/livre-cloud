@@ -36,3 +36,7 @@ class PublicTrip(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     location_updated_at: datetime | None = None
+
+
+class DriverTrip(PublicTrip):
+    """Viaje asignado al conductor autenticado."""
