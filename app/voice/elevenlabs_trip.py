@@ -26,11 +26,14 @@ import logging
 import os
 import secrets
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
 from app.integrations import magiis_web
+from app.integrations.google_maps import geocode_address, route_distance_km
+from app.integrations.historical_quote import historical_options
 
 log = logging.getLogger(__name__)
 
@@ -250,70 +253,26 @@ def _run_magiis_web(
         return {"created": False, "error": str(exc)}
 
 
-def _run_magiis_quote(origen: str, destino: str) -> dict:
-    """Resuelve las direcciones y ejecuta únicamente simulateAll."""
+def _run_local_quote(origen: str, destino: str) -> dict:
+    """Cotiza con parámetros históricos; no consulta MAGIIS."""
     try:
-        with httpx.Client(
-            base_url=magiis_web.BASE_URL, timeout=magiis_web.TIMEOUT
-        ) as client:
-            session = magiis_web.login(client)
-            origin_text = magiis_web.resolve_address(origen)
-            destination_text = magiis_web.resolve_address(destino)
-            origin, session = magiis_web.get_place(
-                session=session,
-                place_id=origin_text.get("placeId"),
-                latitude=origin_text["latitude"],
-                longitude=origin_text["longitude"],
-                client=client,
-            )
-            destination, session = magiis_web.get_place(
-                session=session,
-                place_id=destination_text.get("placeId"),
-                latitude=destination_text["latitude"],
-                longitude=destination_text["longitude"],
-                client=client,
-            )
-            simulation, _, _ = magiis_web.simulate_all(
-                session=session,
-                origin_lat=origin["latitude"],
-                origin_lon=origin["longitude"],
-                origin_name=origin["shortName"] or origen,
-                destination_lat=destination["latitude"],
-                destination_lon=destination["longitude"],
-                destination_name=destination["shortName"] or destino,
-                origin_place_id=origin["placeId"],
-                destination_place_id=destination["placeId"],
-                client=client,
-            )
-            if simulation.status_code not in (200, 201):
-                raise RuntimeError(
-                    f"MAGIIS Web cotización HTTP {simulation.status_code}: "
-                    f"{simulation.text[:300]}"
-                )
-            options = simulation.json()
-            if not isinstance(options, list):
-                raise RuntimeError("MAGIIS Web cotización devolvió una respuesta inválida")
-            available = [
-                item for item in options
-                if str(item.get("transportTypeId")) in {"1", "2"}
-                and item.get("serviceStatus") == "AVAILABLE"
-            ]
-            if not available:
-                raise RuntimeError("MAGIIS Web no ofreció Premium ni Ahorro disponibles")
-            ahorro_or_premium = next(
-                (item for item in available if str(item.get("transportTypeId")) == "2"),
-                available[0],
-            )
-            return {
-                "price": ahorro_or_premium.get("pricePointToPoint"),
-                "options": available,
-                "locations": {
-                    "origin": origin,
-                    "destination": destination,
-                },
-            }
+        origin = geocode_address(origen)
+        destination = geocode_address(destino)
+        distance_km = route_distance_km(origin, destination)
+        options = historical_options(Decimal(str(distance_km)))
+        selected = next(
+            (item for item in options if item["transportTypeId"] == "2"),
+            options[0],
+        )
+        return {
+            "price": selected["price"],
+            "options": options,
+            "locations": {"origin": origin, "destination": destination},
+            "distance_km": distance_km,
+            "source": "historical_quotes",
+        }
     except Exception as exc:
-        log.error("[ELEVEN QUOTE] error: %s", exc, exc_info=True)
+        log.error("[LOCAL QUOTE] error: %s", exc, exc_info=True)
         return {"error": str(exc)}
 
 
@@ -349,7 +308,7 @@ async def elevenlabs_quote(request: Request):
     if not destino:
         return {"result": "Error: el destino no puede estar vacío."}
 
-    quote = _run_magiis_quote(origen, destino)
+    quote = _run_local_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
     return {
