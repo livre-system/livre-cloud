@@ -21,6 +21,10 @@ class LoginBody(BaseModel):
     password: str
 
 
+class DriverRegisterBody(RegisterBody):
+    """Datos mínimos para crear una cuenta operativa de chofer."""
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _hash_password(plain: str) -> str:
@@ -59,6 +63,65 @@ def register(body: RegisterBody):
 
     token = create_token(id=user_id, name=body.name, email=body.username)
     return {"token": token, "user": {"id": user_id, "username": body.username, "name": body.name}}
+
+
+@router.post("/driver/register", status_code=201)
+def register_driver(body: DriverRegisterBody):
+    """Crea una cuenta Livre y la habilita como chofer local."""
+    username = body.username.strip()
+    name = body.name.strip()
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    if len(username) < 3:
+        raise HTTPException(status_code=400, detail="El usuario debe tener al menos 3 caracteres")
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Ingresá tu nombre completo")
+
+    user_id = str(uuid.uuid4())
+    password_hash = _hash_password(body.password)
+    with get_cursor() as cur:
+        cur.execute("SELECT id FROM livre_users WHERE username = %s", [username])
+        if cur.fetchone():
+            raise HTTPException(status_code=409, detail="El usuario ya existe")
+        cur.execute(
+            """
+            INSERT INTO livre_users (id, username, name, password_hash)
+            VALUES (%s, %s, %s, %s)
+            """,
+            [user_id, username, name, password_hash],
+        )
+        cur.execute(
+            """
+            INSERT INTO livre_driver_accounts (user_id, active)
+            VALUES (%s, TRUE)
+            """,
+            [user_id],
+        )
+
+    token = create_token(id=user_id, name=name, email=username)
+    return {"token": token, "user": {"id": user_id, "username": username, "name": name}}
+
+
+@router.post("/driver/login")
+def login_driver(body: LoginBody):
+    """Autentica únicamente cuentas habilitadas como choferes locales."""
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT u.id, u.name, u.username, u.password_hash
+            FROM livre_users u
+            JOIN livre_driver_accounts a ON a.user_id = u.id
+            WHERE u.username = %s AND a.active = TRUE
+            """,
+            [body.username.strip()],
+        )
+        user = cur.fetchone()
+
+    if not user or not _verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Credenciales de conductor inválidas")
+
+    token = create_token(id=user["id"], name=user["name"], email=user["username"])
+    return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"]}}
 
 
 @router.post("/login")
