@@ -73,7 +73,8 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         SELECT u.id, u.name
         FROM livre_users u
         JOIN livre_driver_accounts a ON a.user_id = u.id
-        WHERE u.username = 'livreuser' AND a.active = TRUE
+        WHERE a.active = TRUE
+        ORDER BY a.created_at ASC, u.created_at ASC
         LIMIT 1
         """
     )
