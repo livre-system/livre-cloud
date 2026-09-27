@@ -28,7 +28,9 @@ def _credentials() -> tuple[str, str]:
 
 
 def login(client: httpx.Client | None = None) -> dict[str, Any]:
-    """Inicia sesión como carrier Web y devuelve token/userId en memoria."""
+    """MAGIIS Web está deshabilitado: Livre opera con su base local."""
+    if os.getenv("MAGIIS_WEB_FLOW_ENABLED", "0").lower() not in {"1", "true", "yes", "on"}:
+        raise RuntimeError("MAGIIS Web deshabilitado; usar la base local de Livre Cloud")
     username, password = _credentials()
     own_client = client is None
     client = client or httpx.Client(base_url=BASE_URL, timeout=TIMEOUT)

@@ -352,8 +352,10 @@ Repositorio: `livre-chatbot`, rama `main`, frontend desplegado en Vercel.
 - Filtros CRM conectados al backend y carga paginada del listado.
 - La vista de Vehículos carga 20 registros por página; no debe cargar 200 ni repetir la lista al finalizar.
 - La tabla genérica se limpia y se fuerza a ocultar al abrir una vista específica.
-- Últimos commits relevantes: `8634732`, `bedd19c`, `e568619`, `5e42449`.
-- Validación final realizada: `node --check js/app.js` y `git diff --check`.
+- Últimos cambios relevantes verificados en `livre-chatbot`: visor de mapa
+  operacional, clustering de vehículos, actualización periódica, cambio de
+  proveedor de teselas y filtros de estado del visor (`dfb0877`).
+- Validación histórica realizada: `node --check js/app.js` y `git diff --check`.
 
 ## Estado actual
 
@@ -364,11 +366,19 @@ funcionando. - Modelo Groq: `openai/gpt-oss-20b`. - `registrar_viaje`. -
 `conversation_id`. - `whatsapp_user`. - Variable ElevenLabs:
 `system__caller_id`.
 
-Pendiente inmediato: 1. Completar el rediseño de las apps de pasajero y
-conductor. 2. Mantener validado el flujo interno en Bahía Blanca. 3. Preparar
-un exportador/adaptador al CRM solamente después de validar el flujo propio y
-con autorización. 4. Mantener separadas las identidades de panel y pasajero
-WhatsApp.
+Estado actualizado: 1. Las apps iniciales de pasajero y conductor ya existen
+y consumen la API Mobility propia. 2. El flujo interno de pedidos, asignación,
+estados y GPS está implementado para Bahía Blanca y alrededores. 3. MAGIIS está
+cancelado para la operación actual: en Railway producción quedaron
+`MAGIIS_CRM_SYNC_ENABLED=0`, `MAGIIS_WEB_FLOW_ENABLED=0` y
+`MAGIIS_WEB_CREATE_ENABLED=0`; no reactivar ni reintentar login, scraping o
+llamadas externas. 4. El CRM mantiene sus consultas operativas históricas
+separadas del despacho interno. 5. La identidad del conductor se vincula
+mediante `livre_driver_accounts` y no debe mezclarse con el pasajero de
+WhatsApp ni con el usuario del panel. 6. Pendiente: completar autorización de
+los endpoints genéricos de movilidad y validar de punta a punta las dos apps
+propias; el healthcheck de producción responde 200 y las migraciones se
+inicializan en el arranque.
 
 ## Reglas para Hermes
 
@@ -470,13 +480,26 @@ livre-pasajeros
 ```
 
 El sincronizador externo no se inicia aunque queden variables históricas de
-MAGIIS configuradas en Railway. El CRM se integrará después de validar el
-flujo propio, mediante un adaptador autorizado que no bloquee la operación.
+MAGIIS configuradas en Railway. MAGIIS queda solamente como fuente histórica
+de recolección/importación de datos; no participa del funcionamiento operativo.
+Livre Cloud es la única fuente activa para clientes, pasajeros, conductores,
+vehículos y viajes. Las apps `livre-pasajeros` y `livre-conductor`, y el
+`livre-chatbot`, deben conectarse únicamente con la API y la base de Livre
+Cloud. El dashboard propio consume nuestro modelo operativo y no llama a
+MAGIIS. Cualquier importación histórica debe ser explícita, auditada y no debe
+convertir a MAGIIS en dependencia del flujo diario.
 
 El repositorio `livre-conductor` existe en GitHub y debe mantenerse como
 checkout separado en `Documentos/Clientes/Livre/livre-conductor`. Si la carpeta
 no existe, clonarlo antes de trabajar; no mezclarlo con el CRM ni con
 `livre-pasajeros`.
+
+Estado verificado: `livre-pasajeros` ya permite crear pedidos y consultar el
+seguimiento mediante un token privado. `livre-conductor` ya tiene login,
+listado de viajes asignados, cambios de estado y envío autenticado de GPS.
+El despacho actual asigna internamente a una cuenta activa de Livre; los
+README de esas apps pueden conservar referencias históricas al CRM/MAGIIS,
+pero no deben tomarse como el contrato operativo vigente.
 
 La API Mobility actual de Livre Cloud incluye:
 

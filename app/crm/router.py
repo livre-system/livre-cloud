@@ -24,6 +24,23 @@ _RESOURCES = {
 }
 
 
+def _local_page(cur, table: str, page: int, size: int, q: str = ""):
+    """Lee el snapshot local importado; nunca abre una sesión externa."""
+    where = ""
+    params = []
+    if q.strip():
+        where = " WHERE raw_payload::text ILIKE %s"
+        params.append("%" + q.strip() + "%")
+    cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(
+        f"SELECT magiis_id, raw_payload FROM {table}{where} ORDER BY magiis_id DESC LIMIT %s OFFSET %s",
+        params + [size, (page - 1) * size],
+    )
+    items = [{"magiis_id": row["magiis_id"], "raw_payload": row["raw_payload"]} for row in cur.fetchall()]
+    return {"source": "local", "items": items, "page": page, "size": size, "total": total}
+
+
 def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
     """Busca el id real devuelto por MAGIIS, incluso si viene anidado."""
     if isinstance(value, dict):
@@ -179,26 +196,26 @@ def update_trip_tracking(
 
 
 @router.get("/operational")
-def operational(user: dict = Depends(require_auth)):
-    """Contrato server-side del panel Control operacional de MAGIIS Web."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        try:
-            chats = reader.chats_all()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code != 404:
-                raise
-            log.warning("MAGIIS no expone chats; se continúa con datos operativos")
-            chats = {}
-        return {
-            "status": reader.operational_status(),
-            "driver_totals": reader.driver_totals(),
-            "drivers": reader.driver_dashboard(vehicle_id_switch=False),
-            "drivers_by_vehicle": reader.driver_dashboard(vehicle_id_switch=True),
-            "driver_statuses": reader.driver_report_page(page=1, size=1000000),
-            "report_042": reader.operational_report(),
-            "chats": chats,
-        }
+def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    """Estado operativo construido exclusivamente desde la base local."""
+    cur.execute("SELECT raw_payload FROM magiis_crm_drivers ORDER BY magiis_id DESC")
+    drivers = [row["raw_payload"] for row in cur.fetchall()]
+    cur.execute("SELECT count(*) AS total FROM magiis_crm_travels")
+    travels = int(cur.fetchone()["total"])
+    cur.execute("SELECT count(*) AS total FROM magiis_crm_vehicles")
+    vehicles = int(cur.fetchone()["total"])
+    cur.execute("SELECT count(*) AS total FROM magiis_crm_passengers")
+    passengers = int(cur.fetchone()["total"])
+    return {
+        "source": "local",
+        "status": {"travelsQuantity": travels, "workingVehiclesQuantity": vehicles, "clientsIndividualsAmount": passengers},
+        "driver_totals": {"totalDrivers": len(drivers), "totalDriversOnline": 0, "totalDriversOffline": len(drivers), "totalDriversInTravel": 0},
+        "drivers": drivers,
+        "drivers_by_vehicle": drivers,
+        "driver_statuses": {"items": drivers, "total": len(drivers)},
+        "report_042": {},
+        "chats": {},
+    }
 
 
 @router.get("/drivers/live")
@@ -213,21 +230,10 @@ def live_drivers(
     vehicle_type: str = Query(default="", max_length=120),
     operability: str = Query(default="", max_length=120),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
-    """Listado en vivo de choferes, replicando el reporte Web 082."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.driver_report_page(
-            page=page,
-            size=size,
-            driver_code=driver_code,
-            driver_name=driver_name,
-            phone=phone,
-            email=email,
-            vehicle=vehicle,
-            vehicle_type=vehicle_type,
-            operability=operability,
-        )
+    """Listado de conductores almacenados en la base local."""
+    return _local_page(cur, "magiis_crm_drivers", page, size, driver_name or driver_code or phone or email or vehicle)
 
 
 @router.get("/drivers/{driver_user_id}/detail")
@@ -284,43 +290,8 @@ def live_travels(
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
-    """Consulta en vivo de gestión de viajes, solo lectura contra MAGIIS."""
-    today = date.today()
-    travel_date_from = date_from or today.isoformat()
-    travel_date_to = date_to or (today + timedelta(days=31)).isoformat()
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        page_data = reader.travel_page(
-            page=page,
-            size=size,
-            travel_date_from=travel_date_from,
-            travel_date_to=travel_date_to,
-            state=state,
-            programmed=programmed,
-            find=q,
-            is_pax_vip=vip,
-        )
-        totals = reader.travel_totals(
-            travel_date_from=travel_date_from,
-            travel_date_to=travel_date_to,
-            find=q,
-            programmed=programmed,
-            is_pax_vip=vip,
-        )
-    page_info = page_data.get("page", page_data)
-    items = page_info.get("content", [])
-    synced = sum(_sync_trip_assignment(cur, item) for item in items)
-    return {
-        "source": "magiis",
-        "items": items,
-        "page": page_info.get("number", page - 1) + 1,
-        "size": page_info.get("size", size),
-        "total": page_info.get("totalElements", 0),
-        "totals": totals,
-        "assignments_synced": synced,
-        "date_from": travel_date_from,
-        "date_to": travel_date_to,
-    }
+    """Viajes históricos almacenados en la base local."""
+    return _local_page(cur, "magiis_crm_travels", page, size, q)
 
 
 @router.get("/agency-commissions")
@@ -417,21 +388,10 @@ def live_passengers(
     size: int = Query(default=20, ge=1, le=100),
     q: str = Query(default="", max_length=120),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
-    """Consulta en vivo de clientes, solo lectura contra MAGIIS."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        page_data = reader.passenger_page(page=page, size=size, find=q.strip())
-        totals = reader.client_totals()
-    page_info = page_data.get("page", page_data)
-    return {
-        "source": "magiis",
-        "items": page_info.get("content", []),
-        "page": page_info.get("number", page - 1) + 1,
-        "size": page_info.get("size", size),
-        "total": page_info.get("totalElements", 0),
-        "totals": totals,
-    }
+    """Clientes almacenados en la base local."""
+    return _local_page(cur, "magiis_crm_passengers", page, size, q)
 
 
 @router.get("/passengers/{passenger_id}")
@@ -468,19 +428,10 @@ def live_vehicles(
     size: int = Query(default=20, ge=1, le=100),
     q: str = Query(default="", max_length=120),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
-    """Lista vehículos desde el contrato Web, sin exponer MAGIIS al frontend."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        payload = reader.vehicle_page(page=page, size=size, find=q)
-    page_data = payload.get("page", payload)
-    items = page_data.get("content", []) if isinstance(page_data, dict) else []
-    return {
-        "items": [{"magiis_id": item.get("vehicleId") or item.get("id"), "raw_payload": item} for item in items],
-        "total": page_data.get("totalElements", len(items)),
-        "page": page_data.get("number", page - 1) + 1,
-        "size": page_data.get("size", size),
-    }
+    """Vehículos almacenados en la base local."""
+    return _local_page(cur, "magiis_crm_vehicles", page, size, q)
 
 
 @router.get("/vehicles/types")
