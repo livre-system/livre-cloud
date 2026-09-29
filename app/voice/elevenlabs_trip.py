@@ -355,10 +355,20 @@ async def elevenlabs_trip_status(request: Request):
     vehicle = " ".join(part for part in vehicle_parts if part).strip()
     plate = trip.get("tracking_plate")
 
+    tracking_url = _tracking_url(trip.get("tracking_token"))
+    latitude = trip.get("tracking_latitude")
+    longitude = trip.get("tracking_longitude")
+    location_url = (
+        f"https://www.google.com/maps?q={latitude},{longitude}"
+        if latitude is not None and longitude is not None
+        else None
+    )
+
     if not driver and not vehicle and not plate:
         return {
             "result": "El viaje está registrado y todavía estamos buscando un conductor.",
             "status": trip.get("status"),
+            "tracking_url": tracking_url,
         }
 
     assignment = []
@@ -368,12 +378,20 @@ async def elevenlabs_trip_status(request: Request):
         assignment.append(f"vehículo {vehicle}")
     if plate:
         assignment.append(f"patente {plate}")
+    result = "Ya hay una asignación: " + ", ".join(assignment) + "."
+    if location_url:
+        result += f" Ubicación del vehículo: {location_url}"
+    elif tracking_url:
+        result += f" Seguimiento: {tracking_url}"
     return {
-        "result": "Ya hay una asignación: " + ", ".join(assignment) + ".",
+        "result": result,
         "status": trip.get("status"),
         "driver": driver or None,
         "vehicle": vehicle or None,
         "plate": plate or None,
+        "tracking_url": tracking_url,
+        "location": {"latitude": latitude, "longitude": longitude} if location_url else None,
+        "location_url": location_url,
     }
 
 
@@ -415,7 +433,8 @@ def passenger_tracking(tracking_token: str):
     visible_at = trip.get("tracking_location_visible_at")
     if visible_at and visible_at.tzinfo is None:
         visible_at = visible_at.replace(tzinfo=timezone.utc)
-    if visible_at and visible_at > datetime.now(timezone.utc):
+    # El campo guarda el vencimiento de la ventana de visibilidad (15 s).
+    if visible_at and visible_at <= datetime.now(timezone.utc):
         location = None
         location_updated_at = None
     return {
