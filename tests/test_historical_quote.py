@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from app.integrations.historical_quote import calculate_quote, historical_options
+from app.integrations import google_maps
 
 
 def test_calculates_price_from_historical_rate_and_distance():
@@ -40,3 +41,22 @@ def test_rejects_invalid_distance():
         assert "distance" in str(exc)
     else:
         raise AssertionError("expected invalid distance to fail")
+
+
+def test_google_zero_results_falls_back_to_nominatim(monkeypatch):
+    monkeypatch.setattr(google_maps, "GOOGLE_MAPS_API_KEY", "configured")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "ZERO_RESULTS", "results": []}
+
+    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(
+        "app.integrations.nominatim.geocode_address",
+        lambda address: {"latitude": -38.7, "longitude": -62.2, "placeId": None},
+    )
+
+    assert google_maps.geocode_address("Alsina 65")["latitude"] == -38.7

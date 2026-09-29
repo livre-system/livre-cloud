@@ -59,6 +59,10 @@ modelo propio: livi_trips, asignaciones, estados, GPS y eventos
 
 ElevenLabs/LIVI sigue siendo un canal de entrada de pedidos, no una integración directa con un proveedor de viajes. Sus llamadas llegan a Livre Cloud, que persiste y procesa el viaje según el contrato vigente.
 
+## Cotización activa
+
+`POST /elevenlabs/quote` cotiza sin crear viajes reales. Resuelve las direcciones con Google Geocoding y usa Nominatim/OpenStreetMap como fallback cuando Google devuelve `ZERO_RESULTS`; luego obtiene distancia vial y calcula opciones con perfiles históricos propios guardados en PostgreSQL. No llamar a MAGIIS para cotizar ni inventar precio, coordenadas o distancia si alguna fuente falla.
+
 ## Flujo propio de movilidad
 
 Pedido y asignación actuales:

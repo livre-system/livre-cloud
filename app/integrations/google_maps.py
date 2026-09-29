@@ -38,7 +38,11 @@ def parse_geocode_response(data: dict) -> dict:
 
 
 def geocode_address(address: str) -> dict:
-    """Convierte una dirección escrita en coordenadas de Bahía Blanca."""
+    """Convierte una dirección escrita en coordenadas de Bahía Blanca.
+
+    Google sigue siendo la fuente principal. Nominatim es el fallback
+    verificable cuando Google no encuentra una dirección local.
+    """
     if not GOOGLE_MAPS_API_KEY:
         raise GeocodingError("GOOGLE_MAPS_API_KEY no configurada")
 
@@ -52,8 +56,12 @@ def geocode_address(address: str) -> dict:
         )
         response.raise_for_status()
         return parse_geocode_response(response.json())
-    except GeocodingError:
-        raise
+    except GeocodingError as exc:
+        if str(exc) != "dirección no encontrada":
+            raise
+        from app.integrations.nominatim import geocode_address as nominatim_geocode
+
+        return nominatim_geocode(address)
     except Exception as exc:
         raise GeocodingError(f"no se pudo geocodificar la dirección: {exc}") from exc
 
