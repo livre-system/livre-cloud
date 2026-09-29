@@ -55,3 +55,25 @@ class PublicTrip(BaseModel):
 
 class DriverTrip(PublicTrip):
     """Viaje asignado al conductor autenticado."""
+
+
+class TripMessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=1000)
+
+
+class TripMessage(BaseModel):
+    id: int
+    trip_id: int
+    channel: str
+    sender_role: str
+    sender_id: str | None = None
+    body: str
+    created_at: datetime
+
+
+class HandieOpenRequest(BaseModel):
+    trip_id: int | None = None
+
+
+class HandieMessageCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=1000)

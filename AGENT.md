@@ -176,3 +176,13 @@ Responder breve y en criollo con:
 - pendientes o riesgos;
 - repositorios y archivos afectados;
 - si hubo commit/push.
+
+## Implementación de comunicaciones y conducción por voz (2026-09-29)
+
+- La app de pasajeros incorpora mensajería del viaje desde el seguimiento, con actualización periódica y canal separado del handie.
+- La app de conductor conserva la operación manual y agrega conducción por voz opcional, activada por botón y operada con la palabra clave “Livi”. El botón permite desactivarla para privacidad; la escucha no se inicia al abrir la app.
+- Los comandos de voz se limitan a acciones laborales: aceptar, iniciar, finalizar viaje y abrir Base/Handie. La mensajería escrita continúa disponible en paralelo.
+- El conductor dispone de un canal Base/Handie separado del chat pasajero. El CRM muestra ese canal y permite transmitir mensajes a un handie abierto.
+- Backend: `app/mobility/router.py`, `app/mobility/schemas.py` y migración `app/migrations/20260929_driver_voice_channels.sql`. Los canales usan tablas propias de Livre y no mezclan credenciales ni contratos de MAGIIS.
+- La mensajería web utiliza polling corto e interfaz de notificación dentro del viaje; la integración nativa FCM/APNs queda como etapa posterior de publicación móvil.
+- Validar en staging con un viaje real de prueba, dos identidades separadas y la migración aplicada antes de producción. No usar datos reales ni probar IDs arbitrarios.

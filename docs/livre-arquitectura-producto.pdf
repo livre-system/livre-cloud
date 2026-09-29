@@ -1,0 +1,189 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+2 0 obj
+<< /Length 1109 >>
+stream
+BT
+/F1 20 Tf
+50 770 Td
+(01  APP DE CONDUCTOR) Tj
+0 -34 Td
+/F1 11 Tf
+(Livre Conductor es la herramienta operativa del chofer.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Operacion manual siempre disponible) Tj
+0 -19 Td
+(- Recibe y selecciona viajes desde la app.) Tj
+0 -19 Td
+(- Actualiza estados: aceptar, en camino, en viaje y finalizado.) Tj
+0 -19 Td
+(- Comparte ubicacion durante el viaje seleccionado.) Tj
+0 -19 Td
+(- El teclado y los botones siguen funcionando aunque la voz este apagada.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Conduccion por voz, opcional) Tj
+0 -19 Td
+(- Se activa solamente con un boton.) Tj
+0 -19 Td
+(- No inicia el microfono al abrir la app.) Tj
+0 -19 Td
+(- Reconoce comandos laborales despues de la palabra Livi.) Tj
+0 -19 Td
+(- Permite aceptar, iniciar, finalizar un viaje y abrir Base/Handie.) Tj
+0 -19 Td
+(- Tiene un unico boton para desactivar la funcion por privacidad.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Mensajeria del viaje) Tj
+0 -19 Td
+(- Chat separado con el pasajero.) Tj
+0 -19 Td
+(- Mensajes escritos disponibles en paralelo a la voz.) Tj
+0 -19 Td
+(- La voz no pisa la operacion manual.) Tj
+0 -19 Td
+ET
+endstream
+endobj
+3 0 obj
+<< /Type /Page /Parent 8 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 2 0 R >>
+endobj
+4 0 obj
+<< /Length 1127 >>
+stream
+BT
+/F1 20 Tf
+50 770 Td
+(02  APP DE PASAJEROS) Tj
+0 -34 Td
+/F1 11 Tf
+(Livre Pasajeros concentra pedido, seguimiento y comunicacion.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Pedido y seguimiento) Tj
+0 -19 Td
+(- Carga origen, destino y nombre del pasajero.) Tj
+0 -19 Td
+(- Recibe un enlace privado de seguimiento.) Tj
+0 -19 Td
+(- Muestra estado, conductor, vehiculo y ubicacion cuando esta disponible.) Tj
+0 -19 Td
+(- La ubicacion se actualiza solo durante la ventana operativa del viaje.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Chat del viaje) Tj
+0 -19 Td
+(- El pasajero puede escribir desde el seguimiento.) Tj
+0 -19 Td
+(- El conductor ve el mismo canal desde su app.) Tj
+0 -19 Td
+(- El canal es exclusivo del viaje y no se mezcla con Base/Handie.) Tj
+0 -19 Td
+(- La interfaz actualiza mensajes periodicamente y mantiene el uso acotado.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Privacidad y limites) Tj
+0 -19 Td
+(- El acceso de seguimiento usa un token privado del viaje.) Tj
+0 -19 Td
+(- La mensajeria se limita a la operacion del viaje.) Tj
+0 -19 Td
+(- La integracion nativa de notificaciones push queda preparada como etapa de publicacion movil.) Tj
+0 -19 Td
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 8 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 4 0 R >>
+endobj
+6 0 obj
+<< /Length 1386 >>
+stream
+BT
+/F1 20 Tf
+50 770 Td
+(03  CRM / BASE / HANDIE) Tj
+0 -34 Td
+/F1 11 Tf
+(El CRM conserva la coordinacion de la empresa sin mezclarse con el chat.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Canal Base / Handie) Tj
+0 -19 Td
+(- El conductor abre el canal con un boton o mediante Livi.) Tj
+0 -19 Td
+(- El CRM visualiza los mensajes del canal operativo.) Tj
+0 -19 Td
+(- La base puede transmitir un mensaje al handie abierto.) Tj
+0 -19 Td
+(- Los mensajes de Base quedan separados del chat con el pasajero.) Tj
+0 -19 Td
+(- El sistema registra viaje, emisor, canal y fecha.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Separacion de responsabilidades) Tj
+0 -19 Td
+(- App de pasajero: pedido, seguimiento y chat del viaje.) Tj
+0 -19 Td
+(- App de conductor: estados, GPS, chat, voz opcional y Base.) Tj
+0 -19 Td
+(- CRM: coordinacion, supervision y comunicacion con conductores.) Tj
+0 -19 Td
+(- Livre Cloud: contratos propios para movilidad y canales internos.) Tj
+0 -19 Td
+(- MAGIIS no se expone directamente desde estas pantallas.) Tj
+0 -19 Td
+() Tj
+0 -19 Td
+(Estado de implementacion) Tj
+0 -19 Td
+(- Migracion: app/migrations/20260929_driver_voice_channels.sql.) Tj
+0 -19 Td
+(- Backend: app/mobility/router.py y schemas.py.) Tj
+0 -19 Td
+(- Validaciones ejecutadas: compilacion Python y parseo JavaScript OK.) Tj
+0 -19 Td
+(- Antes de produccion: aplicar migracion y probar en staging con identidades separadas.) Tj
+0 -19 Td
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 8 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> >> /Contents 6 0 R >>
+endobj
+8 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+9 0 obj
+<< /Type /Catalog /Pages 8 0 R >>
+endobj
+xref
+0 10
+0000000000 65535 f 
+0000000015 00000 n 
+0000000112 00000 n 
+0000001273 00000 n 
+0000001399 00000 n 
+0000002578 00000 n 
+0000002704 00000 n 
+0000004142 00000 n 
+0000004268 00000 n 
+0000004337 00000 n 
+trailer
+<< /Size 10 /Root 9 0 R >>
+startxref
+4386
+%%EOF
