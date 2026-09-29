@@ -8,6 +8,10 @@ from typing import Any
 # Los IDs y conceptos se obtienen de la auditoría histórica. El precio por km
 # y el fijo se vuelven a leer de la base para no depender de MAGIIS.
 DEFAULT_RATE_ID = 6243
+SERVICE_NAMES = {
+    "1": "Livre Ahorro",
+    "2": "Livre Premium",
+}
 
 
 def _money(value: Decimal) -> int:
@@ -33,6 +37,8 @@ def calculate_quote(
         "rateId": rate_id,
         "serviceStatus": "AVAILABLE",
         "transportTypeId": transport_type_id,
+        "serviceName": SERVICE_NAMES.get(transport_type_id, transport_type_id),
+        "productName": SERVICE_NAMES.get(transport_type_id, transport_type_id),
         "source": "historical_quotes",
     }
 

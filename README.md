@@ -489,7 +489,7 @@ Carrier:
 2421
 ```
 
-### Livre Ahorro
+### Livre Premium
 
 La cotización y creación utilizan:
 
@@ -498,7 +498,7 @@ vehicleTypeId = 2
 transportTypeId = 2
 ```
 
-Esto corresponde a Livre Ahorro.
+Esto corresponde a Livre Premium.
 
 ### Direcciones
 
@@ -641,7 +641,7 @@ cotizar_viaje
   ↓
 MAGIIS simulateAll
   ↓
-precio Livre Ahorro
+precio Livre Premium
   ↓
 confirmación del pasajero
   ↓
@@ -833,7 +833,7 @@ captura de origen
 
 También está validada la cancelación mediante `cancelar_viaje`.
 
-La integración vigente con MAGIIS Web funciona con Livre Ahorro y conserva el texto original de las direcciones.
+La integración histórica con MAGIIS Web funcionaba con Livre Premium
 
 No asumir que hay un bug activo en estas partes sin una prueba nueva que lo demuestre.
 

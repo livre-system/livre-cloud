@@ -257,13 +257,12 @@ def _run_local_quote(origen: str, destino: str) -> dict:
         destination = geocode_address(destino)
         distance_km = route_distance_km(origin, destination)
         options = historical_options(Decimal(str(distance_km)))
-        selected = next(
-            (item for item in options if item["transportTypeId"] == "2"),
-            options[0],
-        )
         return {
-            "price": selected["price"],
-            "options": options,
+            "price": next(item["price"] for item in options if item["transportTypeId"] == "2"),
+            "options": [
+                item for item in options
+                if item["transportTypeId"] in {"1", "2"}
+            ],
             "locations": {"origin": origin, "destination": destination},
             "distance_km": distance_km,
             "source": "historical_quotes",
@@ -308,9 +307,12 @@ async def elevenlabs_quote(request: Request):
     quote = _run_local_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
-    options = quote.get("options", [])[:2]
+    options = sorted(
+        quote.get("options", []),
+        key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
+    )[:2]
     option_text = " ".join(
-        f"Opción {index}: ${option['price']}."
+        f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['price']}."
         for index, option in enumerate(options, 1)
     )
     return {
