@@ -6,6 +6,7 @@ from urllib.parse import quote_plus
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
 GOOGLE_GEOCODING_URL = "https://maps.googleapis.com/maps/api/geocode/json"
 GOOGLE_DISTANCE_MATRIX_URL = "https://maps.googleapis.com/maps/api/distancematrix/json"
+OSRM_ROUTE_URL = "https://router.project-osrm.org/route/v1/driving"
 
 
 class GeocodingError(RuntimeError):
@@ -67,7 +68,7 @@ def geocode_address(address: str) -> dict:
 
 
 def route_distance_km(origin: dict, destination: dict) -> float:
-    """Obtiene distancia vial; no usa MAGIIS ni estima en línea recta."""
+    """Obtiene distancia vial; usa OSRM si Google rechaza la solicitud."""
     if not GOOGLE_MAPS_API_KEY:
         raise GeocodingError("GOOGLE_MAPS_API_KEY no configurada")
     try:
@@ -93,6 +94,34 @@ def route_distance_km(origin: dict, destination: dict) -> float:
             raise GeocodingError("la ruta no contiene una distancia válida")
         return meters / 1000
     except GeocodingError:
-        raise
+        return _osrm_route_distance_km(origin, destination)
     except Exception as exc:
         raise GeocodingError(f"no se pudo calcular la distancia: {exc}") from exc
+
+
+def _osrm_route_distance_km(origin: dict, destination: dict) -> float:
+    """Fallback de distancia vial basado en las coordenadas ya verificadas."""
+    try:
+        import httpx
+
+        coordinates = (
+            f"{origin['longitude']},{origin['latitude']};"
+            f"{destination['longitude']},{destination['latitude']}"
+        )
+        response = httpx.get(
+            f"{OSRM_ROUTE_URL}/{coordinates}",
+            params={"overview": "false"},
+            headers={"User-Agent": "LivreCloud/1.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        route = (data.get("routes") or [{}])[0]
+        meters = route.get("distance")
+        if data.get("code") != "Ok" or not meters or meters <= 0:
+            raise GeocodingError("no se pudo calcular la distancia vial")
+        return meters / 1000
+    except GeocodingError:
+        raise
+    except Exception as exc:
+        raise GeocodingError(f"no se pudo calcular la distancia vial: {exc}") from exc

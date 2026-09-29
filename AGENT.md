@@ -61,7 +61,7 @@ ElevenLabs/LIVI sigue siendo un canal de entrada de pedidos, no una integración
 
 ## Cotización activa
 
-`POST /elevenlabs/quote` cotiza sin crear viajes reales. Resuelve las direcciones con Google Geocoding y usa Nominatim/OpenStreetMap como fallback cuando Google devuelve `ZERO_RESULTS`; luego obtiene distancia vial y calcula opciones con perfiles históricos propios guardados en PostgreSQL. No llamar a MAGIIS para cotizar ni inventar precio, coordenadas o distancia si alguna fuente falla.
+`POST /elevenlabs/quote` cotiza sin crear viajes reales. Resuelve las direcciones con Google Geocoding y usa Nominatim/OpenStreetMap como fallback cuando Google devuelve `ZERO_RESULTS`; luego obtiene distancia vial con Google Distance Matrix y, si Google rechaza la ruta, con OSRM; calcula opciones con perfiles históricos propios guardados en PostgreSQL. No llamar a MAGIIS para cotizar ni inventar precio, coordenadas o distancia si alguna fuente falla.
 
 ## Flujo propio de movilidad
 

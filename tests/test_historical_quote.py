@@ -60,3 +60,26 @@ def test_google_zero_results_falls_back_to_nominatim(monkeypatch):
     )
 
     assert google_maps.geocode_address("Alsina 65")["latitude"] == -38.7
+
+
+def test_google_route_denied_falls_back_to_osrm(monkeypatch):
+    monkeypatch.setattr(google_maps, "GOOGLE_MAPS_API_KEY", "configured")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": "REQUEST_DENIED"}
+
+    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(
+        google_maps,
+        "_osrm_route_distance_km",
+        lambda origin, destination: 3.2,
+    )
+
+    assert google_maps.route_distance_km(
+        {"latitude": -38.7, "longitude": -62.2},
+        {"latitude": -38.69, "longitude": -62.21},
+    ) == 3.2
