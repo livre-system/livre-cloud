@@ -55,8 +55,10 @@ def _local_trip_page(
     if state.strip():
         requested = {value.strip() for value in state.split("-") if value.strip()}
         local_states = set()
-        if requested & {"SEARCHING_DRIVER", "WITH_DRIVER_ASSIGNED", "RESERVED", "SCHEDULED"}:
-            local_states.update({"pending", "confirmed"})
+        if requested & {"SEARCHING_DRIVER", "SCHEDULED"}:
+            local_states.add("pending")
+        if requested & {"WITH_DRIVER_ASSIGNED", "RESERVED", "GOING_TO_CLIENT", "GOING_TO_DESTINATION", "CLOSING_TRAVEL", "IN_CONFLICT"}:
+            local_states.add("confirmed")
         if requested & {"CANCELED", "CANCELLED"}:
             local_states.add("cancelled")
         if requested & {"LOST"}:
@@ -73,6 +75,32 @@ def _local_trip_page(
     if date_to:
         filters.append("created_at < (%s::date + INTERVAL '1 day')")
         params.append(date_to)
+    summary_filters = []
+    summary_params = []
+    if q.strip():
+        summary_filters.append("(origen ILIKE %s OR destino ILIKE %s OR whatsapp_user ILIKE %s)")
+        summary_params.extend(["%" + q.strip() + "%"] * 3)
+    if date_from:
+        summary_filters.append("created_at >= %s::date")
+        summary_params.append(date_from)
+    if date_to:
+        summary_filters.append("created_at < (%s::date + INTERVAL '1 day')")
+        summary_params.append(date_to)
+    summary_where = " WHERE " + " AND ".join(summary_filters) if summary_filters else ""
+    cur.execute(
+        f"SELECT status, count(*) AS total FROM livi_trips{summary_where} GROUP BY status",
+        summary_params,
+    )
+    status_totals = {row["status"]: int(row["total"]) for row in cur.fetchall()}
+    totals = {
+        "toAsignQuantity": status_totals.get("pending", 0),
+        "inProgressQuantity": status_totals.get("confirmed", 0),
+        "scheduledQuantity": 0,
+        "inConflictQuantity": status_totals.get("conflict", 0),
+        "lostQuantity": status_totals.get("lost", 0),
+        "cancelledQuantity": status_totals.get("cancelled", 0),
+        "doneQuantity": status_totals.get("done", 0),
+    }
     where = " WHERE " + " AND ".join(filters) if filters else ""
     cur.execute(f"SELECT count(*) AS total FROM livi_trips{where}", params)
     total = int(cur.fetchone()["total"])
@@ -86,7 +114,7 @@ def _local_trip_page(
         params + [size, (page - 1) * size],
     )
     items = [dict(row) for row in cur.fetchall()]
-    return {"source": "livre", "items": items, "page": page, "size": size, "total": total}
+    return {"source": "livre", "items": items, "page": page, "size": size, "total": total, "totals": totals}
 
 
 def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
