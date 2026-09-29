@@ -459,6 +459,31 @@ def driver_update_status(
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
 
 
+@router.post("/driver/location")
+def driver_update_live_location(
+    payload: LocationUpdate,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Stores the driver's latest GPS position even without an active trip."""
+    cur.execute(
+        """
+        UPDATE livre_driver_accounts
+        SET current_latitude = %s,
+            current_longitude = %s,
+            location_updated_at = NOW(),
+            updated_at = NOW()
+        WHERE user_id = %s AND active = TRUE
+        RETURNING user_id, location_updated_at
+        """,
+        (payload.latitude, payload.longitude, user["id"]),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="La cuenta de conductor no está activa")
+    return {"status": "updated", "location_updated_at": row["location_updated_at"]}
+
+
 @router.post("/driver/trips/{trip_id}/location", response_model=DriverTrip)
 def driver_update_location(
     trip_id: int,
