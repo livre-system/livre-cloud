@@ -41,8 +41,11 @@ def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     return {"source": "local", "items": items, "page": page, "size": size, "total": total}
 
 
-def _local_trip_page(cur, page: int, size: int, q: str = "", state: str = ""):
-    """Lista viajes creados por Livre, sin depender del snapshot del proveedor."""
+def _local_trip_page(
+    cur, page: int, size: int, q: str = "", state: str = "",
+    date_from: str = "", date_to: str = "",
+):
+    """Lista viajes de Livre, aceptando los estados agrupados del panel."""
     filters = []
     params = []
     if q.strip():
@@ -50,8 +53,26 @@ def _local_trip_page(cur, page: int, size: int, q: str = "", state: str = ""):
         term = "%" + q.strip() + "%"
         params.extend([term, term, term])
     if state.strip():
-        filters.append("status = %s")
-        params.append(state.strip())
+        requested = {value.strip() for value in state.split("-") if value.strip()}
+        local_states = set()
+        if requested & {"SEARCHING_DRIVER", "WITH_DRIVER_ASSIGNED", "RESERVED", "SCHEDULED"}:
+            local_states.update({"pending", "confirmed"})
+        if requested & {"CANCELED", "CANCELLED"}:
+            local_states.add("cancelled")
+        if requested & {"LOST"}:
+            local_states.add("lost")
+        if requested & {"DONE"}:
+            local_states.add("done")
+        if local_states:
+            placeholders = ", ".join(["%s"] * len(local_states))
+            filters.append(f"status IN ({placeholders})")
+            params.extend(sorted(local_states))
+    if date_from:
+        filters.append("created_at >= %s::date")
+        params.append(date_from)
+    if date_to:
+        filters.append("created_at < (%s::date + INTERVAL '1 day')")
+        params.append(date_to)
     where = " WHERE " + " AND ".join(filters) if filters else ""
     cur.execute(f"SELECT count(*) AS total FROM livi_trips{where}", params)
     total = int(cur.fetchone()["total"])
@@ -318,7 +339,7 @@ def live_travels(
     cur=Depends(get_cursor_dep),
 ):
     """Viajes creados en Livre y pendientes/asignados desde el CRM."""
-    return _local_trip_page(cur, page, size, q, state)
+    return _local_trip_page(cur, page, size, q, state, date_from, date_to)
 
 
 @router.get("/agency-commissions")
