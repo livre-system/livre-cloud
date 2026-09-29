@@ -365,10 +365,17 @@ async def elevenlabs_trip_status(request: Request):
     )
 
     if not driver and not vehicle and not plate:
+        result = "El viaje está registrado y todavía estamos buscando un conductor."
+        if location_url:
+            result += f" Última ubicación conocida del vehículo: {location_url}"
+        elif tracking_url:
+            result += f" Seguimiento: {tracking_url}"
         return {
-            "result": "El viaje está registrado y todavía estamos buscando un conductor.",
+            "result": result,
             "status": trip.get("status"),
             "tracking_url": tracking_url,
+            "location": {"latitude": latitude, "longitude": longitude} if location_url else None,
+            "location_url": location_url,
         }
 
     assignment = []
@@ -433,10 +440,8 @@ def passenger_tracking(tracking_token: str):
     visible_at = trip.get("tracking_location_visible_at")
     if visible_at and visible_at.tzinfo is None:
         visible_at = visible_at.replace(tzinfo=timezone.utc)
-    # El campo guarda el vencimiento de la ventana de visibilidad (15 s).
-    if visible_at and visible_at <= datetime.now(timezone.utc):
-        location = None
-        location_updated_at = None
+    # Se devuelve la última ubicación conocida junto con su fecha. El pasajero
+    # debe poder verla aunque el siguiente pulso del conductor se demore.
     return {
         "trip_id": trip["id"],
         "origin": trip["origen"],
