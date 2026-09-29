@@ -201,3 +201,11 @@ Responder breve y en criollo con:
 - No se ejecutaron migraciones, inserts, viajes, mensajes ni operaciones externas.
 - `npm ci` informó 3 vulnerabilidades moderadas de dependencias existentes; no se aplicó `npm audit fix` automático para evitar cambios no revisados.
 - Los repositorios quedaron sin modificaciones rastreadas pendientes y con sus commits publicados en `origin/main`; permanecen únicamente archivos de evidencia no rastreados que ya existían.
+
+## Correcciones conductor y despliegue 2026-09-29
+
+- Se corrigió la doble implementación del listener de voz en `livre-conductor/index.html`; “Aceptar por voz” ahora activa el mismo modo controlado por “Livi” y el cierre de sesión no llama funciones inexistentes.
+- Se añadieron manejo de errores de micrófono y estado visible para evitar escucha silenciosa o botones que aparenten funcionar sin permiso.
+- Se agregaron los dominios de producción Railway de conductor y pasajeros a CORS en `livre-cloud/app/main.py`, evitando bloqueos del navegador para viajes, Base y mensajería.
+- Verificado en producción: conductor desplegado contiene el arreglo, `/health` devuelve 200, CORS devuelve el origen Railway del conductor y `/voice-eleven/config` responde con agente `livre`, idioma español y formatos PCM 16 kHz.
+- No se generaron viajes, mensajes, inserts ni cambios en PostgreSQL durante estas pruebas.
