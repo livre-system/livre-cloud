@@ -48,6 +48,25 @@ def _tracking_url(token: str | None) -> str | None:
     return f"{TRACKING_BASE_URL}/?token={token}" if token else None
 
 
+def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None = None) -> str:
+    """Obtiene la identidad de WhatsApp del contrato de LIVI/ElevenLabs."""
+    parameters = parameters or body.get("parameters", {}) or {}
+    data = data or body.get("data", {}) or {}
+    candidates = (
+        parameters.get("system__caller_id"),
+        parameters.get("whatsapp_user"),
+        parameters.get("user_id"),
+        body.get("system__caller_id"),
+        body.get("whatsapp_user"),
+        body.get("user_id"),
+        data.get("system__caller_id"),
+        data.get("whatsapp_user"),
+        data.get("user_id"),
+        (data.get("metadata") or {}).get("system__caller_id"),
+    )
+    return next((str(value).strip() for value in candidates if value), "")
+
+
 def _get_existing_trip(conversation_id: str) -> dict | None:
     """Devuelve el viaje si ya existe para este conversation_id."""
     try:
@@ -332,14 +351,7 @@ async def elevenlabs_trip_status(request: Request):
 
     parameters = body.get("parameters", {}) or {}
     data = body.get("data", {}) or {}
-    whatsapp_user = (
-        parameters.get("whatsapp_user")
-        or body.get("whatsapp_user")
-        or body.get("user_id")
-        or data.get("whatsapp_user")
-        or data.get("user_id")
-        or ""
-    ).strip()
+    whatsapp_user = _whatsapp_user(body, parameters, data)
     if not whatsapp_user:
         return {"result": "No pude identificar al pasajero de WhatsApp."}
 
@@ -521,14 +533,7 @@ async def elevenlabs_trip(request: Request):
         or "2"
     )
 
-    whatsapp_user = (
-        parameters.get("whatsapp_user")
-        or body.get("whatsapp_user")
-        or body.get("user_id")
-        or data.get("whatsapp_user")
-        or data.get("user_id")
-        or ""
-    ).strip()
+    whatsapp_user = _whatsapp_user(body, parameters, data)
 
     log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
     log.info(f"[ELEVEN TRIP] origen={origen!r}")
@@ -602,14 +607,7 @@ async def elevenlabs_cancel(request: Request):
 
     parameters = body.get("parameters", {}) or {}
     data = body.get("data", {}) or {}
-    whatsapp_user = (
-        parameters.get("whatsapp_user")
-        or body.get("whatsapp_user")
-        or body.get("user_id")
-        or data.get("whatsapp_user")
-        or data.get("user_id")
-        or ""
-    ).strip()
+    whatsapp_user = _whatsapp_user(body, parameters, data)
     if not whatsapp_user:
         return {"result": "No pude identificar el número de WhatsApp del pasajero."}
 

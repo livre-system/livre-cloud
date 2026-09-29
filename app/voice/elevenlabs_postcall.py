@@ -185,7 +185,15 @@ async def elevenlabs_post_call(request: Request):
         or ""
     )
     agent_id        = data.get("agent_id", "")
-    whatsapp_user   = data.get("user_id", "")   # número WhatsApp del cliente
+    whatsapp_user   = (
+        data.get("system__caller_id")
+        or data.get("user_id")
+        or data.get("whatsapp_user")
+        or body.get("system__caller_id")
+        or body.get("whatsapp_user")
+        or (data.get("metadata") or {}).get("system__caller_id")
+        or ""
+    )   # identificador persistente del pasajero de WhatsApp
     status          = data.get("status", "")
     metadata        = data.get("metadata", {}) or {}
     duration_secs   = metadata.get("call_duration_secs", 0)
