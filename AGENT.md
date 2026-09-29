@@ -194,6 +194,10 @@ Responder breve y en criollo con:
 - `npm ci && npm run verify` en pasajeros: build web y parseo inline OK.
 - Parseo `node --check` de scripts inline de conductor y CRM: OK.
 - PDF `docs/livre-arquitectura-producto.pdf`: 3 páginas A4, sin encriptación.
-- Importación completa de `app.main` no pudo probarse porque inicializa PostgreSQL al importar y `postgres.railway.internal` no resuelve desde este entorno local. No se ejecutó ninguna operación externa.
+- La prueba local de `app.main` no pudo resolver el hostname privado de Railway; la validación equivalente se completó contra producción usando `railway run` y `DATABASE_PUBLIC_URL`, en modo solo lectura.
+- Railway verificado: proyecto `fantastic-nurturing`, entorno `production`, servicios `livre-cloud`, `livre-conductor`, `livre-pasajeros` y Postgres online.
+- Producción respondió `GET /health` con `200 {"status":"ok"}` y publicó las rutas de movilidad/chat en OpenAPI.
+- PostgreSQL de Railway respondió en modo lectura: base accesible, 30 tablas públicas, y existen `livre_handie_sessions` y `livre_trip_messages`.
+- No se ejecutaron migraciones, inserts, viajes, mensajes ni operaciones externas.
 - `npm ci` informó 3 vulnerabilidades moderadas de dependencias existentes; no se aplicó `npm audit fix` automático para evitar cambios no revisados.
 - Los repositorios quedaron sin modificaciones rastreadas pendientes y con sus commits publicados en `origin/main`; permanecen únicamente archivos de evidencia no rastreados que ya existían.
