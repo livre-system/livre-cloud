@@ -28,28 +28,8 @@ def _credentials() -> tuple[str, str]:
 
 
 def login(client: httpx.Client | None = None) -> dict[str, Any]:
-    """MAGIIS Web está deshabilitado: Livre opera con su base local."""
-    if os.getenv("MAGIIS_WEB_FLOW_ENABLED", "0").lower() not in {"1", "true", "yes", "on"}:
-        raise RuntimeError("MAGIIS Web deshabilitado; usar la base local de Livre Cloud")
-    username, password = _credentials()
-    own_client = client is None
-    client = client or httpx.Client(base_url=BASE_URL, timeout=TIMEOUT)
-    try:
-        response = client.post(
-            "/auth/login",
-            headers={"RoleToAttempt": "ROLE_CARRIER"},
-            json={"username": username, "password": password},
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"login Web HTTP {response.status_code}: {response.text[:300]}")
-        data = response.json()
-        token = data.get("token")
-        if not token:
-            raise RuntimeError("login Web sin token")
-        return {"token": token, "userId": data.get("userId"), "response": data}
-    finally:
-        if own_client:
-            client.close()
+    """MAGIIS Web quedó fuera del circuito operativo de Livre."""
+    raise RuntimeError("MAGIIS Web deshabilitado definitivamente; usar datos locales de Livre Cloud")
 
 
 def _request_with_reauth(

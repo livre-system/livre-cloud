@@ -18,8 +18,7 @@ Payload esperado (Webhook Tool de ElevenLabs):
 }
 
 Idempotente: un conversation_id = un viaje. Si ElevenLabs reintenta, devuelve OK.
-Conecta el pedido con MAGIIS Web cuando `MAGIIS_WEB_FLOW_ENABLED=1`.
-La creación real requiere además `MAGIIS_WEB_CREATE_ENABLED=1`.
+El registro y el seguimiento son propios de Livre; MAGIIS no participa.
 """
 
 import logging
@@ -95,7 +94,7 @@ def _save_trip(
 
 
 def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
-    """Busca el último viaje MAGIIS activo del pasajero de WhatsApp."""
+    """Busca el último viaje activo registrado por Livre."""
     if not whatsapp_user:
         return None
     with get_cursor() as cur:
@@ -103,9 +102,7 @@ def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
             """
             SELECT * FROM livi_trips
             WHERE whatsapp_user = %s
-              AND magiis_travel_id IS NOT NULL
-              AND status IN ('created', 'pending')
-              AND COALESCE(magiis_status, '') NOT IN ('cancelled', 'canceled')
+              AND status IN ('pending', 'assigned', 'accepted', 'in_progress')
             ORDER BY created_at DESC
             LIMIT 1;
             """,
@@ -311,9 +308,14 @@ async def elevenlabs_quote(request: Request):
     quote = _run_local_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
+    options = quote.get("options", [])[:2]
+    option_text = " ".join(
+        f"Opción {index}: ${option['price']}."
+        for index, option in enumerate(options, 1)
+    )
     return {
-        "result": f"El viaje cuesta ${quote['price']}.",
-        "options": quote.get("options", []),
+        "result": f"Tengo dos cotizaciones. {option_text}",
+        "options": options,
         "locations": quote.get("locations", {}),
     }
 
@@ -343,18 +345,18 @@ async def elevenlabs_trip_status(request: Request):
     if not trip:
         return {"result": "No encontré un viaje activo para este pasajero."}
 
-    driver = trip.get("tracking_driver_name") or trip.get("magiis_driver_first_name")
+    driver = trip.get("tracking_driver_name")
     vehicle_parts = [
-        trip.get("tracking_vehicle_model") or trip.get("magiis_vehicle_model"),
-        trip.get("tracking_vehicle_color") or trip.get("magiis_vehicle_color"),
+        trip.get("tracking_vehicle_model"),
+        trip.get("tracking_vehicle_color"),
     ]
     vehicle = " ".join(part for part in vehicle_parts if part).strip()
-    plate = trip.get("tracking_plate") or trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain")
+    plate = trip.get("tracking_plate")
 
     if not driver and not vehicle and not plate:
         return {
             "result": "El viaje está registrado y todavía estamos buscando un conductor.",
-            "status": trip.get("magiis_status") or trip.get("status"),
+            "status": trip.get("status"),
         }
 
     assignment = []
@@ -366,7 +368,7 @@ async def elevenlabs_trip_status(request: Request):
         assignment.append(f"patente {plate}")
     return {
         "result": "Ya hay una asignación: " + ", ".join(assignment) + ".",
-        "status": trip.get("magiis_status") or trip.get("status"),
+        "status": trip.get("status"),
         "driver": driver or None,
         "vehicle": vehicle or None,
         "plate": plate or None,
@@ -379,14 +381,11 @@ def passenger_tracking(tracking_token: str):
     with get_cursor() as cur:
         cur.execute(
             """
-            SELECT id, origen, destino, status, magiis_status,
+            SELECT id, origen, destino, status,
                    tracking_driver_name, tracking_plate,
                    tracking_vehicle_color, tracking_vehicle_model,
                    tracking_latitude, tracking_longitude,
-                   tracking_location_updated_at, tracking_location_visible_at,
-                   magiis_driver_first_name, magiis_vehicle_model,
-                   magiis_vehicle_color, magiis_car_plate, magiis_vehicle_domain,
-                   magiis_updated_at
+                   tracking_location_updated_at, tracking_location_visible_at
             FROM livi_trips
             WHERE tracking_token = %s
             LIMIT 1;
@@ -397,13 +396,13 @@ def passenger_tracking(tracking_token: str):
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
 
-    driver = trip.get("tracking_driver_name") or trip.get("magiis_driver_first_name") or None
+    driver = trip.get("tracking_driver_name") or None
     vehicle_parts = [
-        trip.get("tracking_vehicle_model") or trip.get("magiis_vehicle_model"),
-        trip.get("tracking_vehicle_color") or trip.get("magiis_vehicle_color"),
+        trip.get("tracking_vehicle_model"),
+        trip.get("tracking_vehicle_color"),
     ]
     vehicle = " ".join(part for part in vehicle_parts if part).strip() or None
-    plate = trip.get("tracking_plate") or trip.get("magiis_car_plate") or trip.get("magiis_vehicle_domain")
+    plate = trip.get("tracking_plate")
     location = None
     if trip.get("tracking_latitude") is not None and trip.get("tracking_longitude") is not None:
         location = {
@@ -421,7 +420,7 @@ def passenger_tracking(tracking_token: str):
         "trip_id": trip["id"],
         "origin": trip["origen"],
         "destination": trip["destino"],
-        "status": trip.get("magiis_status") or trip.get("status"),
+        "status": trip.get("status"),
         "driver": driver,
         "vehicle": vehicle,
         "plate": plate,
@@ -553,20 +552,7 @@ async def elevenlabs_trip(request: Request):
         log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error interno de base de datos")
 
-    magiis_result = {"created": False, "disabled": True}
-    if os.getenv("MAGIIS_WEB_FLOW_ENABLED", "0") == "1":
-        magiis_result = _run_magiis_web(trip_id, origen, destino, date_programmed, service_type_id)
-
-    if magiis_result.get("created"):
-        _response = (
-            f"Viaje pedido correctamente. Origen: {origen} → Destino: {destino}."
-        )
-    elif magiis_result.get("disabled"):
-        _response = f"Viaje registrado pendiente de conexión. Origen: {origen} → Destino: {destino}."
-    elif magiis_result.get("quote"):
-        _response = f"Viaje cotizado y pendiente de confirmación. Origen: {origen} → Destino: {destino}."
-    else:
-        _response = f"Viaje registrado, pero no pudo enviarse a MAGIIS todavía. Origen: {origen} → Destino: {destino}."
+    _response = f"Viaje registrado en Livre y pendiente de asignación. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")
     log.info(f"[ELEVEN TRIP] END trip_id={trip_id} conversation_id={conversation_id!r}")
 
@@ -582,7 +568,7 @@ async def elevenlabs_trip(request: Request):
 
 @router.post("/cancel")
 async def elevenlabs_cancel(request: Request):
-    """Cancela el último viaje MAGIIS activo del pasajero de WhatsApp."""
+    """Cancela el último viaje activo registrado por Livre."""
     try:
         body = await request.json()
     except Exception as exc:
@@ -598,54 +584,17 @@ async def elevenlabs_cancel(request: Request):
         or data.get("user_id")
         or ""
     ).strip()
-    reason = (
-        parameters.get("reason")
-        or body.get("reason")
-        or "Cancelación solicitada por el pasajero"
-    ).strip()
-
     if not whatsapp_user:
         return {"result": "No pude identificar el número de WhatsApp del pasajero."}
 
     trip = _get_latest_active_trip(whatsapp_user)
-    if not trip or not trip.get("magiis_travel_id"):
+    if not trip:
         return {"result": "No encontré un viaje activo para cancelar."}
 
-    travel_id = int(trip["magiis_travel_id"])
-    try:
-        with httpx.Client(
-            base_url=magiis_web.BASE_URL, timeout=magiis_web.TIMEOUT
-        ) as client:
-            session = magiis_web.login(client)
-            response, _, _ = magiis_web.cancel_travel(
-                session=session,
-                travel_id=travel_id,
-                operator_name=os.getenv("MAGIIS_WEB_OPERATOR_NAME", "Livre"),
-                reason=reason,
-                client=client,
-            )
-        response_body = response.json() if response.content else {}
-        if response.status_code not in (200, 201, 204):
-            raise RuntimeError(
-                f"MAGIIS cancelación HTTP {response.status_code}: {str(response_body)[:500]}"
-            )
-        _update_magiis_state(
-            trip["id"],
-            status="cancelled",
-            travel_id=travel_id,
-            response=str(response_body)[:10000],
+    with get_cursor() as cur:
+        cur.execute(
+            "UPDATE livi_trips SET status='cancelled', updated_at=NOW() WHERE id=%s",
+            [trip["id"]],
         )
-        log.info(
-            "[ELEVEN CANCEL] cancelled trip_id=%s magiis_travel_id=%s reason=%r",
-            trip["id"], travel_id, reason,
-        )
-        return {"result": "El viaje fue cancelado correctamente."}
-    except Exception as exc:
-        log.error("[ELEVEN CANCEL] error: %s", exc, exc_info=True)
-        _update_magiis_state(
-            trip["id"],
-            status="cancel_error",
-            travel_id=travel_id,
-            error=str(exc)[:500],
-        )
-        return {"result": "No pude cancelar el viaje en MAGIIS."}
+    log.info("[ELEVEN CANCEL] cancelled local trip_id=%s", trip["id"])
+    return {"result": "El viaje fue cancelado correctamente en Livre."}

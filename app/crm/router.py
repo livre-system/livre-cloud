@@ -1,4 +1,4 @@
-"""API autenticada de consulta para los datos recolectados de MAGIIS."""
+"""API autenticada de consulta para los datos locales de Livre."""
 import json
 import logging
 import math
@@ -39,6 +39,33 @@ def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     )
     items = [{"magiis_id": row["magiis_id"], "raw_payload": row["raw_payload"]} for row in cur.fetchall()]
     return {"source": "local", "items": items, "page": page, "size": size, "total": total}
+
+
+def _local_trip_page(cur, page: int, size: int, q: str = "", state: str = ""):
+    """Lista viajes creados por Livre, sin depender del snapshot del proveedor."""
+    filters = []
+    params = []
+    if q.strip():
+        filters.append("(origen ILIKE %s OR destino ILIKE %s OR whatsapp_user ILIKE %s)")
+        term = "%" + q.strip() + "%"
+        params.extend([term, term, term])
+    if state.strip():
+        filters.append("status = %s")
+        params.append(state.strip())
+    where = " WHERE " + " AND ".join(filters) if filters else ""
+    cur.execute(f"SELECT count(*) AS total FROM livi_trips{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(
+        f"""SELECT id, origen, destino, whatsapp_user, status,
+                   assigned_driver_user_id, tracking_driver_name,
+                   tracking_plate, tracking_vehicle_model, tracking_vehicle_color,
+                   created_at, updated_at
+            FROM livi_trips{where}
+            ORDER BY created_at DESC LIMIT %s OFFSET %s""",
+        params + [size, (page - 1) * size],
+    )
+    items = [dict(row) for row in cur.fetchall()]
+    return {"source": "livre", "items": items, "page": page, "size": size, "total": total}
 
 
 def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
@@ -200,7 +227,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     """Estado operativo construido exclusivamente desde la base local."""
     cur.execute("SELECT raw_payload FROM magiis_crm_drivers ORDER BY magiis_id DESC")
     drivers = [row["raw_payload"] for row in cur.fetchall()]
-    cur.execute("SELECT count(*) AS total FROM magiis_crm_travels")
+    cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     cur.execute("SELECT count(*) AS total FROM magiis_crm_vehicles")
     vehicles = int(cur.fetchone()["total"])
@@ -252,7 +279,7 @@ def operational_driver(driver_user_id: int, user: dict = Depends(require_auth)):
 
 @router.post("/sync")
 def sync_crm(user: dict = Depends(require_auth)):
-    """Fuerza una reconciliación completa MAGIIS → CRM local."""
+    """Fuerza una sincronización: queda deshabilitada porque MAGIIS no es fuente operativa."""
     return sync_all()
 
 
@@ -264,9 +291,9 @@ def summary(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
           (SELECT count(*) FROM magiis_crm_passengers) AS passengers,
           (SELECT count(*) FROM magiis_crm_drivers) AS drivers,
           (SELECT count(*) FROM magiis_crm_vehicles) AS vehicles,
-          (SELECT count(*) FROM magiis_crm_travels) AS travels,
-          (SELECT jsonb_object_agg(COALESCE(state, 'sin_estado'), total)
-             FROM (SELECT state, count(*) AS total FROM magiis_crm_travels GROUP BY state) s) AS travel_states,
+          (SELECT count(*) FROM livi_trips) AS travels,
+          (SELECT jsonb_object_agg(COALESCE(status, 'sin_estado'), total)
+             FROM (SELECT status, count(*) AS total FROM livi_trips GROUP BY status) s) AS travel_states,
           (SELECT row_to_json(s) FROM (
              SELECT id, started_at, finished_at, status, resources
              FROM magiis_crm_sync_runs ORDER BY id DESC LIMIT 1
@@ -290,8 +317,8 @@ def live_travels(
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
-    """Viajes históricos almacenados en la base local."""
-    return _local_page(cur, "magiis_crm_travels", page, size, q)
+    """Viajes creados en Livre y pendientes/asignados desde el CRM."""
+    return _local_trip_page(cur, page, size, q, state)
 
 
 @router.get("/agency-commissions")

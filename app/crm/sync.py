@@ -118,8 +118,17 @@ def _sync_travels(cur, items: list[dict[str, Any]]) -> tuple[int, int]:
 
 
 def sync_all() -> dict[str, Any]:
-    """Trae el estado completo de MAGIIS y reconcilia las cinco tablas CRM."""
-    import json
+    """MAGIIS quedó fuera del circuito operativo de Livre."""
+    log.warning("Sincronización MAGIIS deshabilitada: Livre usa sus datos locales")
+    return {
+        "status": "disabled",
+        "source": "livre",
+        "message": "MAGIIS no participa de operaciones ni seguimiento.",
+    }
+
+
+# El código histórico de reconciliación queda debajo para referencia/migración;
+# no se ejecuta desde ningún flujo operativo.
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_KEY,))
