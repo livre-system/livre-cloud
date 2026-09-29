@@ -186,3 +186,14 @@ Responder breve y en criollo con:
 - Backend: `app/mobility/router.py`, `app/mobility/schemas.py` y migración `app/migrations/20260929_driver_voice_channels.sql`. Los canales usan tablas propias de Livre y no mezclan credenciales ni contratos de MAGIIS.
 - La mensajería web utiliza polling corto e interfaz de notificación dentro del viaje; la integración nativa FCM/APNs queda como etapa posterior de publicación móvil.
 - Validar en staging con un viaje real de prueba, dos identidades separadas y la migración aplicada antes de producción. No usar datos reales ni probar IDs arbitrarios.
+
+## Verificación técnica 2026-09-29
+
+- `PYTHONPATH=. uv run --with-requirements requirements.txt --with pytest pytest -q`: 9 tests passed.
+- `python -m compileall -q app`: OK.
+- `npm ci && npm run verify` en pasajeros: build web y parseo inline OK.
+- Parseo `node --check` de scripts inline de conductor y CRM: OK.
+- PDF `docs/livre-arquitectura-producto.pdf`: 3 páginas A4, sin encriptación.
+- Importación completa de `app.main` no pudo probarse porque inicializa PostgreSQL al importar y `postgres.railway.internal` no resuelve desde este entorno local. No se ejecutó ninguna operación externa.
+- `npm ci` informó 3 vulnerabilidades moderadas de dependencias existentes; no se aplicó `npm audit fix` automático para evitar cambios no revisados.
+- Los repositorios quedaron sin modificaciones rastreadas pendientes y con sus commits publicados en `origin/main`; permanecen únicamente archivos de evidencia no rastreados que ya existían.
