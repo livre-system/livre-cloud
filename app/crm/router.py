@@ -271,11 +271,74 @@ def update_trip_tracking(
     return {"status": "updated", "trip_id": trip_id, "location_visible_at": row[0]}
 
 
+def _merge_live_driver_locations(cur, drivers):
+    """Adds Livre driver-account GPS data to the CRM map contract."""
+    cur.execute(
+        """
+        SELECT a.user_id, a.magiis_driver_id, u.name, u.username,
+               a.current_latitude, a.current_longitude, a.location_updated_at
+        FROM livre_driver_accounts a
+        JOIN livre_users u ON u.id = a.user_id
+        WHERE a.active = TRUE
+          AND a.current_latitude IS NOT NULL
+          AND a.current_longitude IS NOT NULL
+        """
+    )
+    live_rows = cur.fetchall()
+    by_magiis = {
+        int(row["magiis_driver_id"]): row
+        for row in live_rows
+        if row["magiis_driver_id"] is not None
+    }
+    matched_magiis = set()
+    merged = []
+
+    for payload in drivers:
+        item = dict(payload)
+        provider_id = item.pop("_magiis_id", None)
+        candidates = [provider_id, item.get("driverId"), item.get("driverUserId"), item.get("id")]
+        live = next((by_magiis.get(int(value)) for value in candidates if str(value or "").isdigit()), None)
+        if live:
+            item["lastPlace"] = {
+                "latitude": float(live["current_latitude"]),
+                "longitude": float(live["current_longitude"]),
+            }
+            item["lastSee"] = live["location_updated_at"].isoformat() if live["location_updated_at"] else None
+            matched_magiis.add(int(live["magiis_driver_id"]))
+        merged.append(item)
+
+    for live in live_rows:
+        magiis_id = live["magiis_driver_id"]
+        if magiis_id is not None and int(magiis_id) in matched_magiis:
+            continue
+        name_parts = str(live["name"] or live["username"] or "Conductor").split()
+        merged.append({
+            "driverUserId": str(live["user_id"]),
+            "driverName": str(live["name"] or live["username"] or "Conductor"),
+            "firstName": name_parts[0],
+            "lastName": " ".join(name_parts[1:]),
+            "operability": "AVAILABLE",
+            "lastPlace": {
+                "latitude": float(live["current_latitude"]),
+                "longitude": float(live["current_longitude"]),
+            },
+            "lastSee": live["location_updated_at"].isoformat() if live["location_updated_at"] else None,
+            "vehicle": {},
+            "source": "livre_driver_accounts",
+        })
+    return merged, len(live_rows)
+
+
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    """Estado operativo construido exclusivamente desde la base local."""
-    cur.execute("SELECT raw_payload FROM magiis_crm_drivers ORDER BY magiis_id DESC")
-    drivers = [row["raw_payload"] for row in cur.fetchall()]
+    """Estado operativo local, incluyendo GPS de cuentas de conductor Livre."""
+    cur.execute("SELECT magiis_id, raw_payload FROM magiis_crm_drivers ORDER BY magiis_id DESC")
+    drivers = []
+    for row in cur.fetchall():
+        item = dict(row["raw_payload"])
+        item["_magiis_id"] = row["magiis_id"]
+        drivers.append(item)
+    drivers, online_drivers = _merge_live_driver_locations(cur, drivers)
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     cur.execute("SELECT count(*) AS total FROM magiis_crm_vehicles")
@@ -285,7 +348,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     return {
         "source": "local",
         "status": {"travelsQuantity": travels, "workingVehiclesQuantity": vehicles, "clientsIndividualsAmount": passengers},
-        "driver_totals": {"totalDrivers": len(drivers), "totalDriversOnline": 0, "totalDriversOffline": len(drivers), "totalDriversInTravel": 0},
+        "driver_totals": {"totalDrivers": len(drivers), "totalDriversOnline": online_drivers, "totalDriversOffline": max(0, len(drivers) - online_drivers), "totalDriversInTravel": 0},
         "drivers": drivers,
         "drivers_by_vehicle": drivers,
         "driver_statuses": {"items": drivers, "total": len(drivers)},
