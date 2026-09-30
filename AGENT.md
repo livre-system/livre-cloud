@@ -209,3 +209,13 @@ Responder breve y en criollo con:
 - Se agregaron los dominios de producción Railway de conductor y pasajeros a CORS en `livre-cloud/app/main.py`, evitando bloqueos del navegador para viajes, Base y mensajería.
 - Verificado en producción: conductor desplegado contiene el arreglo, `/health` devuelve 200, CORS devuelve el origen Railway del conductor y `/voice-eleven/config` responde con agente `livre`, idioma español y formatos PCM 16 kHz.
 - No se generaron viajes, mensajes, inserts ni cambios en PostgreSQL durante estas pruebas.
+
+## Estado actual del front de conductor después del reinicio 2026-09-29
+
+- `livre-conductor/index.html` fue reiniciado visualmente por etapas para eliminar la ensalada de UI: primero se dejó en blanco y luego se restauró únicamente el login.
+- Estado publicado actual de `livre-conductor`: solo se muestra la pantalla de autenticación; el panel conductor, mapa, viajes, GPS, mensajería y ventanas flotantes permanecen ocultos.
+- La lógica JavaScript existente se conservó debajo del login para resolver las funciones por partes, sin borrar todavía los contratos de viajes, estados, ubicación, voz ni mensajería.
+- El login visible contiene usuario, contraseña, ingreso y registro. Se verificó localmente que el formulario carga, que el login aparece y que `#appView` permanece oculto.
+- El último commit publicado en `livre-conductor` es `28f21da` (`feat: restore conductor login screen`). El commit anterior dejó el front completamente blanco: `fa15189`.
+- El problema de viajes nuevos no se considera resuelto: hay que verificar si el pedido llega como `assigned` para el conductor autenticado antes de restaurar el panel operativo.
+- No modificar el front completo hasta validar primero login, autenticación y transición controlada al panel.
