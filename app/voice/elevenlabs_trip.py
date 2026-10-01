@@ -75,7 +75,7 @@ def send_tracking_message(trip: dict) -> str:
         "whatsapp_user_id": whatsapp_user,
         "template_name": ELEVENLABS_WHATSAPP_TEMPLATE_NAME,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [{"parameters": [{"text": tracking_url}]}],
+        "template_params": [{"type": "body", "parameters": [{"text": tracking_url}]}],
         "agent_id": ELEVENLABS_AGENT_ID,
     }
     response = httpx.post(
