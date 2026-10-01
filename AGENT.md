@@ -229,3 +229,12 @@ Responder breve y en criollo con:
 - El visor no debe usar MAGIIS como fuente operativa de ubicaciones. Las posiciones activas provienen de Livre Cloud.
 - `livre-chatbot` tiene un polling específico del visor cada 15 segundos en `showMapViewer()`/`loadMapViewer()`. El polling debe limitarse a datos y markers; no debe llamar renders generales del CRM ni reinicializar el mapa.
 - Commits publicados de esta conexión: `livre-cloud` `53a20b3` (`fix: expose live driver GPS to CRM map`), `livre-chatbot` `e0841bf` (`fix: preserve CRM map during refresh`) y `7ed9b68` (`fix: preserve CRM map camera during polling`).
+
+## Flujo ElevenLabs/LIVI y GPS real confirmado (2026-10-01)
+
+- `POST /elevenlabs/trip` crea el mismo tipo de viaje operativo que `POST /mobility/requests`: un único registro en `livi_trips` con `tracking_token`, `assigned_driver_user_id`, `tracking_driver_name` y `status = assigned`.
+- La asignación de ElevenLabs selecciona un conductor activo de `livre_driver_accounts`; si no hay uno disponible, no debe crear un viaje sin asignación.
+- El viaje de ElevenLabs se consulta desde `GET /mobility/driver/trips`, se actualiza con los endpoints autenticados del conductor y puede seguirse con `GET /mobility/tracking/{tracking_token}`.
+- `livre-conductor` acepta como única fuente de ubicación `navigator.geolocation`; no usar IP, coordenadas fijas ni fallback demo. Ante error o permiso denegado debe enviar cero coordenadas, mostrar el error y permitir reintentar.
+- La ubicación válida se envía a `POST /mobility/driver/location` y, cuando corresponde, a `POST /mobility/driver/trips/{trip_id}/location`.
+- Cambios publicados: `livre-cloud` `f03e850` (`fix: assign ElevenLabs trips to drivers`) y `livre-conductor` `0e79846` (`fix: require real browser GPS`). Se verificaron `compileall`, `node --check`, `git diff --check` y ausencia de marcadores de fallback demo. No se generaron viajes ni coordenadas falsas durante la validación.
