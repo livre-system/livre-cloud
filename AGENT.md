@@ -238,3 +238,13 @@ Responder breve y en criollo con:
 - `livre-conductor` acepta como única fuente de ubicación `navigator.geolocation`; no usar IP, coordenadas fijas ni fallback demo. Ante error o permiso denegado debe enviar cero coordenadas, mostrar el error y permitir reintentar.
 - La ubicación válida se envía a `POST /mobility/driver/location` y, cuando corresponde, a `POST /mobility/driver/trips/{trip_id}/location`.
 - Cambios publicados: `livre-cloud` `f03e850` (`fix: assign ElevenLabs trips to drivers`) y `livre-conductor` `0e79846` (`fix: require real browser GPS`). Se verificaron `compileall`, `node --check`, `git diff --check` y ausencia de marcadores de fallback demo. No se generaron viajes ni coordenadas falsas durante la validación.
+
+## Notificación de tracking por WhatsApp confirmada (2026-10-01)
+
+- En los viajes reales `74` y `75` se confirmó la cadena `assigned → arriving → send_tracking_message()`; ElevenLabs recibió la solicitud pero respondió `HTTP 422`.
+- La causa fue el contrato de `POST /v1/convai/whatsapp/outbound-message`: `template_params[0]` requería `type = "body"` además de `parameters`.
+- `app/voice/elevenlabs_trip.py` envía ahora `template_params: [{"type": "body", "parameters": [{"text": tracking_url}]}]`; no se modificaron el prompt de LIVI, `registrar_viaje`, conductor, tracking, destinatario `whatsapp_user`, transición de estados ni `end_call`.
+- La respuesta exitosa guarda `tracking_message_sent_at` y `tracking_message_conversation_id`; los errores quedan en `tracking_message_error`.
+- Commit publicado: `55c3b69` (`fix: send WhatsApp template body params`). Railway production desplegó ese commit en `98ec35fb-1bc8-434d-b640-76d72e5f253f`, estado `SUCCESS`; `GET /health` respondió `200 {"status":"ok"}`.
+- Verificaciones: `python -m py_compile app/voice/elevenlabs_trip.py`, `git diff --check` y `PYTHONPATH=. uv run --with-requirements requirements.txt --with-requirements requirements-dev.txt pytest -q` (`9 passed`).
+- No se ejecutó un envío artificial. La entrega real de WhatsApp queda pendiente de comprobar con el próximo viaje: `assigned → arriving → outbound 200 → tracking_message_sent_at != NULL → tracking_message_conversation_id` y recepción de `tracking_link`.
