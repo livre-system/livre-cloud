@@ -47,12 +47,13 @@ ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqc
 ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv(
     "ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "1364913613361192"
 )
-ELEVENLABS_WHATSAPP_TEMPLATE_NAME = os.getenv(
-    "ELEVENLABS_WHATSAPP_TEMPLATE_NAME", "tracking_link"
-)
+ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME = os.getenv(
+    "ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME", ""
+).strip()
 ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv(
     "ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE", "es_AR"
 )
+ARRIVING_MESSAGE = "Tu viaje Livre fue tomado. El conductor ya está en camino."
 
 
 def _tracking_url(token: str | None) -> str | None:
@@ -60,22 +61,24 @@ def _tracking_url(token: str | None) -> str | None:
 
 
 def send_tracking_message(trip: dict) -> str:
-    """Envía el template aprobado al mismo usuario que originó el viaje."""
+    """Envía el aviso aprobado al mismo usuario que originó el viaje."""
     api_key = os.getenv("ELEVENLABS_API_KEY")
     whatsapp_user = str(trip.get("whatsapp_user") or "").strip()
-    tracking_url = _tracking_url(trip.get("tracking_token"))
     if not api_key:
         raise RuntimeError("ELEVENLABS_API_KEY no configurada")
     if not whatsapp_user:
         raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user")
-    if not tracking_url:
-        raise RuntimeError(f"El viaje {trip.get('id')} no tiene tracking_token")
+    if not ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME:
+        raise RuntimeError(
+            "Bloqueado: falta ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME; "
+            "Meta debe aprobar/configurar una plantilla para el aviso assigned→arriving"
+        )
     payload = {
         "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
         "whatsapp_user_id": whatsapp_user,
-        "template_name": ELEVENLABS_WHATSAPP_TEMPLATE_NAME,
+        "template_name": ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [{"type": "body", "parameters": [{"text": tracking_url}]}],
+        "template_params": [{"type": "body", "parameters": [{"text": ARRIVING_MESSAGE}]}],
         "agent_id": ELEVENLABS_AGENT_ID,
     }
     response = httpx.post(
@@ -89,7 +92,7 @@ def send_tracking_message(trip: dict) -> str:
         response.raise_for_status()
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
-    log.info("[ELEVEN OUTBOUND] tracking enviado trip=%s conversation_id=%s", trip.get("id"), conversation_id)
+    log.info("[ELEVEN OUTBOUND] aviso assigned→arriving enviado trip=%s conversation_id=%s", trip.get("id"), conversation_id)
     return conversation_id
 
 
