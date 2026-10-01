@@ -230,9 +230,25 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
-               t.tracking_location_updated_at
+               t.tracking_location_updated_at,
+               selected_quote.transport_type_id AS service_type_id,
+               CASE selected_quote.transport_type_id
+                   WHEN 1 THEN 'Premium'
+                   WHEN 2 THEN 'Ahorro'
+                   ELSE NULL
+               END AS service_type_name,
+               selected_quote.price_point_to_point AS fare
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
+        LEFT JOIN LATERAL (
+            SELECT q.transport_type_id, q.price_point_to_point
+            FROM magiis_quote_requests qr
+            JOIN magiis_quotes q ON q.quote_request_id = qr.id
+            WHERE qr.livi_trip_id = t.id
+              AND q.transport_type_id = NULLIF(qr.request_payload->>'serviceTypeId', '')::integer
+            ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
+            LIMIT 1
+        ) selected_quote ON TRUE
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
         """,
         (trip_id, user["id"]),
@@ -256,6 +272,9 @@ def _driver_trip(trip) -> DriverTrip:
         latitude=trip["tracking_latitude"],
         longitude=trip["tracking_longitude"],
         location_updated_at=trip["tracking_location_updated_at"],
+        service_type_id=trip["service_type_id"],
+        service_type_name=trip["service_type_name"],
+        fare=float(trip["fare"]) if trip["fare"] is not None else None,
     )
 
 
@@ -268,9 +287,25 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
-               t.tracking_location_updated_at
+               t.tracking_location_updated_at,
+               selected_quote.transport_type_id AS service_type_id,
+               CASE selected_quote.transport_type_id
+                   WHEN 1 THEN 'Premium'
+                   WHEN 2 THEN 'Ahorro'
+                   ELSE NULL
+               END AS service_type_name,
+               selected_quote.price_point_to_point AS fare
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
+        LEFT JOIN LATERAL (
+            SELECT q.transport_type_id, q.price_point_to_point
+            FROM magiis_quote_requests qr
+            JOIN magiis_quotes q ON q.quote_request_id = qr.id
+            WHERE qr.livi_trip_id = t.id
+              AND q.transport_type_id = NULLIF(qr.request_payload->>'serviceTypeId', '')::integer
+            ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
+            LIMIT 1
+        ) selected_quote ON TRUE
         WHERE a.user_id = %s AND a.active = TRUE
           AND t.status NOT IN ('completed', 'cancelled')
         ORDER BY t.created_at DESC

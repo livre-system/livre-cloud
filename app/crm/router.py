@@ -271,84 +271,81 @@ def update_trip_tracking(
     return {"status": "updated", "trip_id": trip_id, "location_visible_at": row[0]}
 
 
-def _merge_live_driver_locations(cur, drivers):
-    """Adds Livre driver-account GPS data to the CRM map contract."""
+def _operational_snapshot(cur):
+    """Returns one consistent Livre snapshot of accounts, trips and GPS."""
     cur.execute(
         """
-        SELECT a.user_id, a.magiis_driver_id, u.name, u.username,
-               a.current_latitude, a.current_longitude, a.location_updated_at
+        SELECT a.user_id, a.active,
+               u.name, u.username,
+               COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
+               COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
+               COALESCE(a.location_updated_at, active_trip.tracking_location_updated_at) AS location_updated_at,
+               active_trip.id AS trip_id,
+               active_trip.status AS trip_status,
+               active_trip.tracking_driver_name,
+               active_trip.tracking_plate,
+               active_trip.tracking_vehicle_model,
+               active_trip.tracking_vehicle_color
         FROM livre_driver_accounts a
         JOIN livre_users u ON u.id = a.user_id
-        WHERE a.active = TRUE
-          AND a.current_latitude IS NOT NULL
-          AND a.current_longitude IS NOT NULL
+        LEFT JOIN LATERAL (
+            SELECT t.id, t.status, t.tracking_driver_name, t.tracking_plate,
+                   t.tracking_vehicle_model, t.tracking_vehicle_color,
+                   t.tracking_latitude, t.tracking_longitude,
+                   t.tracking_location_updated_at
+            FROM livi_trips t
+            WHERE t.assigned_driver_user_id = a.user_id
+              AND t.status NOT IN ('completed', 'cancelled')
+            ORDER BY t.updated_at DESC NULLS LAST, t.id DESC
+            LIMIT 1
+        ) active_trip ON TRUE
+        ORDER BY u.name NULLS LAST, a.user_id
         """
     )
-    live_rows = cur.fetchall()
-    by_magiis = {
-        int(row["magiis_driver_id"]): row
-        for row in live_rows
-        if row["magiis_driver_id"] is not None
-    }
-    matched_magiis = set()
-    merged = []
-
-    for payload in drivers:
-        item = dict(payload)
-        provider_id = item.pop("_magiis_id", None)
-        candidates = [provider_id, item.get("driverId"), item.get("driverUserId"), item.get("id")]
-        live = next((by_magiis.get(int(value)) for value in candidates if str(value or "").isdigit()), None)
-        if live:
-            item["lastPlace"] = {
-                "latitude": float(live["current_latitude"]),
-                "longitude": float(live["current_longitude"]),
-            }
-            item["lastSee"] = live["location_updated_at"].isoformat() if live["location_updated_at"] else None
-            matched_magiis.add(int(live["magiis_driver_id"]))
-        merged.append(item)
-
-    for live in live_rows:
-        magiis_id = live["magiis_driver_id"]
-        if magiis_id is not None and int(magiis_id) in matched_magiis:
-            continue
-        name_parts = str(live["name"] or live["username"] or "Conductor").split()
-        merged.append({
-            "driverUserId": str(live["user_id"]),
-            "driverName": str(live["name"] or live["username"] or "Conductor"),
-            "firstName": name_parts[0],
-            "lastName": " ".join(name_parts[1:]),
-            "operability": "AVAILABLE",
+    items = []
+    for row in cur.fetchall():
+        busy = row["trip_status"] in {"assigned", "arriving", "in_progress"}
+        state = "NO DISPONIBLE" if not row["active"] else ("EN VIAJE" if busy else "DISPONIBLE")
+        driver_name = row["name"] or row["username"] or "Conductor"
+        items.append({
+            "driverUserId": str(row["user_id"]),
+            "driverName": driver_name,
+            "operationalState": state,
+            "operability": state,
+            "tripId": row["trip_id"],
+            "tripStatus": row["trip_status"],
             "lastPlace": {
-                "latitude": float(live["current_latitude"]),
-                "longitude": float(live["current_longitude"]),
+                "latitude": float(row["latitude"]),
+                "longitude": float(row["longitude"]),
+            } if row["latitude"] is not None and row["longitude"] is not None else None,
+            "lastSee": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
+            "vehicle": {
+                "plate": row["tracking_plate"],
+                "model": row["tracking_vehicle_model"],
+                "color": row["tracking_vehicle_color"],
             },
-            "lastSee": live["location_updated_at"].isoformat() if live["location_updated_at"] else None,
-            "vehicle": {},
-            "source": "livre_driver_accounts",
+            "source": "livre_driver_accounts+livi_trips",
         })
-    return merged, len(live_rows)
+    return items
 
 
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    """Estado operativo local, incluyendo GPS de cuentas de conductor Livre."""
-    cur.execute("SELECT magiis_id, raw_payload FROM magiis_crm_drivers ORDER BY magiis_id DESC")
-    drivers = []
-    for row in cur.fetchall():
-        item = dict(row["raw_payload"])
-        item["_magiis_id"] = row["magiis_id"]
-        drivers.append(item)
-    drivers, online_drivers = _merge_live_driver_locations(cur, drivers)
+    """Returns the current Livre operational snapshot."""
+    drivers = _operational_snapshot(cur)
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
-    cur.execute("SELECT count(*) AS total FROM magiis_crm_vehicles")
-    vehicles = int(cur.fetchone()["total"])
-    cur.execute("SELECT count(*) AS total FROM magiis_crm_passengers")
-    passengers = int(cur.fetchone()["total"])
+    in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
+    available = sum(item["operationalState"] == "DISPONIBLE" for item in drivers)
     return {
-        "source": "local",
-        "status": {"travelsQuantity": travels, "workingVehiclesQuantity": vehicles, "clientsIndividualsAmount": passengers},
-        "driver_totals": {"totalDrivers": len(drivers), "totalDriversOnline": online_drivers, "totalDriversOffline": max(0, len(drivers) - online_drivers), "totalDriversInTravel": 0},
+        "source": "livre",
+        "status": {"travelsQuantity": travels, "workingVehiclesQuantity": len(drivers), "clientsIndividualsAmount": 0},
+        "driver_totals": {
+            "totalDrivers": len(drivers),
+            "totalDriversOnline": available,
+            "totalDriversOffline": len(drivers) - available - in_travel,
+            "totalDriversInTravel": in_travel,
+        },
         "drivers": drivers,
         "drivers_by_vehicle": drivers,
         "driver_statuses": {"items": drivers, "total": len(drivers)},

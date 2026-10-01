@@ -55,6 +55,9 @@ class PublicTrip(BaseModel):
 
 class DriverTrip(PublicTrip):
     """Viaje asignado al conductor autenticado."""
+    service_type_id: int | None = None
+    service_type_name: str | None = None
+    fare: float | None = None
 
 
 class TripMessageCreate(BaseModel):
