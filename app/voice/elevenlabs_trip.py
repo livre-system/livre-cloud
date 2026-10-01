@@ -671,7 +671,9 @@ async def elevenlabs_trip(request: Request):
                 raise RuntimeError(
                     f"La tarifa confirmada no coincide con la cotización: {selected_fare} != {fare_value}"
                 )
-        service_type_name = selected.get("serviceName")
+        service_type_name = {"1": "Premium", "2": "Ahorro"}.get(
+            service_type_id, selected.get("serviceName")
+        )
         trip_id, tracking_token = _save_trip(
             conversation_id=conversation_id,
             origen=origen,
