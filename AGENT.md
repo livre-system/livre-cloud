@@ -19,6 +19,12 @@ Contexto vivo para trabajar en Livre Cloud con Hermes. Este archivo describe el 
 
 Ubicación habitual: `/home/calambre/Documentos/Clientes/Livre/`.
 
+## Accesos operativos disponibles
+
+- GitHub: `git` y `gh` para revisar repositorios, commits, ramas, issues, PRs y publicar cambios autorizados.
+- Railway: CLI `railway` para revisar servicios, deploys, logs y ejecutar verificaciones read-only. No exponer secretos ni cambiar producción sin autorización explícita.
+- Vercel: CLI `vercel` para revisar y publicar deployments de los frontends. Verificar siempre el deployment real después de publicar.
+
 Livre Cloud es la frontera del sistema. Las apps propias y el CRM deben comunicarse únicamente con Livre Cloud, no con proveedores externos ni con bases ajenas.
 
 ## Estado operativo actual
@@ -227,8 +233,8 @@ Responder breve y en criollo con:
 - `GET /crm/operational` incorpora las posiciones actuales de las cuentas activas de conductor Livre en `lastPlace.latitude/longitude`, identificadas por `livre_users.id`, sin mezclar conductores.
 - `livre-chatbot` consume `/crm/operational` para el visor. El mapa Leaflet se inicializa una sola vez por contenedor; los refreshes actualizan markers sin `map.remove()`, sin recrear `L.map()`, sin reemplazar el contenedor y sin modificar la cámara.
 - El visor no debe usar MAGIIS como fuente operativa de ubicaciones. Las posiciones activas provienen de Livre Cloud.
-- `livre-chatbot` tiene un polling específico del visor cada 15 segundos en `showMapViewer()`/`loadMapViewer()`. El polling debe limitarse a datos y markers; no debe llamar renders generales del CRM ni reinicializar el mapa.
-- Commits publicados de esta conexión: `livre-cloud` `53a20b3` (`fix: expose live driver GPS to CRM map`), `livre-chatbot` `e0841bf` (`fix: preserve CRM map during refresh`) y `7ed9b68` (`fix: preserve CRM map camera during polling`).
+- El visor del mapa no hace polling automático. `showMapViewer()` carga una vez al abrir y el botón `Actualizar` llama manualmente a `loadMapViewer()`. El polling general del CRM no debe ejecutarse con `crmMode = 'map'`.
+- Commits publicados de esta conexión: `livre-cloud` `53a20b3` (`fix: expose live driver GPS to CRM map`), `livre-chatbot` `e0841bf` (`fix: preserve CRM map during refresh`), `7ed9b68` (`fix: preserve CRM map camera during polling`) y `2134f1b` (`Isolate map view from CRM polling`).
 
 ## Flujo ElevenLabs/LIVI y GPS real confirmado (2026-10-01)
 
