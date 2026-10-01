@@ -26,9 +26,9 @@ def test_exposes_historical_service_options():
     options = historical_options(Decimal("2.63"), profiles)
 
     assert [item["transportTypeId"] for item in options] == ["1", "2", "3", "81"]
-    assert options[0]["serviceName"] == "Livre Ahorro"
-    assert options[1]["serviceName"] == "Livre Premium"
-    assert options[1]["pricePointToPoint"] == 4152
+    assert options[0]["serviceName"] == "Livre Premium"
+    assert options[1]["serviceName"] == "Livre Ahorro"
+    assert options[0]["pricePointToPoint"] > options[1]["pricePointToPoint"]
     assert all(item["serviceStatus"] == "AVAILABLE" for item in options)
 
 

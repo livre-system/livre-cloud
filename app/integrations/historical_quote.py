@@ -9,8 +9,11 @@ from typing import Any
 # y el fijo se vuelven a leer de la base para no depender de MAGIIS.
 DEFAULT_RATE_ID = 6243
 SERVICE_NAMES = {
-    "1": "Livre Ahorro",
-    "2": "Livre Premium",
+    # En la respuesta real de MAGIIS, el tipo 1 tiene la tarifa más alta
+    # y el tipo 2 la más baja. La identidad del servicio debe viajar junto
+    # con ese ID; no se corrige posteriormente en la interfaz.
+    "1": "Livre Premium",
+    "2": "Livre Ahorro",
 }
 
 
