@@ -23,6 +23,7 @@ from app.mobility.schemas import (
     TripRequest,
     TripRequestResponse,
 )
+from app.voice.elevenlabs_trip import send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 
@@ -448,7 +449,8 @@ def driver_update_status(
     user: dict = Depends(require_auth),
 ):
     """Updates status only for a trip assigned to the authenticated driver."""
-    _driver_trip_or_404(cur, trip_id, user)
+    trip = _driver_trip_or_404(cur, trip_id, user)
+    previous_status = trip["status"]
     cur.execute(
         """
         UPDATE livi_trips SET status = %s, updated_at = NOW()
@@ -456,6 +458,27 @@ def driver_update_status(
         """,
         (payload.status, trip_id),
     )
+    if previous_status == "assigned" and payload.status == "arriving":
+        cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
+        arriving_trip = cur.fetchone()
+        try:
+            conversation_id = send_tracking_message(arriving_trip)
+            cur.execute(
+                """UPDATE livi_trips
+                   SET tracking_message_sent_at = NOW(),
+                       tracking_message_conversation_id = %s,
+                       tracking_message_error = NULL,
+                       updated_at = NOW()
+                   WHERE id = %s""",
+                (conversation_id or None, trip_id),
+            )
+        except Exception as exc:
+            cur.execute(
+                """UPDATE livi_trips
+                   SET tracking_message_error = %s, updated_at = NOW()
+                   WHERE id = %s""",
+                (str(exc)[:500], trip_id),
+            )
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
 
 

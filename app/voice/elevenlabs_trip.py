@@ -42,10 +42,55 @@ TRACKING_BASE_URL = os.getenv(
     "PASSENGER_TRACKING_BASE_URL",
     "https://livre-system.github.io/livre-pasajeros/",
 ).rstrip("/")
+ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message"
+ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
+ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv(
+    "ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "1364913613361192"
+)
+ELEVENLABS_WHATSAPP_TEMPLATE_NAME = os.getenv(
+    "ELEVENLABS_WHATSAPP_TEMPLATE_NAME", "tracking_link"
+)
+ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv(
+    "ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE", "es_AR"
+)
 
 
 def _tracking_url(token: str | None) -> str | None:
     return f"{TRACKING_BASE_URL}/?token={token}" if token else None
+
+
+def send_tracking_message(trip: dict) -> str:
+    """Envía el template aprobado al mismo usuario que originó el viaje."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    whatsapp_user = str(trip.get("whatsapp_user") or "").strip()
+    tracking_url = _tracking_url(trip.get("tracking_token"))
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY no configurada")
+    if not whatsapp_user:
+        raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user")
+    if not tracking_url:
+        raise RuntimeError(f"El viaje {trip.get('id')} no tiene tracking_token")
+    payload = {
+        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        "whatsapp_user_id": whatsapp_user,
+        "template_name": ELEVENLABS_WHATSAPP_TEMPLATE_NAME,
+        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        "template_params": [{"parameters": [{"text": tracking_url}]}],
+        "agent_id": ELEVENLABS_AGENT_ID,
+    }
+    response = httpx.post(
+        ELEVENLABS_API_URL,
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=20.0,
+    )
+    if response.is_error:
+        log.error("[ELEVEN OUTBOUND] trip=%s status=%s body=%s", trip.get("id"), response.status_code, response.text[:500])
+        response.raise_for_status()
+    result = response.json()
+    conversation_id = result.get("conversation_id") or ""
+    log.info("[ELEVEN OUTBOUND] tracking enviado trip=%s conversation_id=%s", trip.get("id"), conversation_id)
+    return conversation_id
 
 
 def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None = None) -> str:
