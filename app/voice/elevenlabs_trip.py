@@ -91,11 +91,27 @@ def _save_trip(
     """Inserta el viaje y devuelve el id y token privado de seguimiento."""
     tracking_token = secrets.token_urlsafe(32)
     with get_cursor() as cur:
+        # Keep ElevenLabs on the same assigned-trip contract consumed by the driver app.
+        cur.execute(
+            """
+            SELECT u.id, u.name
+            FROM livre_users u
+            JOIN livre_driver_accounts a ON a.user_id = u.id
+            WHERE a.active = TRUE
+            ORDER BY a.created_at ASC, u.created_at ASC
+            LIMIT 1
+            """
+        )
+        driver = cur.fetchone()
+        if not driver:
+            raise RuntimeError("No hay un conductor Livre disponible")
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, whatsapp_user, tool_call_id, tracking_token, status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s, %s)
+                (conversation_id, origen, destino, whatsapp_user, tool_call_id,
+                 tracking_token, assigned_driver_user_id, tracking_driver_name,
+                 status, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
@@ -105,6 +121,8 @@ def _save_trip(
                 whatsapp_user or "",
                 tool_call_id or "",
                 tracking_token,
+                driver["id"],
+                driver["name"],
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
@@ -583,7 +601,7 @@ async def elevenlabs_trip(request: Request):
         log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error interno de base de datos")
 
-    _response = f"Viaje registrado en Livre y pendiente de asignación. Origen: {origen} → Destino: {destino}."
+    _response = f"Viaje registrado en Livre y asignado a un conductor. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")
     log.info(f"[ELEVEN TRIP] END trip_id={trip_id} conversation_id={conversation_id!r}")
 
