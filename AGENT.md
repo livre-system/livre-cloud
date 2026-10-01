@@ -219,3 +219,13 @@ Responder breve y en criollo con:
 - El último commit publicado en `livre-conductor` es `28f21da` (`feat: restore conductor login screen`). El commit anterior dejó el front completamente blanco: `fa15189`.
 - El problema de viajes nuevos no se considera resuelto: hay que verificar si el pedido llega como `assigned` para el conductor autenticado antes de restaurar el panel operativo.
 - No modificar el front completo hasta validar primero login, autenticación y transición controlada al panel.
+
+## Estado confirmado de GPS y visor CRM (2026-09-30)
+
+- `livre-conductor` solicita permiso de ubicación al entrar al panel mediante la API de geolocalización del navegador y reutiliza `startGps()`/`watchPosition()` para mantener el GPS.
+- `livre-cloud` guarda la ubicación autenticada en `livre_driver_accounts.current_latitude`, `current_longitude` y `location_updated_at` mediante `POST /mobility/driver/location`; la ubicación de viaje también se conserva en `livi_trips` mediante el endpoint de viaje existente.
+- `GET /crm/operational` incorpora las posiciones actuales de las cuentas activas de conductor Livre en `lastPlace.latitude/longitude`, identificadas por `livre_users.id`, sin mezclar conductores.
+- `livre-chatbot` consume `/crm/operational` para el visor. El mapa Leaflet se inicializa una sola vez por contenedor; los refreshes actualizan markers sin `map.remove()`, sin recrear `L.map()`, sin reemplazar el contenedor y sin modificar la cámara.
+- El visor no debe usar MAGIIS como fuente operativa de ubicaciones. Las posiciones activas provienen de Livre Cloud.
+- `livre-chatbot` tiene un polling específico del visor cada 15 segundos en `showMapViewer()`/`loadMapViewer()`. El polling debe limitarse a datos y markers; no debe llamar renders generales del CRM ni reinicializar el mapa.
+- Commits publicados de esta conexión: `livre-cloud` `53a20b3` (`fix: expose live driver GPS to CRM map`), `livre-chatbot` `e0841bf` (`fix: preserve CRM map during refresh`) y `7ed9b68` (`fix: preserve CRM map camera during polling`).
