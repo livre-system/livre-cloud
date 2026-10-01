@@ -33,6 +33,7 @@ from app.core.database import get_cursor
 from app.integrations import magiis_web
 from app.integrations.google_maps import geocode_address, route_distance_km
 from app.integrations.historical_quote import historical_options
+from app.integrations.magiis_quotes import persist_quote_response
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +136,9 @@ def _save_trip(
     destino: str,
     whatsapp_user: str = "",
     tool_call_id: str = "",
+    service_type_id: str = "2",
+    fare: int | None = None,
+    service_type_name: str | None = None,
 ) -> tuple[int, str]:
     """Inserta el viaje y devuelve el id y token privado de seguimiento."""
     tracking_token = secrets.token_urlsafe(32)
@@ -158,8 +162,9 @@ def _save_trip(
             INSERT INTO livi_trips
                 (conversation_id, origen, destino, whatsapp_user, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
+                 service_type_id, service_type_name, fare,
                  status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
@@ -171,6 +176,9 @@ def _save_trip(
                 tracking_token,
                 driver["id"],
                 driver["name"],
+                service_type_id,
+                service_type_name,
+                fare,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
@@ -599,6 +607,15 @@ async def elevenlabs_trip(request: Request):
         or "2"
     )
 
+    selected_fare = (
+        parameters.get("fare")
+        or parameters.get("price")
+        or body.get("fare")
+        or body.get("price")
+        or data.get("fare")
+        or data.get("price")
+    )
+
     whatsapp_user = _whatsapp_user(body, parameters, data)
 
     log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
@@ -637,12 +654,39 @@ async def elevenlabs_trip(request: Request):
 
     # ── 5. Guardar el viaje ──────────────────────────────────────────────────
     try:
+        quote = _run_local_quote(origen, destino)
+        if quote.get("error"):
+            raise RuntimeError(f"No se pudo reconstruir la cotización confirmada: {quote['error']}")
+        selected = next(
+            (item for item in quote["options"]
+             if str(item.get("transportTypeId")) == service_type_id),
+            None,
+        )
+        if selected is None:
+            raise RuntimeError(f"Tipo de servicio no cotizado: {service_type_id}")
+        fare_value = int(selected["pricePointToPoint"])
+        if selected_fare is not None:
+            normalized_fare = str(selected_fare).replace("$", "").replace(",", "").strip()
+            if int(Decimal(normalized_fare)) != fare_value:
+                raise RuntimeError(
+                    f"La tarifa confirmada no coincide con la cotización: {selected_fare} != {fare_value}"
+                )
+        service_type_name = selected.get("serviceName")
         trip_id, tracking_token = _save_trip(
             conversation_id=conversation_id,
             origen=origen,
             destino=destino,
             whatsapp_user=whatsapp_user,
             tool_call_id=tool_call_id,
+            service_type_id=service_type_id,
+            fare=fare_value,
+            service_type_name=service_type_name,
+        )
+        persist_quote_response(
+            livi_trip_id=trip_id,
+            http_status=200,
+            request_payload={"serviceTypeId": service_type_id},
+            response_body=quote["options"],
         )
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")
     except Exception as e:
