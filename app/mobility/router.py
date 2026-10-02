@@ -284,7 +284,7 @@ def _driver_trip(trip) -> DriverTrip:
 
 @router.get("/driver/trips", response_model=list[DriverTrip])
 def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
-    """Lists current trips assigned to the authenticated driver."""
+    """Lists every open trip for any active conductor in the fleet."""
     cur.execute(
         """
         SELECT t.id, t.origen, t.destino, t.status,
@@ -300,7 +300,6 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                END) AS service_type_name,
                COALESCE(t.fare, selected_quote.price_point_to_point) AS fare
         FROM livi_trips t
-        JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         LEFT JOIN LATERAL (
             SELECT q.transport_type_id, q.price_point_to_point
             FROM magiis_quote_requests qr
@@ -310,11 +309,14 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
             ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
             LIMIT 1
         ) selected_quote ON TRUE
-        WHERE a.user_id = %s AND a.active = TRUE
-          AND t.status NOT IN ('completed', 'cancelled')
+        WHERE EXISTS (
+            SELECT 1 FROM livre_driver_accounts active_driver
+            WHERE active_driver.user_id = %s AND active_driver.active = TRUE
+        )
+          AND (t.status = 'assigned' OR t.assigned_driver_user_id = %s)
         ORDER BY t.created_at DESC
         """,
-        (user["id"],),
+        (user["id"], user["id"]),
     )
     return [_driver_trip(row) for row in cur.fetchall()]
 
@@ -487,16 +489,49 @@ def driver_update_status(
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_auth),
 ):
-    """Updates status only for a trip assigned to the authenticated driver."""
-    trip = _driver_trip_or_404(cur, trip_id, user)
+    """Claims an assigned trip for the first conductor who takes it."""
+    try:
+        trip = _driver_trip_or_404(cur, trip_id, user)
+    except HTTPException:
+        if payload.status != "arriving":
+            raise
+        cur.execute(
+            """
+            UPDATE livi_trips t
+            SET assigned_driver_user_id = %s,
+                tracking_driver_name = u.name,
+                status = %s,
+                updated_at = NOW()
+            FROM livre_users u
+            JOIN livre_driver_accounts a ON a.user_id = u.id
+            WHERE t.id = %s
+              AND t.status = 'assigned'
+              AND a.user_id = %s
+              AND a.active = TRUE
+            RETURNING t.id
+            """,
+            (user["id"], payload.status, trip_id, user["id"]),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=409, detail="El viaje ya fue tomado por otro conductor")
+        trip = _driver_trip_or_404(cur, trip_id, user)
     previous_status = trip["status"]
-    cur.execute(
-        """
-        UPDATE livi_trips SET status = %s, updated_at = NOW()
-        WHERE id = %s
-        """,
-        (payload.status, trip_id),
-    )
+    if previous_status != "assigned" or payload.status != "arriving":
+        cur.execute(
+            """
+            UPDATE livi_trips SET status = %s, updated_at = NOW()
+            WHERE id = %s AND assigned_driver_user_id = %s
+            """,
+            (payload.status, trip_id, user["id"]),
+        )
+    elif trip["status"] == "assigned":
+        cur.execute(
+            """
+            UPDATE livi_trips SET status = 'arriving', updated_at = NOW()
+            WHERE id = %s AND assigned_driver_user_id = %s
+            """,
+            (trip_id, user["id"]),
+        )
     if previous_status == "assigned" and payload.status == "arriving":
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
         arriving_trip = cur.fetchone()
