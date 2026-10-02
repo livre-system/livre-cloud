@@ -107,30 +107,59 @@ def main() -> int:
             for source_id, payload in drivers:
                 name = driver_name(payload, source_id)
                 username = f"chofer_{source_id}"
-                cur.execute("SELECT u.id FROM livre_users u WHERE u.username = %s", (username,))
+                cur.execute(
+                    """SELECT u.id, u.username
+                       FROM livre_driver_accounts a
+                       JOIN livre_users u ON u.id = a.user_id
+                       WHERE a.magiis_driver_id = %s
+                       LIMIT 1""",
+                    (source_id,),
+                )
                 existing = cur.fetchone()
                 if existing:
-                    user_id = existing[0]
-                    action = "existing"
-                elif args.apply:
-                    user_id = str(uuid.uuid4())
-                    password = secrets.token_urlsafe(9)
-                    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-                    cur.execute(
-                        "INSERT INTO livre_users (id, username, name, password_hash) VALUES (%s, %s, %s, %s)",
-                        (user_id, username, name, password_hash),
-                    )
-                    cur.execute(
-                        "INSERT INTO livre_driver_accounts (user_id, magiis_driver_id, active) VALUES (%s, %s, TRUE)",
-                        (user_id, source_id),
-                    )
-                    action = "created"
-                    credentials.append({"name": name, "username": username, "password": password, "source_driver_id": source_id})
+                    user_id, existing_username = existing
+                    action = "existing_account"
                 else:
-                    user_id = None
-                    action = "would_create"
+                    cur.execute("SELECT id, username FROM livre_users WHERE username = %s", (username,))
+                    existing = cur.fetchone()
+                    if existing:
+                        user_id, existing_username = existing
+                        if args.apply:
+                            cur.execute(
+                                """INSERT INTO livre_driver_accounts (user_id, magiis_driver_id, active)
+                                   VALUES (%s, %s, TRUE)
+                                   ON CONFLICT (magiis_driver_id) DO UPDATE
+                                   SET user_id = EXCLUDED.user_id, active = TRUE, updated_at = NOW()""",
+                                (user_id, source_id),
+                            )
+                        action = "existing_user_linked" if args.apply else "would_link_existing_user"
+                    elif args.apply:
+                        user_id = str(uuid.uuid4())
+                        existing_username = username
+                        cur.execute(
+                            "INSERT INTO livre_users (id, username, name, password_hash) VALUES (%s, %s, %s, %s)",
+                            (user_id, username, name, "pending"),
+                        )
+                        cur.execute(
+                            """INSERT INTO livre_driver_accounts (user_id, magiis_driver_id, active)
+                               VALUES (%s, %s, TRUE)""",
+                            (user_id, source_id),
+                        )
+                        action = "created"
+                    else:
+                        user_id = None
+                        existing_username = username
+                        action = "would_create"
                 if user_id:
                     users_by_source_id[source_id] = user_id
+                    if args.apply:
+                        password = secrets.token_urlsafe(9)
+                        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+                        cur.execute(
+                            "UPDATE livre_users SET password_hash = %s WHERE id = %s",
+                            (password_hash, user_id),
+                        )
+                        credentials.append({"name": name, "username": existing_username, "password": password, "source_driver_id": source_id})
 
                 linked_vehicle = vehicle_id(payload)
                 if user_id and linked_vehicle:
