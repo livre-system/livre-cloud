@@ -313,7 +313,10 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
             SELECT 1 FROM livre_driver_accounts active_driver
             WHERE active_driver.user_id = %s AND active_driver.active = TRUE
         )
-          AND (t.status = 'assigned' OR t.assigned_driver_user_id = %s)
+          AND (
+              (t.status = 'assigned' AND t.assigned_driver_user_id IS NULL)
+              OR t.assigned_driver_user_id = %s
+          )
         ORDER BY t.created_at DESC
         """,
         (user["id"], user["id"]),
@@ -506,6 +509,7 @@ def driver_update_status(
             JOIN livre_driver_accounts a ON a.user_id = u.id
             WHERE t.id = %s
               AND t.status = 'assigned'
+              AND t.assigned_driver_user_id IS NULL
               AND a.user_id = %s
               AND a.active = TRUE
             RETURNING t.id
