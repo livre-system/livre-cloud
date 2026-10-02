@@ -78,7 +78,11 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         FROM livre_users u
         JOIN livre_driver_accounts a ON a.user_id = u.id
         WHERE a.active = TRUE
-        ORDER BY a.created_at ASC, u.created_at ASC
+        ORDER BY
+            CASE WHEN a.location_updated_at >= NOW() - INTERVAL '2 minutes' THEN 0 ELSE 1 END,
+            a.location_updated_at DESC NULLS LAST,
+            a.created_at ASC,
+            u.created_at ASC
         LIMIT 1
         """
     )
