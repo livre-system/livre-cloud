@@ -143,24 +143,6 @@ def _save_trip(
     """Inserta el viaje y devuelve el id y token privado de seguimiento."""
     tracking_token = secrets.token_urlsafe(32)
     with get_cursor() as cur:
-        # Keep ElevenLabs on the same assigned-trip contract consumed by the driver app.
-        cur.execute(
-            """
-            SELECT u.id, u.name
-            FROM livre_users u
-            JOIN livre_driver_accounts a ON a.user_id = u.id
-            WHERE a.active = TRUE
-            ORDER BY
-                CASE WHEN a.location_updated_at >= NOW() - INTERVAL '2 minutes' THEN 0 ELSE 1 END,
-                a.location_updated_at DESC NULLS LAST,
-                a.created_at ASC,
-                u.created_at ASC
-            LIMIT 1
-            """
-        )
-        driver = cur.fetchone()
-        if not driver:
-            raise RuntimeError("No hay un conductor Livre disponible")
         cur.execute(
             """
             INSERT INTO livi_trips
@@ -168,7 +150,7 @@ def _save_trip(
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare,
                  status, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
@@ -178,8 +160,6 @@ def _save_trip(
                 whatsapp_user or "",
                 tool_call_id or "",
                 tracking_token,
-                driver["id"],
-                driver["name"],
                 service_type_id,
                 service_type_name,
                 fare,

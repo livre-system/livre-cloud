@@ -72,24 +72,6 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
     if not any(term in origin.casefold() for term in local_terms) or not any(term in destination.casefold() for term in local_terms):
         raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
 
-    cur.execute(
-        """
-        SELECT u.id, u.name
-        FROM livre_users u
-        JOIN livre_driver_accounts a ON a.user_id = u.id
-        WHERE a.active = TRUE
-        ORDER BY
-            CASE WHEN a.location_updated_at >= NOW() - INTERVAL '2 minutes' THEN 0 ELSE 1 END,
-            a.location_updated_at DESC NULLS LAST,
-            a.created_at ASC,
-            u.created_at ASC
-        LIMIT 1
-        """
-    )
-    driver = cur.fetchone()
-    if not driver:
-        raise HTTPException(status_code=503, detail="No hay un conductor Livre disponible")
-
     tracking_token = secrets.token_urlsafe(32)
     conversation_id = f"web_{uuid.uuid4()}"
     cur.execute(
@@ -97,10 +79,10 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         INSERT INTO livi_trips
             (conversation_id, origen, destino, whatsapp_user, tracking_token,
              assigned_driver_user_id, tracking_driver_name, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'assigned', NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL, 'assigned', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
-        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token, driver["id"], driver["name"]),
+        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token),
     )
     trip = cur.fetchone()
     passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros.vercel.app")
@@ -110,7 +92,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         tracking_token=trip["tracking_token"],
         tracking_url=tracking_url,
         status=trip["status"],
-        message="Pedido recibido y asignado a un conductor Livre.",
+        message="Pedido recibido y enviado a los conductores Livre disponibles.",
     )
 
 
@@ -284,7 +266,7 @@ def _driver_trip(trip) -> DriverTrip:
 
 @router.get("/driver/trips", response_model=list[DriverTrip])
 def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
-    """Lists every open trip for any active conductor in the fleet."""
+    """Lists every open trip for any conductor in service or with fresh GPS."""
     cur.execute(
         """
         SELECT t.id, t.origen, t.destino, t.status,
@@ -310,8 +292,10 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
             LIMIT 1
         ) selected_quote ON TRUE
         WHERE EXISTS (
-            SELECT 1 FROM livre_driver_accounts active_driver
-            WHERE active_driver.user_id = %s AND active_driver.active = TRUE
+        SELECT 1 FROM livre_driver_accounts active_driver
+        WHERE active_driver.user_id = %s
+          AND (active_driver.active = TRUE
+               OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
         )
           AND (
               (t.status = 'assigned' AND t.assigned_driver_user_id IS NULL)
@@ -511,7 +495,8 @@ def driver_update_status(
               AND t.status = 'assigned'
               AND t.assigned_driver_user_id IS NULL
               AND a.user_id = %s
-              AND a.active = TRUE
+              AND (a.active = TRUE
+                   OR a.location_updated_at >= NOW() - INTERVAL '2 minutes')
             RETURNING t.id
             """,
             (user["id"], payload.status, trip_id, user["id"]),
