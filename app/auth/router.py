@@ -67,39 +67,12 @@ def register(body: RegisterBody):
 
 @router.post("/driver/register", status_code=201)
 def register_driver(body: DriverRegisterBody):
-    """Crea una cuenta Livre y la habilita como chofer local."""
-    username = body.username.strip()
-    name = body.name.strip()
-    if len(body.password) < 6:
-        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
-    if len(username) < 3:
-        raise HTTPException(status_code=400, detail="El usuario debe tener al menos 3 caracteres")
-    if len(name) < 2:
-        raise HTTPException(status_code=400, detail="Ingresá tu nombre completo")
+    """El alta de choferes es administrativa, nunca desde la app."""
+    raise HTTPException(
+        status_code=410,
+        detail="El registro está deshabilitado. Livre debe habilitar tu cuenta.",
+    )
 
-    user_id = str(uuid.uuid4())
-    password_hash = _hash_password(body.password)
-    with get_cursor() as cur:
-        cur.execute("SELECT id FROM livre_users WHERE username = %s", [username])
-        if cur.fetchone():
-            raise HTTPException(status_code=409, detail="El usuario ya existe")
-        cur.execute(
-            """
-            INSERT INTO livre_users (id, username, name, password_hash)
-            VALUES (%s, %s, %s, %s)
-            """,
-            [user_id, username, name, password_hash],
-        )
-        cur.execute(
-            """
-            INSERT INTO livre_driver_accounts (user_id, active)
-            VALUES (%s, TRUE)
-            """,
-            [user_id],
-        )
-
-    token = create_token(id=user_id, name=name, email=username)
-    return {"token": token, "user": {"id": user_id, "username": username, "name": name}}
 
 
 @router.post("/driver/login")
