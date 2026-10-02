@@ -89,6 +89,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--apply", action="store_true", help="crear las cuentas; sin esto solo simula")
     parser.add_argument("--credentials-file", default="driver-credentials.json")
+    parser.add_argument("--link-vehicles", action="store_true", help="solo si se autoriza modificar vínculos de vehículos")
     args = parser.parse_args()
 
     dsn = os.environ.get("DATABASE_URL")
@@ -162,20 +163,21 @@ def main() -> int:
                         credentials.append({"name": name, "username": existing_username, "password": password, "source_driver_id": source_id})
 
                 linked_vehicle = vehicle_id(payload)
-                if user_id and linked_vehicle:
+                if args.link_vehicles and user_id and linked_vehicle:
                     link_vehicle(cur, user_id, linked_vehicle, vehicle_label(payload))
                 print(json.dumps({"source_driver_id": source_id, "name": name, "username": username, "action": action, "vehicle_id": linked_vehicle}, ensure_ascii=False))
 
-            cur.execute("SELECT raw_payload FROM magiis_crm_vehicle_owners")
-            for (owner_payload,) in cur.fetchall():
-                owner_drivers = related_ids(owner_payload, ("driverUserId", "driverId", "driver_id", "driverIds"))
-                owner_vehicles = related_ids(owner_payload, ("vehicleId", "vehicle_id", "vehicleIds"))
-                for source_driver_id in owner_drivers:
-                    user_id = users_by_source_id.get(source_driver_id)
-                    if not user_id:
-                        continue
-                    for source_vehicle_id in owner_vehicles:
-                        link_vehicle(cur, user_id, source_vehicle_id, first(owner_payload, "plate", "domain"))
+            if args.link_vehicles:
+                cur.execute("SELECT raw_payload FROM magiis_crm_vehicle_owners")
+                for (owner_payload,) in cur.fetchall():
+                    owner_drivers = related_ids(owner_payload, ("driverUserId", "driverId", "driver_id", "driverIds"))
+                    owner_vehicles = related_ids(owner_payload, ("vehicleId", "vehicle_id", "vehicleIds"))
+                    for source_driver_id in owner_drivers:
+                        user_id = users_by_source_id.get(source_driver_id)
+                        if not user_id:
+                            continue
+                        for source_vehicle_id in owner_vehicles:
+                            link_vehicle(cur, user_id, source_vehicle_id, first(owner_payload, "plate", "domain"))
 
     if credentials:
         path = Path(args.credentials_file)
