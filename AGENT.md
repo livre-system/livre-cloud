@@ -76,13 +76,13 @@ Pedido y asignación actuales:
 ```text
 livre-pasajeros
   → POST /mobility/requests
-  → livi_trips + tracking_token + assigned_driver_user_id
-  → livre-conductor /mobility/driver/trips
+  → livi_trips + tracking_token + assigned_driver_user_id NULL (pedido abierto)
+  → livre-conductor /mobility/driver/trips (todos los elegibles)
   → estado y GPS autenticados
   → livre-pasajeros /mobility/tracking/{tracking_token}
 ```
 
-El pedido de prueba valida Bahía Blanca y alrededores y asigna un conductor activo de `livre_driver_accounts`. La ubicación del conductor se guarda en `livi_trips`; nunca debe venir del navegador del pasajero.
+El pedido de prueba valida Bahía Blanca y alrededores y queda abierto para todos los conductores en servicio (`active = TRUE`) o con GPS actualizado en los últimos 2 minutos. La aceptación usa una actualización condicional sobre `assigned_driver_user_id IS NULL`: el primer conductor que acepta queda asignado y cierra la disponibilidad para los demás. La ubicación del conductor se guarda en `livi_trips`; nunca debe venir del navegador del pasajero.
 
 Contrato actual de movilidad:
 
@@ -238,9 +238,8 @@ Responder breve y en criollo con:
 
 ## Flujo ElevenLabs/LIVI y GPS real confirmado (2026-10-01)
 
-- `POST /elevenlabs/trip` crea el mismo tipo de viaje operativo que `POST /mobility/requests`: un único registro en `livi_trips` con `tracking_token`, `assigned_driver_user_id`, `tracking_driver_name` y `status = assigned`.
-- La asignación de ElevenLabs selecciona un conductor activo de `livre_driver_accounts`; si no hay uno disponible, no debe crear un viaje sin asignación.
-- El viaje de ElevenLabs se consulta desde `GET /mobility/driver/trips`, se actualiza con los endpoints autenticados del conductor y puede seguirse con `GET /mobility/tracking/{tracking_token}`.
+- `POST /elevenlabs/trip` crea el mismo tipo de viaje operativo que `POST /mobility/requests`: un único registro en `livi_trips` con `tracking_token`, `assigned_driver_user_id` inicialmente NULL y `status = assigned`; queda abierto para el despacho colectivo.
+- La asignación de ElevenLabs ya no selecciona un único conductor al crear el viaje. Todos los conductores en servicio o con GPS actualizado en los últimos 2 minutos lo reciben en `GET /mobility/driver/trips`; el primer `accept` gana mediante actualización atómica y los demás dejan de verlo como disponible.
 - `livre-conductor` acepta como única fuente de ubicación `navigator.geolocation`; no usar IP, coordenadas fijas ni fallback demo. Ante error o permiso denegado debe enviar cero coordenadas, mostrar el error y permitir reintentar.
 - La ubicación válida se envía a `POST /mobility/driver/location` y, cuando corresponde, a `POST /mobility/driver/trips/{trip_id}/location`.
 - Cambios publicados: `livre-cloud` `f03e850` (`fix: assign ElevenLabs trips to drivers`) y `livre-conductor` `0e79846` (`fix: require real browser GPS`). Se verificaron `compileall`, `node --check`, `git diff --check` y ausencia de marcadores de fallback demo. No se generaron viajes ni coordenadas falsas durante la validación.
@@ -254,3 +253,13 @@ Responder breve y en criollo con:
 - Commit publicado: `55c3b69` (`fix: send WhatsApp template body params`). Railway production desplegó ese commit en `98ec35fb-1bc8-434d-b640-76d72e5f253f`, estado `SUCCESS`; `GET /health` respondió `200 {"status":"ok"}`.
 - Verificaciones: `python -m py_compile app/voice/elevenlabs_trip.py`, `git diff --check` y `PYTHONPATH=. uv run --with-requirements requirements.txt --with-requirements requirements-dev.txt pytest -q` (`9 passed`).
 - No se ejecutó un envío artificial. La entrega real de WhatsApp queda pendiente de comprobar con el próximo viaje: `assigned → arriving → outbound 200 → tracking_message_sent_at != NULL → tracking_message_conversation_id` y recepción de `tracking_link`.
+
+## Despacho colectivo y APK del conductor (2026-10-02)
+
+- `livre-cloud` publica los viajes de WhatsApp/LIVI sin conductor preasignado; el pedido queda visible para cada cuenta en servicio o con GPS actualizado en los últimos 2 minutos.
+- La primera aceptación se resuelve atómicamente con `assigned_driver_user_id IS NULL`; los demás conductores dejan de recibirlo como disponible.
+- Cambios publicados en `livre-cloud`: commit `b3a9036` (`Broadcast WhatsApp trips to available drivers`), Railway production en `SUCCESS`, `GET /health` respondió `200 {"status":"ok"}`.
+- Tests del backend: `PYTHONPATH=. uv run --with pytest --with httpx --with psycopg2-binary pytest -q` → `9 passed`; `python -m compileall -q app` → OK.
+- APK debug actual del conductor: `/home/calambre/Documentos/Clientes/Livre/livre-conductor/dist/app-debug.apk`.
+- Copia equivalente con ícono rojo: `/home/calambre/Documentos/Clientes/Livre/livre-conductor/dist/red-icon/livre-conductor-debug-apk/app-debug.apk`. Ambos tienen el mismo SHA-256: `b7296cafba2c2e1701be6a2bf1f749a0968a65d2696e5319359972f2373f7c25`.
+- El APK es `debug`, no una versión release firmada para Play Store.
