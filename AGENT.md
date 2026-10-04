@@ -263,3 +263,39 @@ Responder breve y en criollo con:
 - APK debug actual del conductor: `/home/calambre/Documentos/Clientes/Livre/livre-conductor/dist/app-debug.apk`.
 - Copia equivalente con ícono rojo: `/home/calambre/Documentos/Clientes/Livre/livre-conductor/dist/red-icon/livre-conductor-debug-apk/app-debug.apk`. Ambos tienen el mismo SHA-256: `b7296cafba2c2e1701be6a2bf1f749a0968a65d2696e5319359972f2373f7c25`.
 - El APK es `debug`, no una versión release firmada para Play Store.
+
+## Estado confirmado de hardening nativo de livre-conductor (2026-10-03)
+
+- `livre-conductor` mantiene una sesión nativa separada mediante `SessionStore`; solo persiste token y API cuando la API tiene esquema `https`, host válido y no contiene userinfo ni fragmento. Una sesión inválida se limpia y el servicio no debe operar con ella.
+- El frontend valida también el parámetro `?api=` y vuelve al API HTTPS por defecto cuando el valor no es válido. No se modificaron contratos del backend ni se agregaron endpoints.
+- `LocationService` usa un único scheduler de un hilo para serializar el polling nativo y las tareas de red. El polling background mantiene intervalo de 5 segundos y el `GET /mobility/driver/trips` conserva timeout de conexión y lectura de 4500 ms. El polling foreground JS de 5 segundos/4500 ms quedó preservado.
+- El servicio incorpora `ConnectivityManager.NetworkCallback`: suspende consultas sin red validada, dispara una consulta al recuperar conectividad y aplica backoff para timeout, DNS/TLS y respuestas 5xx. 401 y 403 limpian la sesión nativa y detienen el servicio.
+- El polling y la actualización de ubicación verifican la sesión persistida antes de operar. Con sesión inválida el servicio se detiene y devuelve `START_NOT_STICKY`; con sesión válida devuelve `START_STICKY`.
+- Las notificaciones de viajes usan el canal nativo `livre_trips` de importancia alta y `trip_horn.wav`. `TripNotificationStore` reserva cada `trip_id` de forma persistente y atómica, migra el registro anterior, conserva hasta 7 días/500 entradas y evita duplicados entre consultas, concurrencia y reinicios.
+- Se detectan notificaciones globalmente deshabilitadas o canal de viajes deshabilitado; la Activity puede informar al conductor y abrir los ajustes correspondientes.
+- Al tocar una notificación, `pendingTripId` se conserva hasta que el WebView carga y JavaScript confirma exactamente ese `trip_id` mediante `confirmTripOpened`. Si el viaje ya no aparece, está terminal o fue tomado por otro conductor, se limpia únicamente el pendiente sin modificar el backend.
+- La Activity y el servicio tienen una máquina de permisos basada en `PermissionGate` para ubicación precisa, ubicación en segundo plano, notificaciones y GPS del dispositivo. La Activity revisa el estado en `onResume`; no inicia el servicio operativo sin los requisitos evaluados, informa permisos/GPS deshabilitados y detiene el servicio ante revocación. El GPS nativo evita duplicar el GPS JavaScript dentro del shell Android.
+- El servicio notifica la invalidación de sesión a la Activity; logout limpia la sesión y detiene el servicio. La corrección de compilación aplicada en `MainActivity.java` agregó el import faltante de `IntentFilter` y eliminó el import duplicado de `Intent`.
+
+Validaciones realizadas sobre este bloque:
+
+- `node --check js/app.js`: OK.
+- `git diff --check`: OK, incluido después de corregir el import de `IntentFilter`.
+- Parseo XML de `android/app/src/main/AndroidManifest.xml`: OK.
+- Checks estáticos propios para dedupe, canal HIGH, sonido, detección de notificaciones, pending trip y preservación del polling foreground: OK.
+- Búsqueda de patrones de credenciales en los archivos nuevos/modificados: 0 coincidencias.
+- `tools/verify_release.py` quedó desactualizado: falla porque todavía exige el literal `notified_trip_ids` dentro de `LocationService.java`, mientras el almacenamiento fue extraído a `TripNotificationStore.java`.
+
+Pendientes explícitos:
+
+- No se pudo compilar Android en el entorno auditado porque no estaban disponibles `gradle`, `gradlew`, `java` ni `javac`.
+- Quedan pendientes las pruebas en dispositivo/emulador de permisos, revocación, reinicio del proceso, canal de notificaciones, navegación desde WebView frío, pérdida de conectividad y carrera de polling.
+- No se generó un APK nuevo, no se hizo commit ni push durante este trabajo.
+
+## Migración del CRM a Railway (2026-10-03)
+
+- `livre-chatbot` quedó preparado para Railway con `package.json` y `server.js` en el commit `ad2175a90d7f22a1573518cedfeb687d18f1a3ee` (`chore: prepare CRM for Railway`), publicado en `origin/main`.
+- Se verificó `node --check server.js` y `npm test`: 4 tests pasaron.
+- No se hizo deploy, no se ejecutó SQL, no se generó APK y no se modificó Vercel.
+- `livre-cloud/app/main.py` ya permite los orígenes Railway conocidos, pero todavía no incluye el CRM Railway.
+- Para completar CORS se necesita conocer el dominio público Railway definitivo del servicio CRM, como origen HTTPS exacto. No modificar `allow_origins` hasta contar con ese dato.
