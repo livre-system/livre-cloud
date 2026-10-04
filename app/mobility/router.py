@@ -611,6 +611,29 @@ def driver_update_live_location(
     return {"status": "updated", "location_updated_at": row["location_updated_at"]}
 
 
+@router.delete("/driver/location")
+def driver_clear_live_location(
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Clears only the authenticated driver's current device location on logout."""
+    cur.execute(
+        """
+        UPDATE livre_driver_accounts
+        SET current_latitude = NULL,
+            current_longitude = NULL,
+            location_updated_at = NULL
+        WHERE user_id = %s AND active = TRUE
+        RETURNING user_id
+        """,
+        (user["id"],),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="La cuenta de conductor no está activa")
+    return {"status": "cleared"}
+
+
 @router.post("/driver/trips/{trip_id}/location", response_model=DriverTrip)
 def driver_update_location(
     trip_id: int,
