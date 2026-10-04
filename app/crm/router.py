@@ -289,10 +289,22 @@ def _operational_snapshot(cur):
     cur.execute(
         """
         SELECT a.user_id, a.active, a.operational_status,
+               (a.active = TRUE
+                AND a.device_session_active = TRUE
+                AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes') AS session_active,
                u.name, u.username,
-               COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
-               COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
-               COALESCE(a.location_updated_at, active_trip.tracking_location_updated_at) AS location_updated_at,
+               CASE WHEN a.active = TRUE
+                          AND a.device_session_active = TRUE
+                          AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes'
+                    THEN a.current_latitude END AS latitude,
+               CASE WHEN a.active = TRUE
+                          AND a.device_session_active = TRUE
+                          AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes'
+                    THEN a.current_longitude END AS longitude,
+               CASE WHEN a.active = TRUE
+                          AND a.device_session_active = TRUE
+                          AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes'
+                    THEN a.location_updated_at END AS location_updated_at,
                COALESCE(driver_source.raw_payload->>'vehicleDomain', vehicle_source.raw_payload #>> '{identificationCard,domain}') AS associated_vehicle_plate,
                COALESCE(
                    NULLIF(trim(concat_ws(' ', driver_source.raw_payload->>'vehicleBrand', driver_source.raw_payload->>'vehicleModel')), ''),
@@ -341,6 +353,7 @@ def _operational_snapshot(cur):
         items.append({
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
+            "sessionActive": bool(row["session_active"]),
             "operationalStatus": operational_status,
             "operationalLabel": operational_label,
             "operationalState": state,
@@ -357,7 +370,7 @@ def _operational_snapshot(cur):
                 "model": row["associated_vehicle_model"],
                 "color": row["associated_vehicle_color"],
             },
-            "source": "livre_driver_accounts+driver_vehicle_association+livi_trips",
+            "source": "livre_driver_accounts+device_session+driver_vehicle_association+livi_trips",
         })
     return items
 
@@ -369,7 +382,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
-    available = sum(item["operationalStatus"] == "available" for item in drivers)
+    available = sum(item["sessionActive"] for item in drivers)
     unavailable = sum(item["operationalStatus"] == "unavailable" for item in drivers)
     out_of_service = sum(item["operationalStatus"] == "out_of_service" for item in drivers)
     return {

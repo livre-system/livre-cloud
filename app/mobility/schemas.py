@@ -20,6 +20,7 @@ DriverOperationalStatus = Literal["available", "unavailable", "out_of_service"]
 class LocationUpdate(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+    device_id: str
 
 
 class StatusUpdate(BaseModel):

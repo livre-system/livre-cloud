@@ -8,7 +8,7 @@ import secrets
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
@@ -28,6 +28,27 @@ from app.mobility.schemas import (
 from app.voice.elevenlabs_trip import send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
+
+
+def _active_device_session(cur, user: dict, device_id: str, *, require_fresh: bool = True):
+    try:
+        normalized = str(uuid.UUID(device_id.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="device_id inválido") from exc
+    freshness = "AND device_last_seen_at >= NOW() - INTERVAL '2 minutes'" if require_fresh else ""
+    cur.execute(
+        f"""SELECT user_id
+           FROM livre_driver_accounts
+           WHERE user_id = %s
+             AND active = TRUE
+             AND active_device_id = %s
+             AND device_session_active = TRUE
+             {freshness}""",
+        (user["id"], normalized),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=401, detail="La sesión de dispositivo no está activa")
+    return normalized
 
 
 def _trip_or_404(cur, trip_id: int):
@@ -593,6 +614,7 @@ def driver_update_live_location(
     user: dict = Depends(require_auth),
 ):
     """Stores the driver's latest GPS position even without an active trip."""
+    device_id = _active_device_session(cur, user, payload.device_id)
     cur.execute(
         """
         UPDATE livre_driver_accounts
@@ -601,32 +623,50 @@ def driver_update_live_location(
             location_updated_at = NOW(),
             updated_at = NOW()
         WHERE user_id = %s AND active = TRUE
+          AND active_device_id = %s
+          AND device_session_active = TRUE
         RETURNING user_id, location_updated_at
         """,
-        (payload.latitude, payload.longitude, user["id"]),
+        (payload.latitude, payload.longitude, user["id"], device_id),
     )
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=403, detail="La cuenta de conductor no está activa")
+    cur.execute(
+        """UPDATE livre_driver_accounts
+           SET device_last_seen_at = NOW(), updated_at = NOW()
+           WHERE user_id = %s AND active_device_id = %s AND device_session_active = TRUE""",
+        (user["id"], device_id),
+    )
     return {"status": "updated", "location_updated_at": row["location_updated_at"]}
 
 
 @router.delete("/driver/location")
 def driver_clear_live_location(
+    device_id: str | None = Header(default=None, alias="X-Device-ID"),
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_auth),
 ):
     """Clears only the authenticated driver's current device location on logout."""
+    normalized_device_id = None
+    if device_id:
+        normalized_device_id = _active_device_session(cur, user, device_id, require_fresh=False)
     cur.execute(
         """
         UPDATE livre_driver_accounts
         SET current_latitude = NULL,
             current_longitude = NULL,
-            location_updated_at = NULL
+            location_updated_at = NULL,
+            device_session_active = CASE WHEN %s IS NULL THEN device_session_active ELSE FALSE END,
+            active_device_id = CASE WHEN %s IS NULL THEN active_device_id ELSE NULL END,
+            device_last_seen_at = CASE WHEN %s IS NULL THEN device_last_seen_at ELSE NULL END,
+            updated_at = NOW()
         WHERE user_id = %s AND active = TRUE
+          AND (%s IS NULL OR active_device_id = %s)
         RETURNING user_id
         """,
-        (user["id"],),
+        (normalized_device_id, normalized_device_id, normalized_device_id,
+         user["id"], normalized_device_id, normalized_device_id),
     )
     row = cur.fetchone()
     if not row:
@@ -642,6 +682,7 @@ def driver_update_location(
     user: dict = Depends(require_auth),
 ):
     """Stores GPS only for a trip assigned to the authenticated driver."""
+    _active_device_session(cur, user, payload.device_id)
     _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
         """
