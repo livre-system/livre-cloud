@@ -37,6 +37,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://livre-chatbot.vercel.app",
+        "https://livre-chatbot-production.up.railway.app",
         "https://livre-pasajeros.vercel.app",
         "https://livre-conductor-production.up.railway.app",
         "https://livre-pasajeros-production.up.railway.app",
