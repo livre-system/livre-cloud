@@ -24,6 +24,18 @@ _RESOURCES = {
     "vehicle_owners": "magiis_crm_vehicle_owners",
 }
 
+# These accounts remain in livre_users/CRM, but are not GPS/map conductors.
+# Keep this list keyed by verified production user_id, not display names:
+# "Perez Ezequiel" and "IBAÑEZ PUCHULO CARLOS MARTIN" are real drivers.
+_HIDDEN_GPS_DRIVER_USER_IDS = (
+    "3f36895f-8d5d-48a9-8fe5-4309a503f91b",  # Ezequiel Perez
+    "027390ab-b0e4-42da-a06e-d1e9b40395e5",  # Sergio Moreno
+    "16142c7f-3210-463b-9a30-b4228149f3ee",  # GPS QA Production
+    "b1570ce9-6930-412e-bf6b-dea572402f7a",  # Marti Ibañez
+    "64c8bdb7-dbff-4704-be78-4284eb713f35",  # Livre Prueba
+    "4d96ce43-d0c1-41fb-9700-181cf26ca481",  # Livre
+)
+
 
 def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     """Lee el snapshot local importado; nunca abre una sesión externa."""
@@ -310,8 +322,10 @@ def _operational_snapshot(cur):
             ORDER BY t.updated_at DESC NULLS LAST, t.id DESC
             LIMIT 1
         ) active_trip ON TRUE
+        WHERE a.user_id <> ALL(%s)
         ORDER BY u.name NULLS LAST, a.user_id
-        """
+        """,
+        (list(_HIDDEN_GPS_DRIVER_USER_IDS),),
     )
     items = []
     for row in cur.fetchall():

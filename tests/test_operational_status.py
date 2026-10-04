@@ -1,4 +1,9 @@
-from app.crm.router import _operational_snapshot, operational, update_operational_driver_status
+from app.crm.router import (
+    _HIDDEN_GPS_DRIVER_USER_IDS,
+    _operational_snapshot,
+    operational,
+    update_operational_driver_status,
+)
 from pydantic import ValidationError
 
 from app.mobility.schemas import DriverOperationalStatusUpdate
@@ -67,6 +72,19 @@ def test_snapshot_uses_the_persistent_driver_vehicle_association():
         "model": "FIAT CRONOS",
         "color": "ROJO",
     }
+
+
+def test_snapshot_query_excludes_verified_non_map_ids_but_keeps_real_driver():
+    real_driver_id = "2aa35285-3da4-4238-985e-303493b2bf67"
+    cur = FakeCursor([[driver_row(real_driver_id, "available")]])
+
+    snapshot = _operational_snapshot(cur)
+
+    query, params = cur.calls[0]
+    assert "a.user_id <> ALL(%s)" in query
+    assert params == (list(_HIDDEN_GPS_DRIVER_USER_IDS),)
+    assert real_driver_id not in _HIDDEN_GPS_DRIVER_USER_IDS
+    assert snapshot[0]["driverUserId"] == real_driver_id
 
 
 def test_crm_operational_counts_each_canonical_status_without_active_as_status():
