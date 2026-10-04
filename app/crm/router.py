@@ -281,6 +281,12 @@ def _operational_snapshot(cur):
                COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
                COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
                COALESCE(a.location_updated_at, active_trip.tracking_location_updated_at) AS location_updated_at,
+               COALESCE(driver_source.raw_payload->>'vehicleDomain', vehicle_source.raw_payload #>> '{identificationCard,domain}') AS associated_vehicle_plate,
+               COALESCE(
+                   NULLIF(trim(concat_ws(' ', driver_source.raw_payload->>'vehicleBrand', driver_source.raw_payload->>'vehicleModel')), ''),
+                   NULLIF(trim(concat_ws(' ', vehicle_source.raw_payload #>> '{identificationCard,mark}', vehicle_source.raw_payload #>> '{identificationCard,model}')), '')
+               ) AS associated_vehicle_model,
+               COALESCE(vehicle_source.raw_payload #>> '{identificationCard,color}', driver_source.raw_payload->>'vehicleColor') AS associated_vehicle_color,
                active_trip.id AS trip_id,
                active_trip.status AS trip_status,
                active_trip.tracking_driver_name,
@@ -289,6 +295,10 @@ def _operational_snapshot(cur):
                active_trip.tracking_vehicle_color
         FROM livre_driver_accounts a
         JOIN livre_users u ON u.id = a.user_id
+        LEFT JOIN magiis_crm_drivers driver_source
+          ON driver_source.magiis_id = a.magiis_driver_id
+        LEFT JOIN magiis_crm_vehicles vehicle_source
+          ON vehicle_source.magiis_id::text = driver_source.raw_payload->>'vehicleId'
         LEFT JOIN LATERAL (
             SELECT t.id, t.status, t.tracking_driver_name, t.tracking_plate,
                    t.tracking_vehicle_model, t.tracking_vehicle_color,
@@ -329,11 +339,11 @@ def _operational_snapshot(cur):
             } if row["latitude"] is not None and row["longitude"] is not None else None,
             "lastSee": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
             "vehicle": {
-                "plate": row["tracking_plate"],
-                "model": row["tracking_vehicle_model"],
-                "color": row["tracking_vehicle_color"],
+                "plate": row["associated_vehicle_plate"],
+                "model": row["associated_vehicle_model"],
+                "color": row["associated_vehicle_color"],
             },
-            "source": "livre_driver_accounts+livi_trips",
+            "source": "livre_driver_accounts+driver_vehicle_association+livi_trips",
         })
     return items
 

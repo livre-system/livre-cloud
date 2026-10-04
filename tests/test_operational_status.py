@@ -30,6 +30,9 @@ def driver_row(user_id, status, trip_status=None):
         "latitude": -38.7,
         "longitude": -62.2,
         "location_updated_at": None,
+        "associated_vehicle_plate": None,
+        "associated_vehicle_model": None,
+        "associated_vehicle_color": None,
         "trip_id": None,
         "trip_status": trip_status,
         "tracking_driver_name": None,
@@ -46,7 +49,24 @@ def test_snapshot_preserves_the_three_canonical_statuses():
 
     assert [item["operationalStatus"] for item in snapshot] == ["available", "unavailable", "out_of_service"]
     assert [item["operationalLabel"] for item in snapshot] == ["Disponible", "No disponible", "Fuera de servicio"]
-    assert all(item["source"] == "livre_driver_accounts+livi_trips" for item in snapshot)
+    assert all(item["source"] == "livre_driver_accounts+driver_vehicle_association+livi_trips" for item in snapshot)
+
+
+def test_snapshot_uses_the_persistent_driver_vehicle_association():
+    row = driver_row("barroso", "available")
+    row.update({
+        "associated_vehicle_plate": "406 AG8008HE",
+        "associated_vehicle_model": "FIAT CRONOS",
+        "associated_vehicle_color": "ROJO",
+    })
+
+    snapshot = _operational_snapshot(FakeCursor([[row]]))
+
+    assert snapshot[0]["vehicle"] == {
+        "plate": "406 AG8008HE",
+        "model": "FIAT CRONOS",
+        "color": "ROJO",
+    }
 
 
 def test_crm_operational_counts_each_canonical_status_without_active_as_status():
