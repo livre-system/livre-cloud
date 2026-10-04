@@ -14,6 +14,8 @@ TripStatus = Literal[
     "cancelled",
 ]
 
+DriverOperationalStatus = Literal["available", "unavailable", "out_of_service"]
+
 
 class LocationUpdate(BaseModel):
     latitude: float = Field(ge=-90, le=90)
@@ -22,6 +24,14 @@ class LocationUpdate(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: TripStatus
+
+
+class DriverOperationalStatusUpdate(BaseModel):
+    status: DriverOperationalStatus
+
+
+class DriverOperationalStatusResponse(BaseModel):
+    status: DriverOperationalStatus
 
 
 class TripRequest(BaseModel):

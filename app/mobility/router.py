@@ -14,6 +14,8 @@ from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
 from app.mobility.schemas import (
     DriverTrip,
+    DriverOperationalStatusResponse,
+    DriverOperationalStatusUpdate,
     HandieMessageCreate,
     HandieOpenRequest,
     LocationUpdate,
@@ -264,6 +266,40 @@ def _driver_trip(trip) -> DriverTrip:
     )
 
 
+@router.get("/driver/operational-status", response_model=DriverOperationalStatusResponse)
+def get_driver_operational_status(
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
+):
+    cur.execute(
+        """SELECT operational_status
+           FROM livre_driver_accounts
+           WHERE user_id = %s AND active = TRUE""",
+        (user["id"],),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="Cuenta de conductor no habilitada")
+    return {"status": row["operational_status"]}
+
+
+@router.put("/driver/operational-status", response_model=DriverOperationalStatusResponse)
+def update_driver_operational_status(
+    payload: DriverOperationalStatusUpdate,
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
+):
+    cur.execute(
+        """UPDATE livre_driver_accounts
+           SET operational_status = %s, updated_at = NOW()
+           WHERE user_id = %s AND active = TRUE
+           RETURNING operational_status""",
+        (payload.status, user["id"]),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=403, detail="Cuenta de conductor no habilitada")
+    return {"status": row["operational_status"]}
+
+
 @router.get("/driver/trips", response_model=list[DriverTrip])
 def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
     """Lists every open trip for any conductor in service or with fresh GPS."""
@@ -291,16 +327,20 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
             ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
             LIMIT 1
         ) selected_quote ON TRUE
-        WHERE EXISTS (
-            SELECT 1 FROM livre_driver_accounts active_driver
-            WHERE active_driver.user_id = %s
-              AND (active_driver.active = TRUE
-                   OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
+        WHERE (
+            (
+                EXISTS (
+                    SELECT 1 FROM livre_driver_accounts active_driver
+                    WHERE active_driver.user_id = %s
+                      AND active_driver.operational_status <> 'out_of_service'
+                      AND (active_driver.active = TRUE
+                           OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
+                )
+                AND t.status = 'assigned'
+                AND t.assigned_driver_user_id IS NULL
+            )
+            OR t.assigned_driver_user_id = %s
         )
-          AND (
-              (t.status = 'assigned' AND t.assigned_driver_user_id IS NULL)
-              OR t.assigned_driver_user_id = %s
-          )
         ORDER BY t.created_at DESC
         """,
         (user["id"], user["id"]),
@@ -495,6 +535,7 @@ def driver_update_status(
               AND t.status = 'assigned'
               AND t.assigned_driver_user_id IS NULL
               AND a.user_id = %s
+              AND a.operational_status <> 'out_of_service'
               AND (a.active = TRUE
                    OR a.location_updated_at >= NOW() - INTERVAL '2 minutes')
             RETURNING t.id

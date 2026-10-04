@@ -11,6 +11,7 @@ from app.core.jwt import require_auth
 from app.integrations import magiis_web
 from app.integrations.magiis_crm import MagiisCrmReader
 from app.crm.sync import sync_all
+from app.mobility.schemas import DriverOperationalStatusResponse, DriverOperationalStatusUpdate
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 log = logging.getLogger(__name__)
@@ -275,7 +276,7 @@ def _operational_snapshot(cur):
     """Returns one consistent Livre snapshot of accounts, trips and GPS."""
     cur.execute(
         """
-        SELECT a.user_id, a.active,
+        SELECT a.user_id, a.active, a.operational_status,
                u.name, u.username,
                COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
                COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
@@ -305,11 +306,19 @@ def _operational_snapshot(cur):
     items = []
     for row in cur.fetchall():
         busy = row["trip_status"] in {"assigned", "arriving", "in_progress"}
-        state = "NO DISPONIBLE" if not row["active"] else ("EN VIAJE" if busy else "DISPONIBLE")
+        operational_status = row["operational_status"]
+        operational_label = {
+            "available": "Disponible",
+            "unavailable": "No disponible",
+            "out_of_service": "Fuera de servicio",
+        }[operational_status]
+        state = "EN VIAJE" if busy else operational_label
         driver_name = row["name"] or row["username"] or "Conductor"
         items.append({
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
+            "operationalStatus": operational_status,
+            "operationalLabel": operational_label,
             "operationalState": state,
             "operability": state,
             "tripId": row["trip_id"],
@@ -336,15 +345,20 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
-    available = sum(item["operationalState"] == "DISPONIBLE" for item in drivers)
+    available = sum(item["operationalStatus"] == "available" for item in drivers)
+    unavailable = sum(item["operationalStatus"] == "unavailable" for item in drivers)
+    out_of_service = sum(item["operationalStatus"] == "out_of_service" for item in drivers)
     return {
         "source": "livre",
         "status": {"travelsQuantity": travels, "workingVehiclesQuantity": len(drivers), "clientsIndividualsAmount": 0},
         "driver_totals": {
             "totalDrivers": len(drivers),
             "totalDriversOnline": available,
-            "totalDriversOffline": len(drivers) - available - in_travel,
+            "totalDriversOffline": unavailable + out_of_service,
             "totalDriversInTravel": in_travel,
+            "available": available,
+            "unavailable": unavailable,
+            "out_of_service": out_of_service,
         },
         "drivers": drivers,
         "drivers_by_vehicle": drivers,
@@ -384,6 +398,26 @@ def operational_driver(driver_user_id: int, user: dict = Depends(require_auth)):
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
         return reader.driver(driver_user_id)
+
+
+@router.put("/operational/driver/{driver_user_id}/status", response_model=DriverOperationalStatusResponse)
+def update_operational_driver_status(
+    driver_user_id: int,
+    payload: DriverOperationalStatusUpdate,
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    cur.execute(
+        """UPDATE livre_driver_accounts
+           SET operational_status = %s, updated_at = NOW()
+           WHERE user_id = %s AND active = TRUE
+           RETURNING operational_status""",
+        (payload.status, driver_user_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Conductor no encontrado o no habilitado")
+    return {"status": row["operational_status"]}
 
 
 @router.post("/sync")
