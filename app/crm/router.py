@@ -732,6 +732,33 @@ def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict =
         return reader.update_vehicle(vehicle_id, payload)
 
 
+@router.get("/driver-shift-closures")
+def driver_shift_closures(
+    driver_user_id: str = Query(default="", max_length=120),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Consulta CRM de cierres persistidos en Livre, sin leer MAGIIS."""
+    where = "WHERE c.driver_user_id = %s" if driver_user_id.strip() else ""
+    params = [driver_user_id.strip()] if driver_user_id.strip() else []
+    cur.execute(
+        f"""SELECT c.id, c.driver_user_id, u.name AS driver_name, c.closure_date,
+                   c.closed_at, c.trip_count, c.total_revenue,
+                   c.vehicle_id, c.vehicle_label, c.vehicle_model, c.plate, c.owner_name,
+                   (SELECT count(*) FROM livre_driver_shift_closure_trips ct
+                    WHERE ct.closure_id = c.id) AS traced_trip_count
+            FROM livre_driver_shift_closures c
+            JOIN livre_users u ON u.id = c.driver_user_id
+            {where}
+            ORDER BY c.closure_date DESC, c.closed_at DESC
+            LIMIT %s OFFSET %s""",
+        params + [limit, offset],
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
 @router.get("/{resource}")
 def resource(
     resource: str,
