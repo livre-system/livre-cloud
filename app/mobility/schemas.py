@@ -69,6 +69,10 @@ class DriverTrip(PublicTrip):
     service_type_id: int | None = None
     service_type_name: str | None = None
     fare: float | None = None
+    gross_fare: float | None = None
+    livre_commission: float | None = None
+    driver_net: float | None = None
+    card_payment_confirmed: bool = False
 
 
 class DriverHistoryItem(DriverTrip):
@@ -79,6 +83,8 @@ class DriverHistoryResponse(BaseModel):
     items: list[DriverHistoryItem]
     total: int
     total_revenue: float
+    total_commission: float
+    total_driver_net: float
     date_from: date
     date_to: date
 
@@ -95,6 +101,8 @@ class DriverShiftClosure(BaseModel):
     closed_at: datetime
     trip_count: int
     total_revenue: float
+    total_commission: float = 0
+    total_driver_net: float = 0
     vehicle_id: str | None = None
     vehicle_label: str | None = None
     vehicle_model: str | None = None

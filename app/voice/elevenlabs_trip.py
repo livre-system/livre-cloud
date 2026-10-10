@@ -30,6 +30,7 @@ from decimal import Decimal
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
+from app.finance import finalize_trip_financials
 from app.integrations import magiis_web
 from app.integrations.google_maps import geocode_address, route_distance_km
 from app.integrations.historical_quote import historical_options
@@ -148,9 +149,9 @@ def _save_trip(
             INSERT INTO livi_trips
                 (conversation_id, origen, destino, whatsapp_user, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
-                 service_type_id, service_type_name, fare,
+                 service_type_id, service_type_name, fare, gross_fare,
                  status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, 'assigned', %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
@@ -162,6 +163,7 @@ def _save_trip(
                 tracking_token,
                 service_type_id,
                 service_type_name,
+                fare,
                 fare,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
@@ -220,6 +222,8 @@ def _update_magiis_state(
                 trip_id,
             ),
         )
+        if status == "completed":
+            finalize_trip_financials(cur, trip_id)
 
 
 def _find_travel_id(value: object) -> int | None:

@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
+from app.finance import PROVIDER_COMPLETED_STATUSES, finalize_trip_financials
 from app.integrations import magiis_web
 from app.integrations.magiis_crm import MagiisCrmReader
 from app.crm.sync import sync_all
@@ -212,7 +213,19 @@ def _sync_trip_assignment(cur, item: dict) -> bool:
             travel_id,
         ),
     )
-    return cur.rowcount > 0
+    updated = cur.rowcount
+    if str(item.get("state") or "").strip().lower() in PROVIDER_COMPLETED_STATUSES:
+        cur.execute(
+            """UPDATE livi_trips
+               SET status = 'completed', completed_at = COALESCE(completed_at, NOW()), updated_at = NOW()
+               WHERE magiis_travel_id = %s AND status <> 'cancelled'
+               RETURNING id""",
+            (travel_id,),
+        )
+        trip = cur.fetchone()
+        if trip:
+            finalize_trip_financials(cur, trip["id"] if isinstance(trip, dict) else trip[0])
+    return updated > 0
 
 
 def _persist_created_record(cur, table: str, response: object, fallback: dict, id_keys: tuple[str, ...]) -> None:
