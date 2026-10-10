@@ -299,3 +299,17 @@ Pendientes explícitos:
 - No se hizo deploy, no se ejecutó SQL, no se generó APK y no se modificó Vercel.
 - `livre-cloud/app/main.py` ya permite los orígenes Railway conocidos, pero todavía no incluye el CRM Railway.
 - Para completar CORS se necesita conocer el dominio público Railway definitivo del servicio CRM, como origen HTTPS exacto. No modificar `allow_origins` hasta contar con ese dato.
+
+## Estado financiero y despliegue confirmado (2026-10-10)
+
+- PostgreSQL existente de Railway está operativo en el proyecto `fantastic-nurturing`, entorno `production`, con el volumen existente listo. No se crearon proyectos ni servicios nuevos.
+- Se aplicó la migración `app/migrations/20261008_reconcile_financial_schema.sql`, registrada en `schema_migrations`, para reconciliar el esquema financiero sin borrar columnas legacy.
+- El modelo productivo contiene `gross_fare`, `livre_commission`, `driver_net`, `financial_status`, `financial_finalized_at`, `total_commission` y `total_driver_net` donde corresponde.
+- La comisión operativa confirmada es del 15% sobre `gross_fare`; el neto del conductor es el 85% restante. La verificación de viajes completados no encontró divisiones distintas al 15%, pero hay 14 viajes completados sin tarifa bruta persistida. No completar esos importes manualmente.
+- La tabla de cierres existe con totales financieros, pero al momento de la verificación no tenía cierres de turno productivos; no afirmar que una liquidación real fue validada hasta contar con un cierre existente.
+- `app/crm/router.py` cuenta conductores disponibles por `operationalStatus`, no por `sessionActive`.
+- Commit desplegado: `4c752c8` (`fix: reconcile production finance schema`). Railway production deployment `98a809cb-f398-4ae4-974f-e61bc9b72569` quedó en `SUCCESS`, con instancia `RUNNING`.
+- `GET https://livre-cloud-production.up.railway.app/health` respondió `200 {"status":"ok"}`; `/openapi.json` respondió 200. La ruta `/` devuelve 404 porque el backend no publica una ruta raíz.
+- Las URLs públicas verificadas de `livre-conductor`, `livre-pasajeros` y `livre-chatbot` respondieron HTTP 200 en su ruta raíz.
+- La suite backend ejecutada con el entorno de dependencias aislado pasó: `38 passed`. No se crearon viajes ni se alteraron datos productivos durante la verificación.
+- La validación debe distinguir siempre entre: esquema financiero aplicado, viajes históricos con datos completos y liquidaciones/cierres reales. La ausencia de tarifa o de cierres es un pendiente de datos, no una razón para inventar valores.
