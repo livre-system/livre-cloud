@@ -418,7 +418,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
-    available = sum(item["sessionActive"] for item in drivers)
+    available = sum(item["operationalStatus"] == "available" for item in drivers)
     unavailable = sum(item["operationalStatus"] == "unavailable" for item in drivers)
     out_of_service = sum(item["operationalStatus"] == "out_of_service" for item in drivers)
     return {
