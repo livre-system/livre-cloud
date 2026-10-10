@@ -108,11 +108,12 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         """
         INSERT INTO livi_trips
             (conversation_id, origen, destino, whatsapp_user, tracking_token,
-             assigned_driver_user_id, tracking_driver_name, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NULL, NULL, 'assigned', NOW(), NOW())
+             fare, gross_fare, assigned_driver_user_id, tracking_driver_name, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, 'assigned', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
-        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token),
+        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token,
+         payload.gross_fare or payload.fare, payload.gross_fare or payload.fare),
     )
     trip = cur.fetchone()
     passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros.vercel.app")
@@ -464,7 +465,8 @@ def driver_history(
                t.tracking_latitude, t.tracking_longitude,
                t.tracking_location_updated_at, t.completed_at,
                t.service_type_id, t.service_type_name, t.fare,
-               t.gross_fare, t.livre_commission, t.driver_net, t.card_payment_confirmed
+               t.gross_fare, t.livre_commission, t.driver_net, t.card_payment_confirmed,
+               t.financial_status
         FROM livi_trips t
         WHERE t.assigned_driver_user_id = %s
           AND t.status IN ('completed', 'cancelled')
@@ -479,9 +481,9 @@ def driver_history(
     return DriverHistoryResponse(
         items=items,
         total=len(items),
-        total_revenue=float(sum((row["gross_fare"] or Decimal("0")) for row in rows if row["status"] == "completed")),
-        total_commission=float(sum((row["livre_commission"] or Decimal("0")) for row in rows if row["status"] == "completed")),
-        total_driver_net=float(sum((row["driver_net"] or Decimal("0")) for row in rows if row["status"] == "completed")),
+        total_revenue=float(sum((row["gross_fare"] or Decimal("0")) for row in rows if row["status"] == "completed" and row.get("financial_status") == "finalized")),
+        total_commission=float(sum((row["livre_commission"] or Decimal("0")) for row in rows if row["status"] == "completed" and row.get("financial_status") == "finalized")),
+        total_driver_net=float(sum((row["driver_net"] or Decimal("0")) for row in rows if row["status"] == "completed" and row.get("financial_status") == "finalized")),
         date_from=start,
         date_to=end,
     )
@@ -541,6 +543,19 @@ def close_driver_shift(
     )
     if cur.fetchone():
         raise HTTPException(status_code=409, detail="shift already closed")
+    cur.execute(
+        """
+        SELECT count(*) AS pending_count
+        FROM livi_trips
+        WHERE assigned_driver_user_id = %s AND status = 'completed'
+          AND financial_status <> 'finalized'
+          AND COALESCE(completed_at, updated_at) >= %s::date
+          AND COALESCE(completed_at, updated_at) < (%s::date + INTERVAL '1 day')
+        """,
+        (user["id"], payload.closure_date, payload.closure_date),
+    )
+    if cur.fetchone()["pending_count"]:
+        raise HTTPException(status_code=409, detail="Hay viajes completados pendientes de liquidacion")
     cur.execute(
         """
         SELECT count(*) AS trip_count,

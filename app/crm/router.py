@@ -3,6 +3,7 @@ import json
 import logging
 import math
 from datetime import date, timedelta
+from decimal import Decimal
 
 import httpx
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
@@ -153,6 +154,23 @@ def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
     return None
 
 
+def _provider_gross_fare(item: dict) -> Decimal | None:
+    """Accept only an explicit positive provider amount; never turn missing into zero."""
+    for key in ("gross_fare", "grossFare", "fare", "price", "amount"):
+        value = item.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            amount = Decimal(str(value).replace("$", "").replace(",", ".").strip())
+        except Exception:
+            log.warning("[CRM FINANCE] invalid %s=%r; leaving fare unchanged", key, value)
+            continue
+        if amount > 0:
+            return amount
+        log.warning("[CRM FINANCE] non-positive %s=%r; leaving fare unknown", key, value)
+    return None
+
+
 def _sync_trip_assignment(cur, item: dict) -> bool:
     """Guarda asignación de MAGIIS sin borrar datos ya recolectados."""
     travel_id = _find_provider_id(item, ("travelId",))
@@ -174,10 +192,13 @@ def _sync_trip_assignment(cur, item: dict) -> bool:
         )
         if item.get(key) is not None
     }
+    provider_gross = _provider_gross_fare(item)
     cur.execute(
         """
         UPDATE livi_trips
-        SET magiis_status = COALESCE(%s, magiis_status),
+        SET gross_fare = COALESCE(gross_fare, %s),
+            fare = COALESCE(fare, %s),
+            magiis_status = COALESCE(%s, magiis_status),
             magiis_driver_id = COALESCE(%s, magiis_driver_id),
             magiis_driver_first_name = COALESCE(NULLIF(%s, ''), magiis_driver_first_name),
             magiis_driver_last_name = COALESCE(NULLIF(%s, ''), magiis_driver_last_name),
@@ -196,6 +217,8 @@ def _sync_trip_assignment(cur, item: dict) -> bool:
         WHERE magiis_travel_id = %s
         """,
         (
+            provider_gross,
+            provider_gross,
             item.get("state"),
             _find_provider_id(item, ("driverId",)),
             str(item.get("driverFirstName") or ""),

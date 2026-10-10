@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -40,6 +41,10 @@ class TripRequest(BaseModel):
     destination: str = Field(min_length=3, max_length=240)
     passenger: str = Field(default="Pasajero de prueba", min_length=2, max_length=120)
     whatsapp_user: str = Field(default="web-test", min_length=2, max_length=120)
+    # Optional because some upstream requests arrive before a confirmed quote.
+    # Missing values remain pending settlement; they are never converted to zero.
+    fare: Decimal | None = Field(default=None, gt=0)
+    gross_fare: Decimal | None = Field(default=None, gt=0)
 
 
 class TripRequestResponse(BaseModel):

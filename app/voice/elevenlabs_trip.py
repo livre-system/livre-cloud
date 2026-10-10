@@ -151,7 +151,7 @@ def _save_trip(
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, gross_fare,
                  status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, 'assigned', %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
