@@ -30,6 +30,7 @@ def driver_row(user_id, status, trip_status=None):
         "user_id": user_id,
         "active": True,
         "operational_status": status,
+        "session_active": True,
         "name": f"Driver {user_id}",
         "username": f"driver-{user_id}",
         "latitude": -38.7,
@@ -54,7 +55,7 @@ def test_snapshot_preserves_the_three_canonical_statuses():
 
     assert [item["operationalStatus"] for item in snapshot] == ["available", "unavailable", "out_of_service"]
     assert [item["operationalLabel"] for item in snapshot] == ["Disponible", "No disponible", "Fuera de servicio"]
-    assert all(item["source"] == "livre_driver_accounts+driver_vehicle_association+livi_trips" for item in snapshot)
+    assert all(item["source"] == "livre_driver_accounts+device_session+driver_vehicle_association+livi_trips" for item in snapshot)
 
 
 def test_snapshot_uses_the_persistent_driver_vehicle_association():
@@ -117,6 +118,18 @@ def test_crm_status_update_writes_the_canonical_value_returned_by_backend():
 
     assert result == {"status": "out_of_service"}
     assert cur.calls[0][1] == ("out_of_service", 42)
+
+
+def test_expired_session_has_no_presence_or_coordinates():
+    row = driver_row("expired", "available")
+    row.update({"session_active": False, "latitude": None, "longitude": None})
+
+    snapshot = _operational_snapshot(FakeCursor([[row]]))
+
+    assert snapshot[0]["sessionActive"] is False
+    assert snapshot[0]["lastPlace"] is None
+    assert snapshot[0]["lastSee"] is None
+    assert snapshot[0]["operationalStatus"] == "available"
 
 
 def test_schema_rejects_active_and_other_noncanonical_statuses():

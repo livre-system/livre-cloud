@@ -289,10 +289,22 @@ def _operational_snapshot(cur):
     cur.execute(
         """
         SELECT a.user_id, a.active, a.operational_status,
+               (a.active = TRUE
+                AND a.device_session_active = TRUE
+                AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes') AS session_active,
                u.name, u.username,
-               COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
-               COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
-               COALESCE(a.location_updated_at, active_trip.tracking_location_updated_at) AS location_updated_at,
+               CASE WHEN a.active = TRUE
+                          AND a.device_session_active = TRUE
+                          AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes'
+                    THEN a.current_latitude END AS latitude,
+               CASE WHEN a.active = TRUE
+                          AND a.device_session_active = TRUE
+                          AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes'
+                    THEN a.current_longitude END AS longitude,
+               CASE WHEN a.active = TRUE
+                          AND a.device_session_active = TRUE
+                          AND a.device_last_seen_at >= NOW() - INTERVAL '2 minutes'
+                    THEN a.location_updated_at END AS location_updated_at,
                COALESCE(driver_source.raw_payload->>'vehicleDomain', vehicle_source.raw_payload #>> '{identificationCard,domain}') AS associated_vehicle_plate,
                COALESCE(
                    NULLIF(trim(concat_ws(' ', driver_source.raw_payload->>'vehicleBrand', driver_source.raw_payload->>'vehicleModel')), ''),
@@ -341,6 +353,7 @@ def _operational_snapshot(cur):
         items.append({
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
+            "sessionActive": bool(row["session_active"]),
             "operationalStatus": operational_status,
             "operationalLabel": operational_label,
             "operationalState": state,
@@ -357,7 +370,7 @@ def _operational_snapshot(cur):
                 "model": row["associated_vehicle_model"],
                 "color": row["associated_vehicle_color"],
             },
-            "source": "livre_driver_accounts+driver_vehicle_association+livi_trips",
+            "source": "livre_driver_accounts+device_session+driver_vehicle_association+livi_trips",
         })
     return items
 
@@ -369,7 +382,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
-    available = sum(item["operationalStatus"] == "available" for item in drivers)
+    available = sum(item["sessionActive"] for item in drivers)
     unavailable = sum(item["operationalStatus"] == "unavailable" for item in drivers)
     out_of_service = sum(item["operationalStatus"] == "out_of_service" for item in drivers)
     return {
@@ -671,21 +684,8 @@ def create_live_client(payload: dict = Body(...), user: dict = Depends(require_a
 
 @router.get("/vehicle-owners")
 def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        result = reader.vehicle_owner_page(page=1, size=50, find=q.strip())
-        page_data = result.get("page", result)
-        items = list(page_data.get("content", [])) if isinstance(page_data, dict) else []
-        total_pages = int(page_data.get("totalPages", 1)) if isinstance(page_data, dict) else 1
-        for current_page in range(2, total_pages + 1):
-            next_result = reader.vehicle_owner_page(page=current_page, size=50, find=q.strip())
-            next_data = next_result.get("page", next_result)
-            items.extend(next_data.get("content", []) if isinstance(next_data, dict) else [])
-    for item in items:
-        owner_id = _find_provider_id(item, ("id", "vehicleOwnerId"))
-        if owner_id is not None:
-            cur.execute("""INSERT INTO magiis_crm_vehicle_owners (magiis_id, raw_payload) VALUES (%s, %s::jsonb) ON CONFLICT (magiis_id) DO UPDATE SET raw_payload=EXCLUDED.raw_payload, last_seen_at=now()""", (owner_id, json.dumps(item, separators=(",", ":"))))
-    return {"items": [{"magiis_id": item.get("id"), "raw_payload": item} for item in items], "total": len(items), "page": 1, "size": len(items)}
+    result = _local_page(cur, "magiis_crm_vehicle_owners", page, size, q)
+    return {key: result[key] for key in ("items", "total", "page", "size")}
 
 
 @router.post("/confirm-email")
@@ -730,6 +730,33 @@ def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict =
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
         return reader.update_vehicle(vehicle_id, payload)
+
+
+@router.get("/driver-shift-closures")
+def driver_shift_closures(
+    driver_user_id: str = Query(default="", max_length=120),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Consulta CRM de cierres persistidos en Livre, sin leer MAGIIS."""
+    where = "WHERE c.driver_user_id = %s" if driver_user_id.strip() else ""
+    params = [driver_user_id.strip()] if driver_user_id.strip() else []
+    cur.execute(
+        f"""SELECT c.id, c.driver_user_id, u.name AS driver_name, c.closure_date,
+                   c.closed_at, c.trip_count, c.total_revenue,
+                   c.vehicle_id, c.vehicle_label, c.vehicle_model, c.plate, c.owner_name,
+                   (SELECT count(*) FROM livre_driver_shift_closure_trips ct
+                    WHERE ct.closure_id = c.id) AS traced_trip_count
+            FROM livre_driver_shift_closures c
+            JOIN livre_users u ON u.id = c.driver_user_id
+            {where}
+            ORDER BY c.closure_date DESC, c.closed_at DESC
+            LIMIT %s OFFSET %s""",
+        params + [limit, offset],
+    )
+    return [dict(row) for row in cur.fetchall()]
 
 
 @router.get("/{resource}")

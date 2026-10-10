@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -20,6 +20,7 @@ DriverOperationalStatus = Literal["available", "unavailable", "out_of_service"]
 class LocationUpdate(BaseModel):
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
+    device_id: str
 
 
 class StatusUpdate(BaseModel):
@@ -68,6 +69,38 @@ class DriverTrip(PublicTrip):
     service_type_id: int | None = None
     service_type_name: str | None = None
     fare: float | None = None
+
+
+class DriverHistoryItem(DriverTrip):
+    completed_at: datetime | None = None
+
+
+class DriverHistoryResponse(BaseModel):
+    items: list[DriverHistoryItem]
+    total: int
+    total_revenue: float
+    date_from: date
+    date_to: date
+
+
+class DriverShiftClosureCreate(BaseModel):
+    closure_date: date
+
+
+class DriverShiftClosure(BaseModel):
+    id: str
+    driver_user_id: str
+    driver_name: str
+    closure_date: date
+    closed_at: datetime
+    trip_count: int
+    total_revenue: float
+    vehicle_id: str | None = None
+    vehicle_label: str | None = None
+    vehicle_model: str | None = None
+    plate: str | None = None
+    owner_name: str | None = None
+    pdf_url: str | None = None
 
 
 class TripMessageCreate(BaseModel):

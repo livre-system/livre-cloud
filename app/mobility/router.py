@@ -6,14 +6,20 @@ Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente
 import os
 import secrets
 import uuid
+from datetime import date, timedelta
+from decimal import Decimal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
 from app.mobility.schemas import (
     DriverTrip,
+    DriverHistoryItem,
+    DriverHistoryResponse,
+    DriverShiftClosure,
+    DriverShiftClosureCreate,
     DriverOperationalStatusResponse,
     DriverOperationalStatusUpdate,
     HandieMessageCreate,
@@ -28,6 +34,27 @@ from app.mobility.schemas import (
 from app.voice.elevenlabs_trip import send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
+
+
+def _active_device_session(cur, user: dict, device_id: str, *, require_fresh: bool = True):
+    try:
+        normalized = str(uuid.UUID(device_id.strip()))
+    except (AttributeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="device_id inválido") from exc
+    freshness = "AND device_last_seen_at >= NOW() - INTERVAL '2 minutes'" if require_fresh else ""
+    cur.execute(
+        f"""SELECT user_id
+           FROM livre_driver_accounts
+           WHERE user_id = %s
+             AND active = TRUE
+             AND active_device_id = %s
+             AND device_session_active = TRUE
+             {freshness}""",
+        (user["id"], normalized),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=401, detail="La sesión de dispositivo no está activa")
+    return normalized
 
 
 def _trip_or_404(cur, trip_id: int):
@@ -266,6 +293,63 @@ def _driver_trip(trip) -> DriverTrip:
     )
 
 
+def _history_item(trip) -> DriverHistoryItem:
+    return DriverHistoryItem(
+        **_driver_trip(trip).model_dump(),
+        completed_at=trip["completed_at"],
+    )
+
+
+def _closure_result(row, pdf_url: str | None = None) -> DriverShiftClosure:
+    return DriverShiftClosure(
+        id=str(row["id"]),
+        driver_user_id=str(row["driver_user_id"]),
+        driver_name=row["driver_name"],
+        closure_date=row["closure_date"],
+        closed_at=row["closed_at"],
+        trip_count=int(row["trip_count"]),
+        total_revenue=float(row["total_revenue"] or 0),
+        vehicle_id=row["vehicle_id"],
+        vehicle_label=row["vehicle_label"],
+        vehicle_model=row["vehicle_model"],
+        plate=row["plate"],
+        owner_name=row["owner_name"],
+        pdf_url=pdf_url,
+    )
+
+
+def _pdf_escape(value: object) -> str:
+    return str(value or "").replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _summary_pdf(lines: list[str]) -> bytes:
+    """Genera el resumen interno sin proveedor externo ni datos de comisión."""
+    stream_lines = ["BT", "/F1 11 Tf", "50 780 Td"]
+    for index, line in enumerate(lines):
+        if index:
+            stream_lines.append("0 -18 Td")
+        stream_lines.append(f"({_pdf_escape(line)}) Tj")
+    stream_lines.append("ET")
+    stream = "\n".join(stream_lines).encode("latin-1", "replace")
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for number, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    pdf.extend("".join(f"{offset:010d} 00000 n \n" for offset in offsets[1:]).encode())
+    pdf.extend(f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
+    return bytes(pdf)
+
+
 @router.get("/driver/operational-status", response_model=DriverOperationalStatusResponse)
 def get_driver_operational_status(
     cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
@@ -346,6 +430,193 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
         (user["id"], user["id"]),
     )
     return [_driver_trip(row) for row in cur.fetchall()]
+
+
+@router.get("/driver/history", response_model=DriverHistoryResponse)
+def driver_history(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Historial y recaudación desde livi_trips, aislado por conductor."""
+    end = date_to or date.today()
+    start = date_from or end
+    if start > end:
+        raise HTTPException(status_code=422, detail="date_from no puede ser posterior a date_to")
+    cur.execute(
+        """
+        SELECT t.id, t.origen, t.destino, t.status,
+               t.tracking_driver_name, t.tracking_plate,
+               t.tracking_vehicle_model, t.tracking_vehicle_color,
+               t.tracking_latitude, t.tracking_longitude,
+               t.tracking_location_updated_at, t.completed_at,
+               t.service_type_id, t.service_type_name, t.fare
+        FROM livi_trips t
+        WHERE t.assigned_driver_user_id = %s
+          AND t.status IN ('completed', 'cancelled')
+          AND COALESCE(t.completed_at, t.updated_at) >= %s::date
+          AND COALESCE(t.completed_at, t.updated_at) < (%s::date + INTERVAL '1 day')
+        ORDER BY COALESCE(t.completed_at, t.updated_at) DESC, t.id DESC
+        """,
+        (user["id"], start, end),
+    )
+    rows = cur.fetchall()
+    items = [_history_item(row) for row in rows]
+    return DriverHistoryResponse(
+        items=items,
+        total=len(items),
+        total_revenue=float(sum((row["fare"] or Decimal("0")) for row in rows if row["status"] == "completed")),
+        date_from=start,
+        date_to=end,
+    )
+
+
+def _closure_query(cur, closure_id, user_id=None):
+    predicate = "c.id = %s"
+    params = [closure_id]
+    if user_id is not None:
+        predicate += " AND c.driver_user_id = %s"
+        params.append(user_id)
+    cur.execute(
+        f"""
+        SELECT c.id, c.driver_user_id, u.name AS driver_name, c.closure_date,
+               c.closed_at, c.trip_count, c.total_revenue,
+               c.vehicle_id, c.vehicle_label, c.vehicle_model, c.plate, c.owner_name
+        FROM livre_driver_shift_closures c
+        JOIN livre_users u ON u.id = c.driver_user_id
+        WHERE {predicate}
+        """,
+        params,
+    )
+    return cur.fetchone()
+
+
+@router.get("/driver/shift-closures", response_model=list[DriverShiftClosure])
+def driver_shift_closures(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
+    cur.execute(
+        """
+        SELECT c.id, c.driver_user_id, u.name AS driver_name, c.closure_date,
+               c.closed_at, c.trip_count, c.total_revenue,
+               c.vehicle_id, c.vehicle_label, c.vehicle_model, c.plate, c.owner_name
+        FROM livre_driver_shift_closures c
+        JOIN livre_users u ON u.id = c.driver_user_id
+        WHERE c.driver_user_id = %s
+        ORDER BY c.closure_date DESC, c.closed_at DESC
+        """,
+        (user["id"],),
+    )
+    return [_closure_result(row) for row in cur.fetchall()]
+
+
+@router.post("/driver/shift-closures", response_model=DriverShiftClosure, status_code=201)
+def close_driver_shift(
+    payload: DriverShiftClosureCreate,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Persiste un único cierre diario por conductor y guarda sus viajes."""
+    lock_key = f"driver-shift:{user['id']}:{payload.closure_date.isoformat()}"
+    cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (lock_key,))
+    cur.execute(
+        "SELECT id FROM livre_driver_shift_closures WHERE driver_user_id = %s AND closure_date = %s",
+        (user["id"], payload.closure_date),
+    )
+    if cur.fetchone():
+        raise HTTPException(status_code=409, detail="shift already closed")
+    cur.execute(
+        """
+        SELECT count(*) AS trip_count,
+               COALESCE(sum(CASE WHEN status = 'completed' THEN fare ELSE 0 END), 0) AS total_revenue
+        FROM livi_trips
+        WHERE assigned_driver_user_id = %s AND status IN ('completed', 'cancelled')
+          AND COALESCE(completed_at, updated_at) >= %s::date
+          AND COALESCE(completed_at, updated_at) < (%s::date + INTERVAL '1 day')
+        """,
+        (user["id"], payload.closure_date, payload.closure_date),
+    )
+    totals = cur.fetchone()
+    cur.execute(
+        """
+        SELECT v.vehicle_id, v.vehicle_label, v.vehicle_model, v.plate, v.owner_name,
+               COALESCE(v.plate, t.tracking_plate) AS effective_plate
+        FROM livre_driver_vehicles v
+        LEFT JOIN LATERAL (
+            SELECT tracking_plate FROM livi_trips
+            WHERE assigned_driver_user_id = %s AND status IN ('completed', 'cancelled')
+              AND COALESCE(completed_at, updated_at) >= %s::date
+              AND COALESCE(completed_at, updated_at) < (%s::date + INTERVAL '1 day')
+            ORDER BY COALESCE(completed_at, updated_at) DESC LIMIT 1
+        ) t ON TRUE
+        WHERE v.driver_user_id = %s AND v.is_primary = TRUE
+        ORDER BY v.updated_at DESC LIMIT 1
+        """,
+        (user["id"], payload.closure_date, payload.closure_date, user["id"]),
+    )
+    vehicle = cur.fetchone() or {}
+    cur.execute(
+        """
+        INSERT INTO livre_driver_shift_closures
+            (driver_user_id, closure_date, trip_count, total_revenue,
+             vehicle_id, vehicle_label, vehicle_model, plate, owner_name)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, %s), %s)
+        RETURNING id
+        """,
+        (user["id"], payload.closure_date, totals["trip_count"], totals["total_revenue"],
+         vehicle.get("vehicle_id"), vehicle.get("vehicle_label"), vehicle.get("vehicle_model"),
+         vehicle.get("plate"), vehicle.get("effective_plate"), vehicle.get("owner_name")),
+    )
+    closure_id = cur.fetchone()["id"]
+    cur.execute(
+        """
+        INSERT INTO livre_driver_shift_closure_trips (closure_id, trip_id, fare)
+        SELECT %s, id, fare
+        FROM livi_trips
+        WHERE assigned_driver_user_id = %s AND status IN ('completed', 'cancelled')
+          AND COALESCE(completed_at, updated_at) >= %s::date
+          AND COALESCE(completed_at, updated_at) < (%s::date + INTERVAL '1 day')
+        """,
+        (closure_id, user["id"], payload.closure_date, payload.closure_date),
+    )
+    row = _closure_query(cur, closure_id, user["id"])
+    return _closure_result(row, f"/mobility/driver/shift-closures/{closure_id}/pdf")
+
+
+@router.get("/driver/shift-closures/{closure_id}/pdf")
+def driver_shift_closure_pdf(
+    closure_id: str,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    row = _closure_query(cur, closure_id, user["id"])
+    if not row:
+        raise HTTPException(status_code=404, detail="Cierre no encontrado")
+    cur.execute(
+        """SELECT t.id, t.origen, t.destino, ct.fare
+           FROM livre_driver_shift_closure_trips ct
+           JOIN livi_trips t ON t.id = ct.trip_id
+           WHERE ct.closure_id = %s ORDER BY t.id""",
+        (closure_id,),
+    )
+    trip_rows = cur.fetchall()
+    cur.execute("UPDATE livre_driver_shift_closures SET pdf_generated_at = NOW() WHERE id = %s", (closure_id,))
+    lines = [
+        "Livre - Resumen diario del conductor",
+        f"Conductor: {row['driver_name']}",
+        f"Vehiculo: {row['vehicle_model'] or row['vehicle_label'] or 'No informado'}",
+        f"Patente: {row['plate'] or 'No informada'}",
+        f"Propietario: {row['owner_name'] or 'No informado'}",
+        f"Fecha: {row['closure_date'].isoformat()}",
+        f"Cantidad de viajes: {row['trip_count']}",
+        f"Recaudacion: ARS {row['total_revenue'] or 0}",
+        "Detalle de viajes:",
+    ]
+    lines.extend(f"#{trip['id']} {trip['origen']} -> {trip['destino']} | ARS {trip['fare'] or 0}" for trip in trip_rows)
+    return Response(
+        content=_summary_pdf(lines),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="livre-cierre-{row["closure_date"]}.pdf"'},
+    )
 
 
 @router.get("/driver/trips/{trip_id}/messages")
@@ -549,10 +820,13 @@ def driver_update_status(
     if previous_status != "assigned" or payload.status != "arriving":
         cur.execute(
             """
-            UPDATE livi_trips SET status = %s, updated_at = NOW()
+            UPDATE livi_trips
+            SET status = %s,
+                completed_at = CASE WHEN %s = 'completed' THEN NOW() ELSE completed_at END,
+                updated_at = NOW()
             WHERE id = %s AND assigned_driver_user_id = %s
             """,
-            (payload.status, trip_id, user["id"]),
+            (payload.status, payload.status, trip_id, user["id"]),
         )
     elif trip["status"] == "assigned":
         cur.execute(
@@ -593,6 +867,7 @@ def driver_update_live_location(
     user: dict = Depends(require_auth),
 ):
     """Stores the driver's latest GPS position even without an active trip."""
+    device_id = _active_device_session(cur, user, payload.device_id)
     cur.execute(
         """
         UPDATE livre_driver_accounts
@@ -601,32 +876,50 @@ def driver_update_live_location(
             location_updated_at = NOW(),
             updated_at = NOW()
         WHERE user_id = %s AND active = TRUE
+          AND active_device_id = %s
+          AND device_session_active = TRUE
         RETURNING user_id, location_updated_at
         """,
-        (payload.latitude, payload.longitude, user["id"]),
+        (payload.latitude, payload.longitude, user["id"], device_id),
     )
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=403, detail="La cuenta de conductor no está activa")
+    cur.execute(
+        """UPDATE livre_driver_accounts
+           SET device_last_seen_at = NOW(), updated_at = NOW()
+           WHERE user_id = %s AND active_device_id = %s AND device_session_active = TRUE""",
+        (user["id"], device_id),
+    )
     return {"status": "updated", "location_updated_at": row["location_updated_at"]}
 
 
 @router.delete("/driver/location")
 def driver_clear_live_location(
+    device_id: str | None = Header(default=None, alias="X-Device-ID"),
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_auth),
 ):
     """Clears only the authenticated driver's current device location on logout."""
+    normalized_device_id = None
+    if device_id:
+        normalized_device_id = _active_device_session(cur, user, device_id, require_fresh=False)
     cur.execute(
         """
         UPDATE livre_driver_accounts
         SET current_latitude = NULL,
             current_longitude = NULL,
-            location_updated_at = NULL
+            location_updated_at = NULL,
+            device_session_active = CASE WHEN %s IS NULL THEN device_session_active ELSE FALSE END,
+            active_device_id = CASE WHEN %s IS NULL THEN active_device_id ELSE NULL END,
+            device_last_seen_at = CASE WHEN %s IS NULL THEN device_last_seen_at ELSE NULL END,
+            updated_at = NOW()
         WHERE user_id = %s AND active = TRUE
+          AND (%s IS NULL OR active_device_id = %s)
         RETURNING user_id
         """,
-        (user["id"],),
+        (normalized_device_id, normalized_device_id, normalized_device_id,
+         user["id"], normalized_device_id, normalized_device_id),
     )
     row = cur.fetchone()
     if not row:
@@ -642,6 +935,7 @@ def driver_update_location(
     user: dict = Depends(require_auth),
 ):
     """Stores GPS only for a trip assigned to the authenticated driver."""
+    _active_device_session(cur, user, payload.device_id)
     _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
         """

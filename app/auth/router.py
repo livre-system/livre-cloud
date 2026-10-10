@@ -19,6 +19,7 @@ class RegisterBody(BaseModel):
 class LoginBody(BaseModel):
     username: str
     password: str
+    device_id: str | None = None
 
 
 class DriverRegisterBody(RegisterBody):
@@ -33,6 +34,15 @@ def _hash_password(plain: str) -> str:
 
 def _verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+def _normalize_device_id(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        return str(uuid.UUID(value.strip()))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="device_id inválido") from exc
 
 
 # ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -78,6 +88,12 @@ def register_driver(body: DriverRegisterBody):
 @router.post("/driver/login")
 def login_driver(body: LoginBody):
     """Autentica únicamente cuentas habilitadas como choferes locales."""
+    device_id = _normalize_device_id(body.device_id)
+    if device_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Cliente no compatible: device_id es obligatorio para iniciar sesión como conductor",
+        )
     with get_cursor() as cur:
         cur.execute(
             """
@@ -92,6 +108,30 @@ def login_driver(body: LoginBody):
 
     if not user or not _verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciales de conductor inválidas")
+
+    with get_cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (device_id,))
+        cur.execute(
+            """UPDATE livre_driver_accounts
+               SET device_session_active = FALSE,
+                   active_device_id = NULL,
+                   device_last_seen_at = NULL,
+                   current_latitude = NULL,
+                   current_longitude = NULL,
+                   location_updated_at = NULL,
+                   updated_at = NOW()
+               WHERE active_device_id = %s AND device_session_active = TRUE""",
+            (device_id,),
+        )
+        cur.execute(
+            """UPDATE livre_driver_accounts
+               SET device_session_active = TRUE,
+                   active_device_id = %s,
+                   device_last_seen_at = NOW(),
+                   updated_at = NOW()
+               WHERE user_id = %s AND active = TRUE""",
+            (device_id, user["id"]),
+        )
 
     token = create_token(id=user["id"], name=user["name"], email=user["username"])
     return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"]}}
