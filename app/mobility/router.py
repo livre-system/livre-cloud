@@ -8,7 +8,7 @@ import secrets
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
@@ -28,6 +28,19 @@ from app.mobility.schemas import (
 from app.voice.elevenlabs_trip import send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
+
+
+def _require_current_driver_device(cur, user: dict, device_id: str | None) -> None:
+    """Reject GPS from a stale token or a different device installation."""
+    if not device_id or device_id != user.get("device_id"):
+        raise HTTPException(status_code=401, detail="Sesión de dispositivo inválida")
+    cur.execute(
+        "SELECT active_device_id FROM livre_driver_accounts WHERE user_id = %s AND active = TRUE",
+        (user["id"],),
+    )
+    row = cur.fetchone()
+    if not row or row["active_device_id"] != device_id:
+        raise HTTPException(status_code=401, detail="Sesión de dispositivo reemplazada")
 
 
 def _trip_or_404(cur, trip_id: int):
@@ -332,7 +345,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                 EXISTS (
                     SELECT 1 FROM livre_driver_accounts active_driver
                     WHERE active_driver.user_id = %s
-                      AND active_driver.operational_status <> 'out_of_service'
+                      AND active_driver.operational_status = 'available'
                       AND (active_driver.active = TRUE
                            OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
                 )
@@ -535,7 +548,7 @@ def driver_update_status(
               AND t.status = 'assigned'
               AND t.assigned_driver_user_id IS NULL
               AND a.user_id = %s
-              AND a.operational_status <> 'out_of_service'
+              AND a.operational_status = 'available'
               AND (a.active = TRUE
                    OR a.location_updated_at >= NOW() - INTERVAL '2 minutes')
             RETURNING t.id
@@ -593,6 +606,7 @@ def driver_update_live_location(
     user: dict = Depends(require_auth),
 ):
     """Stores the driver's latest GPS position even without an active trip."""
+    _require_current_driver_device(cur, user, payload.device_id)
     cur.execute(
         """
         UPDATE livre_driver_accounts
@@ -615,14 +629,18 @@ def driver_update_live_location(
 def driver_clear_live_location(
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_auth),
+    x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
 ):
     """Clears only the authenticated driver's current device location on logout."""
+    _require_current_driver_device(cur, user, x_device_id)
     cur.execute(
         """
         UPDATE livre_driver_accounts
         SET current_latitude = NULL,
             current_longitude = NULL,
-            location_updated_at = NULL
+            location_updated_at = NULL,
+            active_device_id = NULL,
+            device_session_updated_at = NOW()
         WHERE user_id = %s AND active = TRUE
         RETURNING user_id
         """,
@@ -642,6 +660,7 @@ def driver_update_location(
     user: dict = Depends(require_auth),
 ):
     """Stores GPS only for a trip assigned to the authenticated driver."""
+    _require_current_driver_device(cur, user, payload.device_id)
     _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
         """

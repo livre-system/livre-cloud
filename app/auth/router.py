@@ -19,6 +19,7 @@ class RegisterBody(BaseModel):
 class LoginBody(BaseModel):
     username: str
     password: str
+    device_id: str | None = None
 
 
 class DriverRegisterBody(RegisterBody):
@@ -77,7 +78,11 @@ def register_driver(body: DriverRegisterBody):
 
 @router.post("/driver/login")
 def login_driver(body: LoginBody):
-    """Autentica únicamente cuentas habilitadas como choferes locales."""
+    """Autentica una cuenta de conductor y vincula la sesión al dispositivo."""
+    device_id = (body.device_id or "").strip()
+    if not device_id:
+        raise HTTPException(status_code=400, detail="Falta la identidad del dispositivo")
+
     with get_cursor() as cur:
         cur.execute(
             """
@@ -89,11 +94,16 @@ def login_driver(body: LoginBody):
             [body.username.strip()],
         )
         user = cur.fetchone()
+        if not user or not _verify_password(body.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Credenciales de conductor inválidas")
+        cur.execute(
+            """UPDATE livre_driver_accounts
+               SET active_device_id = %s, device_session_updated_at = NOW(), updated_at = NOW()
+               WHERE user_id = %s AND active = TRUE""",
+            [device_id, user["id"]],
+        )
 
-    if not user or not _verify_password(body.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Credenciales de conductor inválidas")
-
-    token = create_token(id=user["id"], name=user["name"], email=user["username"])
+    token = create_token(id=user["id"], name=user["name"], email=user["username"], device_id=device_id)
     return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"]}}
 
 

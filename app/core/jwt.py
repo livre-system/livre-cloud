@@ -5,13 +5,15 @@ from typing import Optional
 from app.core.config import JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRE_MINUTES
 
 
-def create_token(id: str, name: str, email: str) -> str:
+def create_token(id: str, name: str, email: str, device_id: str | None = None) -> str:
     payload = {
         "sub": id,
         "name": name,
         "email": email,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRE_MINUTES),
     }
+    if device_id:
+        payload["device_id"] = device_id
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
@@ -34,4 +36,5 @@ def require_auth(authorization: Optional[str] = Header(default=None)) -> dict:
         "id": payload.get("sub"),
         "name": payload.get("name"),
         "email": payload.get("email"),
+        "device_id": payload.get("device_id"),
     }
