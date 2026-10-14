@@ -299,3 +299,14 @@ Pendientes explícitos:
 - No se hizo deploy, no se ejecutó SQL, no se generó APK y no se modificó Vercel.
 - `livre-cloud/app/main.py` ya permite los orígenes Railway conocidos, pero todavía no incluye el CRM Railway.
 - Para completar CORS se necesita conocer el dominio público Railway definitivo del servicio CRM, como origen HTTPS exacto. No modificar `allow_origins` hasta contar con ese dato.
+
+## Diagnóstico GPS nativo en Redmi confirmado (2026-10-14)
+
+- La APK diagnóstica activa es `livre-conductor/dist/app-debug.apk`, paquete `com.livre.conductor.diagnostic`; no se generó ni reinstaló otra APK durante esta verificación.
+- En el Redmi, Google Play Services está disponible y Fused acepta solicitudes `PRIORITY_HIGH_ACCURACY`; una solicitud aceptada no garantiza que exista un fix para entregar.
+- La señal GNSS puede quedar temporalmente sin fix: el proveedor GPS llegó a informar `satellites=0`, `maxCn0=0`, `meanCn0=0`, y Maps tampoco mostró inicialmente una ubicación actual.
+- La causa no es un rechazo de permisos ni un fallo permanente de Fused. El sistema tenía ubicación habilitada (`location_mode=3`) y permisos concedidos; Maps llegó a advertir que la Precisión de la ubicación debía activarse.
+- La prueba repetida del 2026-10-14 confirmó recuperación sin modificar código, APK ni producción: Fused activó el fallback GPS, luego entregó callbacks con precisión `23.6 m` y `14.616 m`, y la app obtuvo `POST /mobility/driver/location HTTP 200` en dos ocasiones.
+- La pantalla de Livre mostró marcador verde actual y estado `Disponible` después de recuperar señal.
+- Comparación importante: la sesión anterior también tuvo callback válido de `7.1 m` y luego `lose location`; el comportamiento es intermitente y depende de que el Redmi consiga un fix GNSS/Fused, no de que la solicitud sea aceptada.
+- Para nuevos diagnósticos de GPS, primero revisar Google Play Services, Maps, `dumpsys location` y Logcat; no generar APK ni cambiar configuración/producción hasta separar señal, estado del dispositivo y código.
