@@ -60,6 +60,28 @@ def get_cursor_dep():
 
 
 
+
+def _assert_driver_device_sessions_schema(cur) -> None:
+    """Falla el arranque si la migración de sesiones no dejó el esquema listo."""
+    cur.execute(
+        "SELECT to_regclass('public.livre_driver_device_sessions') AS table_name"
+    )
+    row = cur.fetchone()
+    if row is None:
+        table_name = None
+    else:
+        try:
+            table_name = row["table_name"]
+        except (TypeError, KeyError, IndexError):
+            table_name = row[0]
+    if table_name != "livre_driver_device_sessions":
+        raise RuntimeError(
+            "[MIGRATIONS] Esquema incompleto: falta la tabla "
+            "public.livre_driver_device_sessions. "
+            "El backend no puede iniciar hasta aplicar las migraciones."
+        )
+
+
 def run_migrations():
     """Ejecuta scripts .sql en app/migrations/ que no se hayan aplicado aún."""
     import os
@@ -98,6 +120,8 @@ def run_migrations():
                 
                 cur.execute("INSERT INTO schema_migrations (version) VALUES (%s)", [f])
                 log.info(f"[MIGRATIONS] Aplicado {f} exitosamente")
+
+            _assert_driver_device_sessions_schema(cur)
 
 
 def init_db() -> None:

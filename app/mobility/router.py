@@ -31,16 +31,21 @@ router = APIRouter(prefix="/mobility", tags=["mobility"])
 
 
 def _require_current_driver_device(cur, user: dict, device_id: str | None) -> None:
-    """Reject GPS from a stale token or a different device installation."""
+    """Require a valid JWT device bound to its own active driver session."""
     if not device_id or device_id != user.get("device_id"):
         raise HTTPException(status_code=401, detail="Sesión de dispositivo inválida")
     cur.execute(
-        "SELECT active_device_id FROM livre_driver_accounts WHERE user_id = %s AND active = TRUE",
-        (user["id"],),
+        """SELECT s.user_id, s.device_id
+           FROM livre_driver_device_sessions s
+           JOIN livre_driver_accounts a ON a.user_id = s.user_id
+           WHERE s.user_id = %s
+             AND s.device_id = %s
+             AND s.active = TRUE
+             AND a.active = TRUE""",
+        (user["id"], device_id),
     )
-    row = cur.fetchone()
-    if not row or row["active_device_id"] != device_id:
-        raise HTTPException(status_code=401, detail="Sesión de dispositivo reemplazada")
+    if not cur.fetchone():
+        raise HTTPException(status_code=401, detail="Sesión de dispositivo revocada")
 
 
 def _trip_or_404(cur, trip_id: int):
@@ -634,21 +639,24 @@ def driver_clear_live_location(
     """Clears only the authenticated driver's current device location on logout."""
     _require_current_driver_device(cur, user, x_device_id)
     cur.execute(
-        """
-        UPDATE livre_driver_accounts
-        SET current_latitude = NULL,
-            current_longitude = NULL,
-            location_updated_at = NULL,
-            active_device_id = NULL,
-            device_session_updated_at = NOW()
-        WHERE user_id = %s AND active = TRUE
-        RETURNING user_id
-        """,
+        """UPDATE livre_driver_accounts
+           SET current_latitude = NULL,
+               current_longitude = NULL,
+               location_updated_at = NULL,
+               updated_at = NOW()
+           WHERE user_id = %s AND active = TRUE
+           RETURNING user_id""",
         (user["id"],),
     )
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=403, detail="La cuenta de conductor no está activa")
+    cur.execute(
+        """UPDATE livre_driver_device_sessions
+           SET active = FALSE, revoked_at = NOW(), last_seen_at = NOW()
+           WHERE user_id = %s AND device_id = %s AND active = TRUE""",
+        (user["id"], x_device_id),
+    )
     return {"status": "cleared"}
 
 

@@ -97,10 +97,12 @@ def login_driver(body: LoginBody):
         if not user or not _verify_password(body.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="Credenciales de conductor inválidas")
         cur.execute(
-            """UPDATE livre_driver_accounts
-               SET active_device_id = %s, device_session_updated_at = NOW(), updated_at = NOW()
-               WHERE user_id = %s AND active = TRUE""",
-            [device_id, user["id"]],
+            """INSERT INTO livre_driver_device_sessions
+                   (user_id, device_id, active, created_at, last_seen_at, revoked_at)
+               VALUES (%s, %s, TRUE, NOW(), NOW(), NULL)
+               ON CONFLICT (user_id, device_id) DO UPDATE
+               SET active = TRUE, last_seen_at = NOW(), revoked_at = NULL""",
+            [user["id"], device_id],
         )
 
     token = create_token(id=user["id"], name=user["name"], email=user["username"], device_id=device_id)
