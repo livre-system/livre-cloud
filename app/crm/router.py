@@ -2,7 +2,7 @@
 import json
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
@@ -338,9 +338,14 @@ def _operational_snapshot(cur):
         }[operational_status]
         state = "EN VIAJE" if busy else operational_label
         driver_name = row["name"] or row["username"] or "Conductor"
+        last_seen = row["location_updated_at"]
+        if last_seen and last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        session_active = bool(last_seen and last_seen >= datetime.now(timezone.utc) - timedelta(minutes=2))
         items.append({
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
+            "sessionActive": session_active,
             "operationalStatus": operational_status,
             "operationalLabel": operational_label,
             "operationalState": state,
