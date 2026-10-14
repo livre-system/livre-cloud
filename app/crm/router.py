@@ -284,7 +284,7 @@ def update_trip_tracking(
     return {"status": "updated", "trip_id": trip_id, "location_visible_at": row[0]}
 
 
-def _operational_snapshot(cur):
+def _operational_snapshot(cur, viewer_user_id: str | None = None):
     """Returns one consistent Livre snapshot of accounts, trips and GPS."""
     cur.execute(
         """
@@ -322,10 +322,10 @@ def _operational_snapshot(cur):
             ORDER BY t.updated_at DESC NULLS LAST, t.id DESC
             LIMIT 1
         ) active_trip ON TRUE
-        WHERE a.user_id <> ALL(%s)
+        WHERE a.user_id <> ALL(%s) OR a.user_id = %s
         ORDER BY u.name NULLS LAST, a.user_id
         """,
-        (list(_HIDDEN_GPS_DRIVER_USER_IDS),),
+        (list(_HIDDEN_GPS_DRIVER_USER_IDS), viewer_user_id),
     )
     items = []
     for row in cur.fetchall():
@@ -370,7 +370,7 @@ def _operational_snapshot(cur):
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     """Returns the current Livre operational snapshot."""
-    drivers = _operational_snapshot(cur)
+    drivers = _operational_snapshot(cur, user.get("id"))
     cur.execute("SELECT count(*) AS total FROM livi_trips")
     travels = int(cur.fetchone()["total"])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
