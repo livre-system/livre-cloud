@@ -19,6 +19,22 @@ Contexto vivo para trabajar en Livre Cloud con Hermes. Este archivo describe el 
 
 Ubicación habitual: `/home/calambre/Documentos/Clientes/Livre/`.
 
+## Orden operativo: WEB HTTPS antes que APK
+
+- El orden obligatorio es verificar y corregir primero el flujo web por HTTPS en producción, y recién después evaluar la APK.
+- La validación inicial debe hacerse en un navegador normal, sin APK ni WebView, comprobando polling, respuestas HTTP y actualización del DOM en primer plano, sin F5, minimización ni reapertura.
+- Solo cuando el flujo web funcione automáticamente se investiga la APK y el GPS nativo.
+- No generar viajes de prueba ni APK por cuenta propia. Toda APK nueva requiere una limitación técnica real que no pueda resolverse remotamente y autorización explícita.
+
+## Links de producción
+
+- **Livre Conductor — web principal:** https://livre-conductor-production.up.railway.app/ — login y panel del conductor, viajes asignados, estados y ubicación.
+- **Livre Chat:** https://livre-chatbot-production.up.railway.app/ — chat/IA y CRM para pedidos y conversaciones.
+- **Livre Pasajeros:** https://livre-pasajeros-production.up.railway.app/ — solicitud y seguimiento de viajes.
+- **Livre Cloud:** https://livre-cloud-production.up.railway.app/ — backend/API central; no es una pantalla web.
+
+Aliases históricos o alternativos: `https://livre-chatbot.vercel.app/`, `https://livre-pasajeros.vercel.app/` y `https://livre-system.github.io/`. Verificarlos antes de usarlos como URLs principales.
+
 ## Accesos operativos disponibles
 
 - GitHub: `git` y `gh` para revisar repositorios, commits, ramas, issues, PRs y publicar cambios autorizados.
