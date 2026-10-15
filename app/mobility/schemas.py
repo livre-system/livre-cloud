@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -41,8 +40,6 @@ class TripRequest(BaseModel):
     destination: str = Field(min_length=3, max_length=240)
     passenger: str = Field(default="Pasajero de prueba", min_length=2, max_length=120)
     whatsapp_user: str = Field(default="web-test", min_length=2, max_length=120)
-    fare: Decimal = Field(gt=0)
-    service_type_id: int | None = Field(default=None, ge=1)
 
 
 class TripRequestResponse(BaseModel):
@@ -88,11 +85,6 @@ class DriverHistoryItem(BaseModel):
     completed_at: datetime | None = None
     fare: float | None = None
     driver_fare: float | None = None
-    original_fare: float | None = None
-    discount_percentage: float | None = None
-    discount_amount: float | None = None
-    final_fare: float | None = None
-    fare_source: str | None = None
 
 
 class DriverHistoryResponse(BaseModel):

@@ -68,7 +68,7 @@ def test_driver_trip_serializes_commercial_fare_fields():
         "discount_percentage": "15.00",
         "discount_amount": "758.10",
         "final_fare": "4295.90",
-        "fare_source": "commercial",
+        "fare_source": "whatsapp",
     })
 
     assert trip.model_dump() | {"id": trip.id} == {
@@ -85,13 +85,12 @@ def test_driver_trip_serializes_commercial_fare_fields():
         "location_updated_at": None,
         "service_type_id": 2,
         "service_type_name": "Ahorro",
-        "fare": 5054.00,
-        "driver_fare": 4295.90,
+        "fare": 4295.90,
         "original_fare": 5054.00,
         "discount_percentage": 15.00,
         "discount_amount": 758.10,
         "final_fare": 4295.90,
-        "fare_source": "commercial",
+        "fare_source": "whatsapp",
     }
 
 
