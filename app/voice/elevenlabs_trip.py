@@ -34,7 +34,12 @@ from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
 from app.integrations import magiis_web
 from app.integrations.google_maps import geocode_address, route_distance_km
-from app.integrations.historical_quote import historical_options
+from app.integrations.historical_quote import (
+    FARE_SOURCE_COMMERCIAL,
+    apply_commercial_discount,
+    commercial_fare,
+    historical_options,
+)
 from app.integrations.magiis_quotes import persist_quote_response
 
 log = logging.getLogger(__name__)
@@ -180,7 +185,17 @@ def _save_trip(
     final_fare: Decimal | None = None,
     fare_source: str | None = None,
 ) -> tuple[int, str]:
-    """Inserta el viaje y devuelve el id y token privado de seguimiento."""
+    """Inserta un viaje con la semántica financiera canónica de Livre."""
+    if original_fare is not None or fare is not None:
+        official_fare = original_fare if original_fare is not None else Decimal(str(fare))
+        financials = commercial_fare(official_fare)
+        fare = financials["original_fare"]
+        original_fare = financials["original_fare"]
+        discount_percentage = financials["discount_percentage"]
+        discount_amount = financials["discount_amount"]
+        final_fare = financials["final_fare"]
+        fare_source = FARE_SOURCE_COMMERCIAL
+
     tracking_token = secrets.token_urlsafe(32)
     with get_cursor() as cur:
         cur.execute(
@@ -380,13 +395,14 @@ def _run_local_quote(origen: str, destino: str) -> dict:
         origin = geocode_address(origen)
         destination = geocode_address(destino)
         distance_km = route_distance_km(origin, destination)
-        options = historical_options(Decimal(str(distance_km)))
+        options = [
+            apply_commercial_discount(item)
+            for item in historical_options(Decimal(str(distance_km)))
+            if str(item.get("transportTypeId")) in {"1", "2"}
+        ]
         return {
-            "price": next(item["price"] for item in options if item["transportTypeId"] == "2"),
-            "options": [
-                item for item in options
-                if item["transportTypeId"] in {"1", "2"}
-            ],
+            "price": next(item["finalFare"] for item in options if item["transportTypeId"] == "2"),
+            "options": options,
             "locations": {"origin": origin, "destination": destination},
             "distance_km": distance_km,
             "source": "historical_quotes",
@@ -438,7 +454,7 @@ async def elevenlabs_quote(request: Request):
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
     )[:2]]
     option_text = " ".join(
-        f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['price']}."
+        f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['finalFare']}."
         for index, option in enumerate(options, 1)
     )
     quote_id = _save_whatsapp_quote(
@@ -745,14 +761,14 @@ async def elevenlabs_trip(request: Request):
             whatsapp_user=whatsapp_user,
             tool_call_id=tool_call_id,
             service_type_id=service_type_id,
-            fare=fare_value,
+            fare=original_fare,
             service_type_name=service_type_name,
             quote_id=quote_id,
             original_fare=original_fare,
             discount_percentage=discount_percentage,
             discount_amount=discount_amount,
             final_fare=final_fare,
-            fare_source="official",
+            fare_source=FARE_SOURCE_COMMERCIAL,
         )
         if quote_id:
             with get_cursor() as cur:
