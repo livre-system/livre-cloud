@@ -243,7 +243,9 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                    WHEN 2 THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare
+               COALESCE(t.final_fare, t.fare, selected_quote.price_point_to_point) AS fare,
+               t.original_fare, t.discount_percentage, t.discount_amount,
+               t.final_fare, t.fare_source
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         LEFT JOIN LATERAL (
@@ -334,7 +336,9 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                    WHEN 2 THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare
+               COALESCE(t.final_fare, t.fare, selected_quote.price_point_to_point) AS fare,
+               t.original_fare, t.discount_percentage, t.discount_amount,
+               t.final_fare, t.fare_source
         FROM livi_trips t
         LEFT JOIN LATERAL (
             SELECT q.transport_type_id, q.price_point_to_point

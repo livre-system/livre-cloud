@@ -21,9 +21,11 @@ Idempotente: un conversation_id = un viaje. Si ElevenLabs reintenta, devuelve OK
 El registro y el seguimiento son propios de Livre; MAGIIS no participa.
 """
 
+import json
 import logging
 import os
 import secrets
+import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -32,7 +34,7 @@ from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
 from app.integrations import magiis_web
 from app.integrations.google_maps import geocode_address, route_distance_km
-from app.integrations.historical_quote import historical_options
+from app.integrations.historical_quote import apply_whatsapp_discount, historical_options
 from app.integrations.magiis_quotes import persist_quote_response
 
 log = logging.getLogger(__name__)
@@ -130,6 +132,38 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
         return None
 
 
+def _save_whatsapp_quote(
+    *, conversation_id: str, whatsapp_user: str, origen: str, destino: str,
+    options: list[dict],
+) -> str:
+    quote_id = str(uuid.uuid4())
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO livi_whatsapp_quotes
+                (quote_id, conversation_id, whatsapp_user, origen, destino, options)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (quote_id, conversation_id, whatsapp_user, origen, destino, json.dumps(options)),
+        )
+    return quote_id
+
+
+def _get_whatsapp_quote(quote_id: str, conversation_id: str, whatsapp_user: str) -> dict | None:
+    with get_cursor() as cur:
+        cur.execute(
+            """
+            SELECT quote_id, origen, destino, options
+            FROM livi_whatsapp_quotes
+            WHERE quote_id = %s AND conversation_id = %s AND whatsapp_user = %s
+              AND source = 'whatsapp' AND consumed_at IS NULL AND expires_at > NOW()
+            FOR UPDATE
+            """,
+            (quote_id, conversation_id, whatsapp_user),
+        )
+        return cur.fetchone()
+
+
 def _save_trip(
     conversation_id: str,
     origen: str,
@@ -137,8 +171,14 @@ def _save_trip(
     whatsapp_user: str = "",
     tool_call_id: str = "",
     service_type_id: str = "2",
-    fare: int | None = None,
+    fare: Decimal | int | None = None,
     service_type_name: str | None = None,
+    quote_id: str | None = None,
+    original_fare: Decimal | None = None,
+    discount_percentage: Decimal | None = None,
+    discount_amount: Decimal | None = None,
+    final_fare: Decimal | None = None,
+    fare_source: str | None = None,
 ) -> tuple[int, str]:
     """Inserta el viaje y devuelve el id y token privado de seguimiento."""
     tracking_token = secrets.token_urlsafe(32)
@@ -148,9 +188,10 @@ def _save_trip(
             INSERT INTO livi_trips
                 (conversation_id, origen, destino, whatsapp_user, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
-                 service_type_id, service_type_name, fare,
+                 service_type_id, service_type_name, fare, quote_id,
+                 original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, 'assigned', %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
@@ -160,9 +201,16 @@ def _save_trip(
                 whatsapp_user or "",
                 tool_call_id or "",
                 tracking_token,
+                None,
                 service_type_id,
                 service_type_name,
                 fare,
+                quote_id,
+                original_fare,
+                discount_percentage,
+                discount_amount,
+                final_fare,
+                fare_source,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
@@ -365,11 +413,13 @@ async def elevenlabs_quote(request: Request):
     destino = (
         parameters.get("destino") or body.get("destino") or data.get("destino") or ""
     ).strip()
-    whatsapp_user = (
-        parameters.get("whatsapp_user")
-        or body.get("whatsapp_user")
-        or data.get("whatsapp_user")
-        or ""
+    whatsapp_user = _whatsapp_user(body, parameters, data)
+    conversation_id = str(
+        body.get("conversation_id")
+        or parameters.get("conversation_id")
+        or data.get("conversation_id")
+        or body.get("tool_call_id")
+        or uuid.uuid4()
     ).strip()
 
     log.info(
@@ -384,17 +434,27 @@ async def elevenlabs_quote(request: Request):
     quote = _run_local_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
-    options = sorted(
+    options = [apply_whatsapp_discount(option) for option in sorted(
         quote.get("options", []),
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
-    )[:2]
+    )[:2]]
     option_text = " ".join(
         f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['price']}."
         for index, option in enumerate(options, 1)
     )
+    quote_id = _save_whatsapp_quote(
+        conversation_id=conversation_id,
+        whatsapp_user=whatsapp_user,
+        origen=origen,
+        destino=destino,
+        options=options,
+    )
     return {
         "result": f"Tengo dos cotizaciones. {option_text}",
         "options": options,
+        "quote_id": quote_id,
+        "conversation_id": conversation_id,
+        "source": "whatsapp",
         "locations": quote.get("locations", {}),
     }
 
@@ -599,6 +659,12 @@ async def elevenlabs_trip(request: Request):
         or data.get("fare")
         or data.get("price")
     )
+    quote_id = str(
+        parameters.get("quote_id")
+        or body.get("quote_id")
+        or data.get("quote_id")
+        or ""
+    ).strip() or None
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
 
@@ -638,23 +704,38 @@ async def elevenlabs_trip(request: Request):
 
     # ── 5. Guardar el viaje ──────────────────────────────────────────────────
     try:
-        quote = _run_local_quote(origen, destino)
-        if quote.get("error"):
-            raise RuntimeError(f"No se pudo reconstruir la cotización confirmada: {quote['error']}")
-        selected = next(
-            (item for item in quote["options"]
-             if str(item.get("transportTypeId")) == service_type_id),
-            None,
-        )
+        quote_snapshot = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user) if quote_id else None
+        if quote_id and not quote_snapshot:
+            raise RuntimeError("La cotización de WhatsApp no existe, venció o ya fue usada")
+        if quote_snapshot:
+            quote_options = quote_snapshot["options"]
+            selected = next(
+                (item for item in quote_options
+                 if str(item.get("transportTypeId")) == service_type_id),
+                None,
+            )
+            quote = {"options": quote_options}
+        else:
+            quote = _run_local_quote(origen, destino)
+            if quote.get("error"):
+                raise RuntimeError(f"No se pudo reconstruir la cotización confirmada: {quote['error']}")
+            selected = next(
+                (item for item in quote["options"]
+                 if str(item.get("transportTypeId")) == service_type_id),
+                None,
+            )
         if selected is None:
             raise RuntimeError(f"Tipo de servicio no cotizado: {service_type_id}")
-        fare_value = int(selected["pricePointToPoint"])
-        if selected_fare is not None:
-            normalized_fare = str(selected_fare).replace("$", "").replace(",", "").strip()
-            if int(Decimal(normalized_fare)) != fare_value:
-                raise RuntimeError(
-                    f"La tarifa confirmada no coincide con la cotización: {selected_fare} != {fare_value}"
-                )
+
+        final_fare = Decimal(str(selected.get("finalFare", selected["pricePointToPoint"])))
+        original_fare = Decimal(str(selected.get("originalFare", selected["pricePointToPoint"])))
+        discount_percentage = Decimal(str(selected.get("discountPercentage", "0")))
+        discount_amount = Decimal(str(selected.get("discountAmount", "0")))
+        fare_value = final_fare
+        if selected_fare is not None and Decimal(str(selected_fare).replace("$", "").replace(",", "").strip()) != final_fare:
+            raise RuntimeError(
+                f"La tarifa confirmada no coincide con la cotización: {selected_fare} != {final_fare}"
+            )
         service_type_name = {"1": "Premium", "2": "Ahorro"}.get(
             service_type_id, selected.get("serviceName")
         )
@@ -667,11 +748,23 @@ async def elevenlabs_trip(request: Request):
             service_type_id=service_type_id,
             fare=fare_value,
             service_type_name=service_type_name,
+            quote_id=quote_id,
+            original_fare=original_fare,
+            discount_percentage=discount_percentage,
+            discount_amount=discount_amount,
+            final_fare=final_fare,
+            fare_source="whatsapp" if quote_snapshot else None,
         )
+        if quote_id:
+            with get_cursor() as cur:
+                cur.execute(
+                    "UPDATE livi_whatsapp_quotes SET consumed_at = NOW() WHERE quote_id = %s",
+                    (quote_id,),
+                )
         persist_quote_response(
             livi_trip_id=trip_id,
             http_status=200,
-            request_payload={"serviceTypeId": service_type_id},
+            request_payload={"serviceTypeId": service_type_id, "quoteId": quote_id},
             response_body=quote["options"],
         )
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")

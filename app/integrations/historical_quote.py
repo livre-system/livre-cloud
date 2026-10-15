@@ -21,6 +21,37 @@ def _money(value: Decimal) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def commercial_fare(original_fare: Decimal | int | str, discount_percentage: Decimal = Decimal("15")) -> dict[str, Decimal]:
+    """Calcula el descuento comercial una sola vez, con precisión de centavos."""
+    original = Decimal(str(original_fare)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    percentage = Decimal(str(discount_percentage)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if original < 0 or percentage < 0 or percentage > 100:
+        raise ValueError("importe o porcentaje de descuento inválido")
+    discount = (original * percentage / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return {
+        "original_fare": original,
+        "discount_percentage": percentage,
+        "discount_amount": discount,
+        "final_fare": original - discount,
+    }
+
+
+def apply_whatsapp_discount(quote: dict[str, Any]) -> dict[str, Any]:
+    """Agrega importes comerciales a una cotización destinada a WhatsApp."""
+    fare = commercial_fare(quote["pricePointToPoint"])
+    return {
+        **quote,
+        "price": float(fare["final_fare"]),
+        "pricePointToPoint": float(fare["final_fare"]),
+        "totalCostPrice": float(fare["final_fare"]),
+        "originalFare": float(fare["original_fare"]),
+        "discountPercentage": float(fare["discount_percentage"]),
+        "discountAmount": float(fare["discount_amount"]),
+        "finalFare": float(fare["final_fare"]),
+        "fareSource": "whatsapp",
+    }
+
+
 def calculate_quote(
     *, distance_km: Decimal, price_per_km: Decimal, fixed_cost: Decimal,
     rate_id: int = DEFAULT_RATE_ID, transport_type_id: str = "2",
