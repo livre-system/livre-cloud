@@ -34,7 +34,7 @@ from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
 from app.integrations import magiis_web
 from app.integrations.google_maps import geocode_address, route_distance_km
-from app.integrations.historical_quote import apply_whatsapp_discount, historical_options
+from app.integrations.historical_quote import historical_options
 from app.integrations.magiis_quotes import persist_quote_response
 
 log = logging.getLogger(__name__)
@@ -201,7 +201,6 @@ def _save_trip(
                 whatsapp_user or "",
                 tool_call_id or "",
                 tracking_token,
-                None,
                 service_type_id,
                 service_type_name,
                 fare,
@@ -434,7 +433,7 @@ async def elevenlabs_quote(request: Request):
     quote = _run_local_quote(origen, destino)
     if quote.get("error"):
         return {"result": "No pude cotizar el viaje."}
-    options = [apply_whatsapp_discount(option) for option in sorted(
+    options = [option for option in sorted(
         quote.get("options", []),
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
     )[:2]]
@@ -753,7 +752,7 @@ async def elevenlabs_trip(request: Request):
             discount_percentage=discount_percentage,
             discount_amount=discount_amount,
             final_fare=final_fare,
-            fare_source="whatsapp" if quote_snapshot else None,
+            fare_source="commercial",
         )
         if quote_id:
             with get_cursor() as cur:

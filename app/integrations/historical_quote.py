@@ -36,13 +36,13 @@ def commercial_fare(original_fare: Decimal | int | str, discount_percentage: Dec
     }
 
 
-def apply_whatsapp_discount(quote: dict[str, Any]) -> dict[str, Any]:
-    """Agrega importes comerciales a una cotización destinada a WhatsApp.
+def apply_commercial_discount(quote: dict[str, Any]) -> dict[str, Any]:
+    """Agrega el descuento comercial a cualquier cotización nueva.
 
     Es idempotente para evitar aplicar el descuento dos veces si se re procesa
     una cotización que ya tiene el snapshot comercial.
     """
-    if quote.get("fareSource") == "whatsapp" and quote.get("finalFare") is not None:
+    if quote.get("fareSource") == "commercial" and quote.get("finalFare") is not None:
         return dict(quote)
     fare = commercial_fare(quote["pricePointToPoint"])
     return {
@@ -54,8 +54,12 @@ def apply_whatsapp_discount(quote: dict[str, Any]) -> dict[str, Any]:
         "discountPercentage": float(fare["discount_percentage"]),
         "discountAmount": float(fare["discount_amount"]),
         "finalFare": float(fare["final_fare"]),
-        "fareSource": "whatsapp",
+        "fareSource": "commercial",
     }
+
+
+# Compatibilidad para callers antiguos; la regla ya no depende del canal.
+apply_whatsapp_discount = apply_commercial_discount
 
 
 def calculate_quote(
@@ -117,12 +121,12 @@ def load_historical_profiles() -> list[dict[str, Any]]:
 def historical_options(distance_km: Decimal, profiles: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     profiles = profiles if profiles is not None else load_historical_profiles()
     return [
-        calculate_quote(
+        apply_commercial_discount(calculate_quote(
             distance_km=distance_km,
             price_per_km=Decimal(str(profile["price_per_km"])),
             fixed_cost=Decimal(str(profile["fixed_cost"])),
             rate_id=int(profile["rate_id"]),
             transport_type_id=str(profile["transport_type_id"]),
-        )
+        ))
         for profile in profiles
     ]
