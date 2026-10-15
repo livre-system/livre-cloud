@@ -37,7 +37,13 @@ def commercial_fare(original_fare: Decimal | int | str, discount_percentage: Dec
 
 
 def apply_whatsapp_discount(quote: dict[str, Any]) -> dict[str, Any]:
-    """Agrega importes comerciales a una cotización destinada a WhatsApp."""
+    """Agrega importes comerciales a una cotización destinada a WhatsApp.
+
+    Es idempotente para evitar aplicar el descuento dos veces si se re procesa
+    una cotización que ya tiene el snapshot comercial.
+    """
+    if quote.get("fareSource") == "whatsapp" and quote.get("finalFare") is not None:
+        return dict(quote)
     fare = commercial_fare(quote["pricePointToPoint"])
     return {
         **quote,

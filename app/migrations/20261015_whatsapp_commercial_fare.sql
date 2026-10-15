@@ -24,3 +24,6 @@ ALTER TABLE livi_trips
     ADD COLUMN IF NOT EXISTS fare_source TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_livi_trips_quote_id ON livi_trips (quote_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_livi_trips_quote_id
+    ON livi_trips (quote_id)
+    WHERE quote_id IS NOT NULL;

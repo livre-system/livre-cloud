@@ -21,6 +21,14 @@ class CommercialFareTests(unittest.TestCase):
         self.assertEqual(result["fareSource"], "whatsapp")
         self.assertEqual(result["transportTypeId"], "2")
 
+    def test_whatsapp_discount_is_idempotent(self):
+        quote = apply_whatsapp_discount({"pricePointToPoint": 5054})
+        reapplied = apply_whatsapp_discount(quote)
+        self.assertEqual(reapplied, quote)
+        self.assertEqual(reapplied["originalFare"], 5054.0)
+        self.assertEqual(reapplied["discountAmount"], 758.10)
+        self.assertEqual(reapplied["finalFare"], 4295.90)
+
     def test_invalid_discount_is_rejected(self):
         with self.assertRaises(ValueError):
             commercial_fare(100, Decimal("101"))
