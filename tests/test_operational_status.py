@@ -7,6 +7,7 @@ from app.crm.router import (
 from pydantic import ValidationError
 
 from app.mobility.schemas import DriverOperationalStatusUpdate
+from app.mobility.router import _driver_trip
 
 
 class FakeCursor:
@@ -45,6 +46,81 @@ def driver_row(user_id, status, trip_status=None):
         "tracking_vehicle_model": None,
         "tracking_vehicle_color": None,
     }
+
+
+def test_driver_trip_serializes_commercial_fare_fields():
+    trip = _driver_trip({
+        "id": 321,
+        "origen": "Bahía Blanca",
+        "destino": "Ingeniero White",
+        "status": "assigned",
+        "tracking_driver_name": "Conductor prueba",
+        "tracking_plate": "AA123BB",
+        "tracking_vehicle_model": "Fiat Cronos",
+        "tracking_vehicle_color": "Blanco",
+        "tracking_latitude": None,
+        "tracking_longitude": None,
+        "tracking_location_updated_at": None,
+        "service_type_id": 2,
+        "service_type_name": "Ahorro",
+        "fare": "4295.90",
+        "original_fare": "5054.00",
+        "discount_percentage": "15.00",
+        "discount_amount": "758.10",
+        "final_fare": "4295.90",
+        "fare_source": "whatsapp",
+    })
+
+    assert trip.model_dump() | {"id": trip.id} == {
+        "id": 321,
+        "origin": "Bahía Blanca",
+        "destination": "Ingeniero White",
+        "status": "assigned",
+        "driver_name": "Conductor prueba",
+        "plate": "AA123BB",
+        "vehicle_model": "Fiat Cronos",
+        "vehicle_color": "Blanco",
+        "latitude": None,
+        "longitude": None,
+        "location_updated_at": None,
+        "service_type_id": 2,
+        "service_type_name": "Ahorro",
+        "fare": 4295.90,
+        "original_fare": 5054.00,
+        "discount_percentage": 15.00,
+        "discount_amount": 758.10,
+        "final_fare": 4295.90,
+        "fare_source": "whatsapp",
+    }
+
+
+def test_driver_trip_keeps_legacy_fare_without_commercial_fields():
+    trip = _driver_trip({
+        "id": 322,
+        "origen": "Bahía Blanca",
+        "destino": "Punta Alta",
+        "status": "completed",
+        "tracking_driver_name": None,
+        "tracking_plate": None,
+        "tracking_vehicle_model": None,
+        "tracking_vehicle_color": None,
+        "tracking_latitude": None,
+        "tracking_longitude": None,
+        "tracking_location_updated_at": None,
+        "service_type_id": None,
+        "service_type_name": None,
+        "fare": "3000.00",
+        "original_fare": None,
+        "discount_percentage": None,
+        "discount_amount": None,
+        "final_fare": None,
+        "fare_source": None,
+    })
+
+    assert trip.fare == 3000.0
+    assert trip.original_fare is None
+    assert trip.final_fare is None
+    assert trip.fare_source is None
 
 
 def test_snapshot_preserves_the_three_canonical_statuses():

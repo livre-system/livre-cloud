@@ -283,6 +283,19 @@ def _driver_trip(trip) -> DriverTrip:
         service_type_id=trip["service_type_id"],
         service_type_name=trip["service_type_name"],
         fare=float(trip["fare"]) if trip["fare"] is not None else None,
+        original_fare=float(trip["original_fare"]) if trip["original_fare"] is not None else None,
+        discount_percentage=(
+            float(trip["discount_percentage"])
+            if trip["discount_percentage"] is not None
+            else None
+        ),
+        discount_amount=(
+            float(trip["discount_amount"])
+            if trip["discount_amount"] is not None
+            else None
+        ),
+        final_fare=float(trip["final_fare"]) if trip["final_fare"] is not None else None,
+        fare_source=trip["fare_source"],
     )
 
 
