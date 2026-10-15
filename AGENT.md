@@ -33,13 +33,13 @@ Ubicación habitual: `/home/calambre/Documentos/Clientes/Livre/`.
 - **Livre Pasajeros:** https://livre-pasajeros-production.up.railway.app/ — solicitud y seguimiento de viajes.
 - **Livre Cloud:** https://livre-cloud-production.up.railway.app/ — backend/API central; no es una pantalla web.
 
-Aliases históricos o alternativos: `https://livre-chatbot.vercel.app/`, `https://livre-pasajeros.vercel.app/` y `https://livre-system.github.io/`. Verificarlos antes de usarlos como URLs principales.
+Aliases históricos o alternativos: `https://livre-chatbot.vercel.app/`, `https://livre-pasajeros.vercel.app/` y `https://livre-system.github.io/`. No son la operación actual: Vercel queda descartado y no debe investigarse ni usarse como referencia de disponibilidad mientras Railway sea el entorno activo.
 
 ## Accesos operativos disponibles
 
 - GitHub: `git` y `gh` para revisar repositorios, commits, ramas, issues, PRs y publicar cambios autorizados.
 - Railway: CLI `railway` para revisar servicios, deploys, logs y ejecutar verificaciones read-only. No exponer secretos ni cambiar producción sin autorización explícita.
-- Vercel: CLI `vercel` para revisar y publicar deployments de los frontends. Verificar siempre el deployment real después de publicar.
+- Vercel: no forma parte de la operación actual. No revisar ni publicar allí salvo pedido explícito del usuario; un error o `503` de un alias histórico no representa una falla de Livre mientras las aplicaciones Railway estén operativas.
 
 Livre Cloud es la frontera del sistema. Las apps propias y el CRM deben comunicarse únicamente con Livre Cloud, no con proveedores externos ni con bases ajenas.
 
@@ -342,3 +342,19 @@ Pendientes explícitos:
 - Incluye metadata de servicios, deployments y volumen, más las variables de los 5 servicios (`livre-cloud`, `livre-conductor`, `livre-chatbot`, `livre-pasajeros` y `Postgres`). Los archivos con variables contienen secretos y tienen permisos privados `600`; nunca exponer sus valores.
 - El volumen observado es `postgres-volume`, montado en `/var/lib/postgresql/data`, con 5 GB y estado `Ready`.
 - Ambos backups fueron de solo lectura: no ejecutaron migraciones, DDL, DML, deploys, push ni cambios de infraestructura. Los backups permiten reconstruir el sistema, pero no restauran automáticamente proyecto Railway, cuenta, dominios ni servicios externos.
+
+## Cierre operativo y regla comercial confirmados (2026-10-15)
+
+- Estado de cierre de la sesión: `livre-cloud` (backend) está desplegado y operativo en Railway; `livre-chatbot` (frontend/CRM) está desplegado y operativo en Railway. Las aplicaciones que se deben usar mañana son las URLs Railway de la sección de producción, no los aliases de Vercel.
+- No queda pendiente operativo para esta noche. El error/`503` de Vercel se descarta porque Vercel ya no se usa. No reabrir esa investigación salvo pedido explícito.
+- Regla comercial definitiva: el cliente paga el 100% del precio total del viaje; Livre retiene una sola vez el 15% de ese total; el conductor recibe el 85% restante. El 15% no es un descuento adicional aplicado después al conductor.
+- Fórmula canónica: `libre_amount = total_cliente * 0.15`; `driver_amount = total_cliente * 0.85`; `libre_amount + driver_amount = total_cliente`. Para `$5.054,00`: Livre `$758,10`, conductor `$4.295,90`, cliente `$5.054,00`.
+- La regla es idéntica para viajes originados desde la aplicación y desde WhatsApp/LIVI. El precio confirmado al cliente, `price`/`originalFare`, conserva el total oficial; `finalFare` representa el 85% del conductor cuando ese campo corresponde al contrato operativo. Nunca volver a descontar el 15% sobre `finalFare`.
+- El flujo de confirmación de WhatsApp fue corregido para enviar la tarifa oficial completa del cliente, no el importe neto del conductor. La misma separación debe conservarse en API, CRM, historial, cierres y cualquier vista o exportación.
+- Cambios comerciales intermedios que separaban o mostraban una tarifa comercial adicional fueron revertidos antes del cierre: backend `3f905fc` revierte `c20c66e`; frontend `1571c7a` revierte `4be5844`. Los commits finales publicados son backend `d77cdc6` (`Fix commercial fare split without double discount`) y frontend `d6dccf7` (`Send official fare when confirming trips`). Ambos repositorios quedaron sincronizados con `origin/main`.
+- La estructura de producción se mantuvo sin nuevas migraciones ni columnas comerciales. No se creó otra base ni otro proyecto. La base existente y la tarifa oficial son la fuente de verdad.
+- La cotización de producción fue probada en modo sin creación de viaje: una respuesta real dio tarifa cliente `$4.028,00`, Livre `$604,20` y conductor `$3.423,80`; la identidad aritmética fue verificada. El ejemplo exacto de `$5.054,00` fue verificado en tests.
+- La prueba de producción no creó viajes, pagos ni liquidaciones; quedó como verificación técnica de cotización. No afirmar que hubo una operación real por esa prueba.
+- Validaciones cerradas: suite completa de `livre-cloud` con `35 passed`; tests focalizados de tarifa/estado con `13 passed`; tests del chatbot aprobados; `node --check`/parseos JavaScript y `git diff --check` aprobados; `GET /health` de backend respondió HTTP 200; deployments Railway terminaron en estado `SUCCESS`.
+- Las pruebas informadas se consideran aprobadas para el cierre de hoy. Mañana, si hace falta, revisar únicamente el funcionamiento desde las aplicaciones desplegadas en Railway, sin tocar backend, base, migraciones, tarifas ni infraestructura por iniciativa propia.
+- Regla de trabajo para mañana: primero observar y documentar; no generar viajes, pagos, cambios de base ni reintentos contra MAGIIS. Si aparece un problema, separar si es UI, contrato HTTP, autenticación, datos o despliegue antes de editar.
