@@ -82,7 +82,7 @@ def test_snapshot_query_excludes_verified_non_map_ids_but_keeps_real_driver():
 
     query, params = cur.calls[0]
     assert "a.user_id <> ALL(%s)" in query
-    assert params == (list(_HIDDEN_GPS_DRIVER_USER_IDS),)
+    assert params == (list(_HIDDEN_GPS_DRIVER_USER_IDS), None)
     assert real_driver_id not in _HIDDEN_GPS_DRIVER_USER_IDS
     assert snapshot[0]["driverUserId"] == real_driver_id
 
