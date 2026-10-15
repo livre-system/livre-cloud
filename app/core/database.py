@@ -5,24 +5,36 @@ Un solo pool de conexiones, reutilizado en toda la app.
 """
 
 from contextlib import contextmanager
+import threading
 import psycopg2
 from psycopg2 import pool as pg_pool
 from psycopg2.extras import RealDictCursor
 from app.core.config import DATABASE_URL
 
-# Pool chico: FastAPI + Railway no necesitan más de esto para arrancar.
-# Ajustá maxconn si ves errores de "connection pool exhausted" bajo carga.
-_pool = pg_pool.SimpleConnectionPool(
-    minconn=1,
-    maxconn=10,
-    dsn=DATABASE_URL,
-)
+# Se inicializa al primer acceso para no exigir PostgreSQL durante imports/tests.
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                # Pool chico: FastAPI + Railway no necesitan más de esto.
+                _pool = pg_pool.SimpleConnectionPool(
+                    minconn=1,
+                    maxconn=10,
+                    dsn=DATABASE_URL,
+                )
+    return _pool
 
 
 @contextmanager
 def get_conn():
     """Contexto que entrega una conexión del pool y hace commit/rollback automático."""
-    conn = _pool.getconn()
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         yield conn
         conn.commit()
@@ -30,7 +42,7 @@ def get_conn():
         conn.rollback()
         raise
     finally:
-        _pool.putconn(conn)
+        pool.putconn(conn)
 
 
 @contextmanager
@@ -46,7 +58,8 @@ def get_cursor_dep():
     Versión para FastAPI Depends().
     Usa yield sin @contextmanager para que FastAPI pueda manejarlo como dependencia.
     """
-    conn = _pool.getconn()
+    pool = _get_pool()
+    conn = pool.getconn()
     try:
         conn.autocommit = False
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -56,7 +69,7 @@ def get_cursor_dep():
         conn.rollback()
         raise
     finally:
-        _pool.putconn(conn)
+        pool.putconn(conn)
 
 
 
