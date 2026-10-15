@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -75,6 +75,38 @@ class DriverTrip(PublicTrip):
     discount_amount: float | None = None
     final_fare: float | None = None
     fare_source: str | None = None
+
+
+class DriverHistoryItem(BaseModel):
+    id: int
+    origin: str
+    destination: str
+    status: str
+    completed_at: datetime | None = None
+    fare: float | None = None
+    driver_fare: float | None = None
+
+
+class DriverHistoryResponse(BaseModel):
+    total: int
+    total_revenue: float | None = None
+    driver_revenue: float | None = None
+    commission: float | None = None
+    items: list[DriverHistoryItem]
+
+
+class DriverShiftClosureCreate(BaseModel):
+    closure_date: date
+
+
+class DriverShiftClosure(BaseModel):
+    id: int
+    closure_date: date
+    trip_count: int
+    total_revenue: float | None = None
+    driver_revenue: float | None = None
+    commission: float | None = None
+    created_at: datetime | None = None
 
 
 class TripMessageCreate(BaseModel):

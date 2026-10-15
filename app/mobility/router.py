@@ -6,15 +6,19 @@ Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente
 import os
 import secrets
 import uuid
+from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
 from app.mobility.schemas import (
     DriverTrip,
+    DriverHistoryResponse,
+    DriverShiftClosure,
+    DriverShiftClosureCreate,
     DriverOperationalStatusResponse,
     DriverOperationalStatusUpdate,
     HandieMessageCreate,
@@ -313,6 +317,137 @@ def _driver_trip(trip) -> DriverTrip:
         ),
         final_fare=float(trip["final_fare"]) if trip["final_fare"] is not None else None,
         fare_source=trip["fare_source"],
+    )
+
+
+def _history_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
+    if date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to no puede ser anterior a date_from")
+    if (date_to - date_from).days > 366:
+        raise HTTPException(status_code=422, detail="El período máximo es de 366 días")
+    return (
+        datetime.combine(date_from, datetime.min.time()),
+        datetime.combine(date_to + timedelta(days=1), datetime.min.time()),
+    )
+
+
+def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict:
+    start, end = _history_bounds(date_from, date_to)
+    cur.execute(
+        """
+        SELECT t.id, t.origen, t.destino, t.status,
+               COALESCE(t.updated_at, t.created_at) AS completed_at,
+               COALESCE(t.final_fare, t.fare) AS fare,
+               CASE WHEN t.fare_source = 'commercial' THEN t.final_fare END AS driver_fare
+        FROM livi_trips t
+        WHERE t.assigned_driver_user_id = %s
+          AND t.status = 'completed'
+          AND COALESCE(t.updated_at, t.created_at) >= %s
+          AND COALESCE(t.updated_at, t.created_at) < %s
+        ORDER BY COALESCE(t.updated_at, t.created_at) DESC, t.id DESC
+        """,
+        (user_id, start, end),
+    )
+    items = cur.fetchall()
+    total_revenue = sum((row["fare"] for row in items if row["fare"] is not None), Decimal("0"))
+    driver_values = [row["driver_fare"] for row in items]
+    driver_revenue = (
+        sum(driver_values, Decimal("0"))
+        if items and all(value is not None for value in driver_values)
+        else None
+    )
+    commission = total_revenue - driver_revenue if driver_revenue is not None else None
+    return {
+        "total": len(items),
+        "total_revenue": total_revenue,
+        "driver_revenue": driver_revenue,
+        "commission": commission,
+        "items": [
+            {
+                "id": row["id"], "origin": row["origen"], "destination": row["destino"],
+                "status": row["status"], "completed_at": row["completed_at"],
+                "fare": row["fare"], "driver_fare": row["driver_fare"],
+            }
+            for row in items
+        ],
+    }
+
+
+@router.get("/driver/history", response_model=DriverHistoryResponse)
+def driver_history(
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth),
+):
+    return _history_response(cur, user["id"], date_from, date_to)
+
+
+@router.get("/driver/shift-closures", response_model=list[DriverShiftClosure])
+def driver_shift_closures(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
+    cur.execute(
+        """SELECT id, closure_date, trip_count, total_revenue, driver_revenue,
+                  commission, created_at
+           FROM livre_driver_shift_closures
+           WHERE driver_user_id = %s
+           ORDER BY closure_date DESC, id DESC
+           LIMIT 100""",
+        (user["id"],),
+    )
+    return cur.fetchall()
+
+
+@router.post("/driver/shift-closures", response_model=DriverShiftClosure, status_code=201)
+def create_driver_shift_closure(
+    payload: DriverShiftClosureCreate,
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth),
+):
+    history = _history_response(cur, user["id"], payload.closure_date, payload.closure_date)
+    cur.execute(
+        """INSERT INTO livre_driver_shift_closures
+               (driver_user_id, closure_date, trip_count, total_revenue, driver_revenue, commission)
+           VALUES (%s, %s, %s, %s, %s, %s)
+           ON CONFLICT (driver_user_id, closure_date) DO NOTHING
+           RETURNING id, closure_date, trip_count, total_revenue, driver_revenue, commission, created_at""",
+        (user["id"], payload.closure_date, history["total"], history["total_revenue"],
+         history["driver_revenue"], history["commission"]),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=409, detail="Este turno ya está cerrado")
+    return row
+
+
+@router.get("/driver/shift-closures/{closure_id}/pdf")
+def driver_shift_closure_pdf(
+    closure_id: int, cur=Depends(get_cursor_dep), user: dict = Depends(require_auth),
+):
+    cur.execute(
+        """SELECT id, closure_date, trip_count, total_revenue, driver_revenue, commission
+           FROM livre_driver_shift_closures
+           WHERE id = %s AND driver_user_id = %s""",
+        (closure_id, user["id"]),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Cierre no encontrado")
+    text = (
+        f"Livre - Resumen diario\\nFecha: {row['closure_date']}\\n"
+        f"Viajes: {row['trip_count']}\\nTotal facturado: {row['total_revenue']}\\n"
+        f"Importe del conductor: {row['driver_revenue']}\\nComisiones: {row['commission']}\\n"
+    )
+    stream = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\\n", "\\n")
+    content = f"BT /F1 12 Tf 50 740 Td ({stream}) Tj ET".encode()
+    pdf = (
+        b"%PDF-1.4\\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\\n"
+        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<<>> >>endobj\\n"
+        + f"4 0 obj<</Length {len(content)}>>stream\\n".encode()
+        + content + b"\\nendstream endobj\\ntrailer<</Root 1 0 R>>\\n%%EOF\\n"
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="livre-cierre-{closure_id}.pdf"'},
     )
 
 
