@@ -326,3 +326,19 @@ Pendientes explícitos:
 - La pantalla de Livre mostró marcador verde actual y estado `Disponible` después de recuperar señal.
 - Comparación importante: la sesión anterior también tuvo callback válido de `7.1 m` y luego `lose location`; el comportamiento es intermitente y depende de que el Redmi consiga un fix GNSS/Fused, no de que la solicitud sea aceptada.
 - Para nuevos diagnósticos de GPS, primero revisar Google Play Services, Maps, `dumpsys location` y Logcat; no generar APK ni cambiar configuración/producción hasta separar señal, estado del dispositivo y código.
+
+## Backups locales confirmados (2026-10-15)
+
+- Backup local de repositorios generado en `/home/calambre/Backups/Livre/20261015_014714/`.
+- Incluye 8 copias locales de `livre-cloud`, `livre-chatbot`, `livre-conductor` y `livre-pasajeros` bajo `Documentos/Clientes/Livre` y `Documentos/Documentos/ll/Livre`.
+- Cada repositorio está guardado completo en un archivo `tar.zst`, incluyendo `.git`, cambios sin commit y archivos no rastreados. Los 8 archivos pasan `zstd -t` y checksum mediante `repos/SHA256SUMS`.
+- Ese backup también contiene `database.sql`, pero su checksum guardado no coincide con el archivo actual. No tratar esa copia de base como íntegra ni usarla para restaurar sin regenerarla o validarla.
+
+## Backup de Railway confirmado (2026-10-15)
+
+- Backup del proyecto `fantastic-nurturing`, entorno `production`, generado en `/home/calambre/Backups/Livre/railway/20261015_032300/`.
+- Incluye un dump PostgreSQL real en formato custom: `database.dump`, checksum `database.dump.sha256` e inventario `database.restore-list.txt`.
+- `pg_restore --list` leyó correctamente 234 entradas y el checksum del dump pasó. No se hizo restore completo en una instancia temporal.
+- Incluye metadata de servicios, deployments y volumen, más las variables de los 5 servicios (`livre-cloud`, `livre-conductor`, `livre-chatbot`, `livre-pasajeros` y `Postgres`). Los archivos con variables contienen secretos y tienen permisos privados `600`; nunca exponer sus valores.
+- El volumen observado es `postgres-volume`, montado en `/var/lib/postgresql/data`, con 5 GB y estado `Ready`.
+- Ambos backups fueron de solo lectura: no ejecutaron migraciones, DDL, DML, deploys, push ni cambios de infraestructura. Los backups permiten reconstruir el sistema, pero no restauran automáticamente proyecto Railway, cuenta, dominios ni servicios externos.
