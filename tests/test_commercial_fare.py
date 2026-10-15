@@ -15,6 +15,8 @@ class CommercialFareTests(unittest.TestCase):
     def test_any_new_quote_gets_discount_and_keeps_snapshot(self):
         quote = {"pricePointToPoint": 5054, "transportTypeId": "2"}
         result = apply_commercial_discount(quote)
+        self.assertEqual(result["price"], 5054)
+        self.assertEqual(result["pricePointToPoint"], 5054)
         self.assertEqual(result["finalFare"], 4295.90)
         self.assertEqual(result["originalFare"], 5054.0)
         self.assertEqual(result["discountAmount"], 758.10)

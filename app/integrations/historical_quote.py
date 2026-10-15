@@ -8,6 +8,8 @@ from typing import Any
 # Los IDs y conceptos se obtienen de la auditoría histórica. El precio por km
 # y el fijo se vuelven a leer de la base para no depender de MAGIIS.
 DEFAULT_RATE_ID = 6243
+FARE_SOURCE_COMMERCIAL = "commercial"
+COMMERCIAL_DISCOUNT_PERCENTAGE = Decimal("15")
 SERVICE_NAMES = {
     # En la respuesta real de MAGIIS, el tipo 1 tiene la tarifa más alta
     # y el tipo 2 la más baja. La identidad del servicio debe viajar junto
@@ -37,24 +39,18 @@ def commercial_fare(original_fare: Decimal | int | str, discount_percentage: Dec
 
 
 def apply_commercial_discount(quote: dict[str, Any]) -> dict[str, Any]:
-    """Agrega el descuento comercial a cualquier cotización nueva.
-
-    Es idempotente para evitar aplicar el descuento dos veces si se re procesa
-    una cotización que ya tiene el snapshot comercial.
-    """
-    if quote.get("fareSource") == "commercial" and quote.get("finalFare") is not None:
-        return dict(quote)
-    fare = commercial_fare(quote["pricePointToPoint"])
+    """Anexa la distribución comercial sin cambiar el precio cobrado."""
+    fare = commercial_fare(quote["pricePointToPoint"], COMMERCIAL_DISCOUNT_PERCENTAGE)
     return {
         **quote,
-        "price": float(fare["final_fare"]),
-        "pricePointToPoint": float(fare["final_fare"]),
-        "totalCostPrice": float(fare["final_fare"]),
+        "price": quote.get("price", quote["pricePointToPoint"]),
+        "pricePointToPoint": quote["pricePointToPoint"],
+        "totalCostPrice": quote.get("totalCostPrice", quote["pricePointToPoint"]),
         "originalFare": float(fare["original_fare"]),
         "discountPercentage": float(fare["discount_percentage"]),
         "discountAmount": float(fare["discount_amount"]),
         "finalFare": float(fare["final_fare"]),
-        "fareSource": "commercial",
+        "fareSource": FARE_SOURCE_COMMERCIAL,
     }
 
 

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
+from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
 from app.mobility.schemas import (
     DriverTrip,
     DriverHistoryResponse,
@@ -98,16 +99,32 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
 
     tracking_token = secrets.token_urlsafe(32)
+    financials = commercial_fare(payload.fare)
     conversation_id = f"web_{uuid.uuid4()}"
     cur.execute(
         """
         INSERT INTO livi_trips
             (conversation_id, origen, destino, whatsapp_user, tracking_token,
-             assigned_driver_user_id, tracking_driver_name, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NULL, NULL, 'assigned', NOW(), NOW())
+             assigned_driver_user_id, tracking_driver_name, service_type_id,
+             fare, original_fare, discount_percentage, discount_amount, final_fare, fare_source,
+             status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, 'assigned', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
-        (conversation_id, origin, destination, payload.whatsapp_user.strip(), tracking_token),
+        (
+            conversation_id,
+            origin,
+            destination,
+            payload.whatsapp_user.strip(),
+            tracking_token,
+            payload.service_type_id,
+            financials["original_fare"],
+            financials["original_fare"],
+            financials["discount_percentage"],
+            financials["discount_amount"],
+            financials["final_fare"],
+            FARE_SOURCE_COMMERCIAL,
+        ),
     )
     trip = cur.fetchone()
     passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros.vercel.app")
@@ -273,14 +290,13 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
 
 
 def _driver_fare(trip) -> float | None:
-    """Calcula el importe neto del conductor sin modificar la tarifa oficial."""
+    """Devuelve el importe ya final; nunca aplica el porcentaje aquí."""
     fare = trip.get("fare")
     if fare is None:
         return None
-    # Viajes históricos ya guardados con la regla equivocada tienen final_fare
-    # como importe neto. No se les aplica el 15% por segunda vez.
-    if trip.get("fare_source") == "commercial" and trip.get("final_fare") is not None:
+    if trip.get("final_fare") is not None:
         return float(trip["final_fare"])
+    # Compatibilidad únicamente para viajes antiguos sin campos comerciales.
     net = (Decimal(str(fare)) * Decimal("0.85")).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
@@ -302,7 +318,11 @@ def _driver_trip(trip) -> DriverTrip:
         location_updated_at=trip["tracking_location_updated_at"],
         service_type_id=trip["service_type_id"],
         service_type_name=trip["service_type_name"],
-        fare=float(trip["fare"]) if trip["fare"] is not None else None,
+        fare=(
+            float(trip["original_fare"])
+            if trip["original_fare"] is not None
+            else (float(trip["fare"]) if trip["fare"] is not None else None)
+        ),
         driver_fare=_driver_fare(trip),
         original_fare=float(trip["original_fare"]) if trip["original_fare"] is not None else None,
         discount_percentage=(
@@ -337,8 +357,11 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
         """
         SELECT t.id, t.origen, t.destino, t.status,
                COALESCE(t.updated_at, t.created_at) AS completed_at,
-               COALESCE(t.final_fare, t.fare) AS fare,
-               CASE WHEN t.fare_source = 'commercial' THEN t.final_fare END AS driver_fare
+               t.fare AS fare,
+               t.original_fare, t.discount_percentage, t.discount_amount,
+               t.final_fare,
+               COALESCE(t.final_fare, ROUND(t.fare * 0.85, 2)) AS driver_fare,
+               CASE WHEN t.final_fare IS NOT NULL THEN 'commercial' ELSE t.fare_source END AS fare_source
         FROM livi_trips t
         WHERE t.assigned_driver_user_id = %s
           AND t.status = 'completed'
@@ -367,6 +390,10 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
                 "id": row["id"], "origin": row["origen"], "destination": row["destino"],
                 "status": row["status"], "completed_at": row["completed_at"],
                 "fare": row["fare"], "driver_fare": row["driver_fare"],
+                "original_fare": row["original_fare"],
+                "discount_percentage": row["discount_percentage"],
+                "discount_amount": row["discount_amount"],
+                "final_fare": row["final_fare"], "fare_source": row["fare_source"],
             }
             for row in items
         ],
