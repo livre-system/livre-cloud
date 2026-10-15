@@ -29,17 +29,18 @@ class CommercialFareTests(unittest.TestCase):
         self.assertEqual(reapplied["discountAmount"], 758.10)
         self.assertEqual(reapplied["finalFare"], 4295.90)
 
-    def test_historical_options_are_commercial_for_every_channel(self):
+    def test_historical_options_keep_the_official_fare_for_the_passenger(self):
         options = historical_options(Decimal("10"), profiles=[{
             "rate_id": 6243,
             "transport_type_id": "2",
             "price_per_km": "100",
             "fixed_cost": "54",
         }])
-        self.assertEqual(options[0]["originalFare"], 1054.0)
-        self.assertEqual(options[0]["discountPercentage"], 15.0)
-        self.assertEqual(options[0]["finalFare"], 895.9)
-        self.assertEqual(options[0]["fareSource"], "commercial")
+        self.assertEqual(options[0]["pricePointToPoint"], 1054)
+        self.assertNotIn("finalFare", options[0])
+        self.assertNotIn("discountPercentage", options[0])
+        self.assertNotIn("discountAmount", options[0])
+        self.assertNotIn("fareSource", options[0])
 
     def test_invalid_discount_is_rejected(self):
         with self.assertRaises(ValueError):

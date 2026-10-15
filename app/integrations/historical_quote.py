@@ -121,12 +121,12 @@ def load_historical_profiles() -> list[dict[str, Any]]:
 def historical_options(distance_km: Decimal, profiles: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     profiles = profiles if profiles is not None else load_historical_profiles()
     return [
-        apply_commercial_discount(calculate_quote(
+        calculate_quote(
             distance_km=distance_km,
             price_per_km=Decimal(str(profile["price_per_km"])),
             fixed_cost=Decimal(str(profile["fixed_cost"])),
             rate_id=int(profile["rate_id"]),
             transport_type_id=str(profile["transport_type_id"]),
-        ))
+        )
         for profile in profiles
     ]

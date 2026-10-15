@@ -752,7 +752,7 @@ async def elevenlabs_trip(request: Request):
             discount_percentage=discount_percentage,
             discount_amount=discount_amount,
             final_fare=final_fare,
-            fare_source="commercial",
+            fare_source="official",
         )
         if quote_id:
             with get_cursor() as cur:

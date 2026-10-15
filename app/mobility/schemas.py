@@ -69,6 +69,7 @@ class DriverTrip(PublicTrip):
     service_type_id: int | None = None
     service_type_name: str | None = None
     fare: float | None = None
+    driver_fare: float | None = None
     original_fare: float | None = None
     discount_percentage: float | None = None
     discount_amount: float | None = None

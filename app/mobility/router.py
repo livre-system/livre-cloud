@@ -6,6 +6,7 @@ Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente
 import os
 import secrets
 import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -243,7 +244,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                    WHEN 2 THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.final_fare, t.fare, selected_quote.price_point_to_point) AS fare,
+               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare, t.fare_source
         FROM livi_trips t
@@ -267,6 +268,21 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
     return trip
 
 
+def _driver_fare(trip) -> float | None:
+    """Calcula el importe neto del conductor sin modificar la tarifa oficial."""
+    fare = trip.get("fare")
+    if fare is None:
+        return None
+    # Viajes históricos ya guardados con la regla equivocada tienen final_fare
+    # como importe neto. No se les aplica el 15% por segunda vez.
+    if trip.get("fare_source") == "commercial" and trip.get("final_fare") is not None:
+        return float(trip["final_fare"])
+    net = (Decimal(str(fare)) * Decimal("0.85")).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    return float(net)
+
+
 def _driver_trip(trip) -> DriverTrip:
     return DriverTrip(
         id=trip["id"],
@@ -283,6 +299,7 @@ def _driver_trip(trip) -> DriverTrip:
         service_type_id=trip["service_type_id"],
         service_type_name=trip["service_type_name"],
         fare=float(trip["fare"]) if trip["fare"] is not None else None,
+        driver_fare=_driver_fare(trip),
         original_fare=float(trip["original_fare"]) if trip["original_fare"] is not None else None,
         discount_percentage=(
             float(trip["discount_percentage"])
@@ -349,7 +366,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                    WHEN 2 THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.final_fare, t.fare, selected_quote.price_point_to_point) AS fare,
+               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare, t.fare_source
         FROM livi_trips t
