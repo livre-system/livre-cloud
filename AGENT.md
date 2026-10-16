@@ -4,11 +4,17 @@ Contexto vivo para trabajar en Livre Cloud con Hermes. Este archivo describe el 
 
 ## Regla de inicio
 
-- Al comenzar una sesión nueva, leer este `AGENT.md` una sola vez.
+- Al comenzar cada sesión nueva, leer una sola vez el contexto de todos los repositorios de Livre antes de trabajar:
+  - `livre-cloud/AGENT.md` (contexto central y backend);
+  - `livre-chatbot/AGENT.md`, si existe;
+  - `livre-conductor/AGENT.md`, si existe;
+  - `livre-pasajeros/AGENT.md`, si existe.
+- Si un repositorio no tiene `AGENT.md`, usar este archivo como contexto central y no inventar un estado local que no esté documentado.
 - No leer `CONTEXT.md` ni `CONTEXT.MD`.
-- No volver a leer este archivo durante la misma sesión salvo pedido explícito o modificación explícita.
+- No volver a leer los archivos de contexto durante la misma sesión salvo pedido explícito o modificación explícita.
+- Después de leerlos, comprobar el estado real de cada repo (`git status`, rama y remoto) antes de editar o publicar.
 - Comparar el contexto con el código real, la base PostgreSQL y los registros de Railway cuando la tarea lo requiera.
-- No repetir el contenido completo de este archivo en cada llamada.
+- No repetir el contenido completo de estos archivos en cada llamada.
 
 ## Repositorios
 
@@ -308,13 +314,22 @@ Pendientes explícitos:
 - Quedan pendientes las pruebas en dispositivo/emulador de permisos, revocación, reinicio del proceso, canal de notificaciones, navegación desde WebView frío, pérdida de conectividad y carrera de polling.
 - No se generó un APK nuevo, no se hizo commit ni push durante este trabajo.
 
-## Migración del CRM a Railway (2026-10-03)
+## Estado del CRM en Railway (2026-10-16)
+
+- `livre-chatbot` es el CRM/panel web y está publicado en Railway en `https://livre-chatbot-production.up.railway.app/`.
+- El commit publicado es `00b7316915ce8e0017237416754e139c835b027c` (`fix(crm): refresh and display travel data`), sincronizado con `origin/main`.
+- El cambio incorpora filtro inicial con todos los estados, actualización automática de viajes sin F5 y fallback para mostrar los datos `tracking_*` de conductor y vehículo.
+- Railway terminó el deployment `479a2bab-dc9c-4790-86cd-9a120ac770e1` en estado `SUCCESS`; el servicio quedó online.
+- La URL pública respondió HTTP 200 y el `js/app.js` publicado contiene los cambios verificados.
+- `.env.local` existe localmente como archivo no trackeado y no fue incluido en el commit; nunca publicar ni exponer su contenido.
+- No queda pendiente de deploy para este cambio. No reabrir el análisis del CRM salvo que aparezca un problema nuevo o el usuario lo pida.
+
+## Migración histórica del CRM a Railway (2026-10-03)
 
 - `livre-chatbot` quedó preparado para Railway con `package.json` y `server.js` en el commit `ad2175a90d7f22a1573518cedfeb687d18f1a3ee` (`chore: prepare CRM for Railway`), publicado en `origin/main`.
 - Se verificó `node --check server.js` y `npm test`: 4 tests pasaron.
-- No se hizo deploy, no se ejecutó SQL, no se generó APK y no se modificó Vercel.
-- `livre-cloud/app/main.py` ya permite los orígenes Railway conocidos, pero todavía no incluye el CRM Railway.
-- Para completar CORS se necesita conocer el dominio público Railway definitivo del servicio CRM, como origen HTTPS exacto. No modificar `allow_origins` hasta contar con ese dato.
+- El dominio público definitivo del CRM ya está documentado arriba y el deploy actual está confirmado.
+- No modificar `allow_origins` de `livre-cloud` sin verificar primero el contrato CORS real y el dominio activo.
 
 ## Diagnóstico GPS nativo en Redmi confirmado (2026-10-14)
 
