@@ -51,6 +51,8 @@ class TripRequestResponse(BaseModel):
     tracking_url: str
     status: str
     message: str
+    fare: float | None = None
+    currency: str = "ARS"
 
 
 class PublicTrip(BaseModel):
@@ -65,6 +67,12 @@ class PublicTrip(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     location_updated_at: datetime | None = None
+    fare: float | None = None
+    original_fare: float | None = None
+    discount_percentage: float | None = None
+    discount_amount: float | None = None
+    final_fare: float | None = None
+    fare_source: str | None = None
 
 
 class DriverTrip(PublicTrip):

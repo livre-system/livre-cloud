@@ -59,7 +59,8 @@ def _trip_or_404(cur, trip_id: int):
         """
         SELECT id, origen, destino, status, tracking_driver_name, tracking_plate,
                tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
-               tracking_longitude, tracking_location_updated_at
+                              tracking_longitude, tracking_location_updated_at, fare, original_fare,
+                              discount_percentage, discount_amount, final_fare, fare_source
         FROM livi_trips
         WHERE id = %s
         """,
@@ -84,6 +85,12 @@ def _public_trip(trip) -> PublicTrip:
         latitude=trip["tracking_latitude"],
         longitude=trip["tracking_longitude"],
         location_updated_at=trip["tracking_location_updated_at"],
+        fare=float(trip["fare"]) if trip.get("fare") is not None else None,
+        original_fare=float(trip["original_fare"]) if trip.get("original_fare") is not None else None,
+        discount_percentage=float(trip["discount_percentage"]) if trip.get("discount_percentage") is not None else None,
+        discount_amount=float(trip["discount_amount"]) if trip.get("discount_amount") is not None else None,
+        final_fare=float(trip["final_fare"]) if trip.get("final_fare") is not None else None,
+        fare_source=trip.get("fare_source"),
     )
 
 
@@ -108,7 +115,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
              assigned_driver_user_id, tracking_driver_name, service_type_id,
              fare, original_fare, discount_percentage, discount_amount, final_fare, fare_source,
              status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, 'assigned', NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
         (
@@ -135,6 +142,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         tracking_url=tracking_url,
         status=trip["status"],
         message="Pedido recibido y enviado a los conductores Livre disponibles.",
+        fare=float(financials["final_fare"]),
     )
 
 
@@ -160,7 +168,8 @@ def update_trip_status(
         WHERE id = %s
         RETURNING id, origen, destino, status, tracking_driver_name, tracking_plate,
                   tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
-                  tracking_longitude, tracking_location_updated_at
+                                 tracking_longitude, tracking_location_updated_at, fare, original_fare,
+                                 discount_percentage, discount_amount, final_fare, fare_source
         """,
         (payload.status, trip_id),
     )
@@ -187,7 +196,8 @@ def update_trip_location(
         WHERE id = %s
         RETURNING id, origen, destino, status, tracking_driver_name, tracking_plate,
                   tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
-                  tracking_longitude, tracking_location_updated_at
+                                 tracking_longitude, tracking_location_updated_at, fare, original_fare,
+                                 discount_percentage, discount_amount, final_fare, fare_source
         """,
         (payload.latitude, payload.longitude, trip_id),
     )
@@ -201,7 +211,8 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
         """
         SELECT id, origen, destino, status, tracking_driver_name, tracking_plate,
                tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
-               tracking_longitude, tracking_location_updated_at
+                              tracking_longitude, tracking_location_updated_at, fare, original_fare,
+                              discount_percentage, discount_amount, final_fare, fare_source
         FROM livi_trips
         WHERE tracking_token = %s
         """,
@@ -550,8 +561,8 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                       AND (active_driver.active = TRUE
                            OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
                 )
-                AND t.status = 'assigned'
-                AND t.assigned_driver_user_id IS NULL
+                AND t.status IN ('searching', 'assigned')
+                                AND t.assigned_driver_user_id IS NULL
             )
             OR t.assigned_driver_user_id = %s
         )
@@ -746,8 +757,8 @@ def driver_update_status(
             FROM livre_users u
             JOIN livre_driver_accounts a ON a.user_id = u.id
             WHERE t.id = %s
-              AND t.status = 'assigned'
-              AND t.assigned_driver_user_id IS NULL
+              AND t.status IN ('searching', 'assigned')
+                              AND t.assigned_driver_user_id IS NULL
               AND a.user_id = %s
               AND a.operational_status = 'available'
               AND (a.active = TRUE

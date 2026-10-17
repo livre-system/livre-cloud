@@ -26,6 +26,14 @@ class DriverRegisterBody(RegisterBody):
     """Datos mínimos para crear una cuenta operativa de chofer."""
 
 
+def _roles_for_user(cur, user_id: str) -> list[str]:
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM livre_driver_accounts WHERE user_id = %s AND active = TRUE) AS is_driver",
+        [user_id],
+    )
+    return ["passenger", "driver"] if cur.fetchone()["is_driver"] else ["passenger"]
+
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _hash_password(plain: str) -> str:
@@ -62,8 +70,9 @@ def register(body: RegisterBody):
             [user_id, body.username, body.name, password_hash],
         )
 
-    token = create_token(id=user_id, name=body.name, email=body.username)
-    return {"token": token, "user": {"id": user_id, "username": body.username, "name": body.name}}
+    roles = ["passenger"]
+    token = create_token(id=user_id, name=body.name, email=body.username, roles=roles)
+    return {"token": token, "user": {"id": user_id, "username": body.username, "name": body.name, "roles": roles}}
 
 
 @router.post("/driver/register", status_code=201)
@@ -105,8 +114,9 @@ def login_driver(body: LoginBody):
             [user["id"], device_id],
         )
 
-    token = create_token(id=user["id"], name=user["name"], email=user["username"], device_id=device_id)
-    return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"]}}
+    roles = _roles_for_user(cur, user["id"])
+    token = create_token(id=user["id"], name=user["name"], email=user["username"], device_id=device_id, roles=roles)
+    return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"], "roles": roles}}
 
 
 @router.post("/login")
@@ -118,12 +128,12 @@ def login(body: LoginBody):
             [body.username],
         )
         user = cur.fetchone()
+        if not user or not _verify_password(body.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Credenciales inválidas")
+        roles = _roles_for_user(cur, user["id"])
 
-    if not user or not _verify_password(body.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Credenciales inválidas")
-
-    token = create_token(id=user["id"], name=user["name"], email=user["username"])
-    return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"]}}
+    token = create_token(id=user["id"], name=user["name"], email=user["username"], roles=roles)
+    return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"], "roles": roles}}
 
 
 @router.get("/me")
