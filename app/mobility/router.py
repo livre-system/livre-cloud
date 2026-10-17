@@ -13,7 +13,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
-from app.core.jwt import require_auth
+from app.core.jwt import require_auth, require_driver
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
 from app.mobility.schemas import (
     DriverTrip,
@@ -157,7 +157,7 @@ def update_trip_status(
     trip_id: int,
     payload: StatusUpdate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     """Actualiza el estado desde el circuito autenticado de conductor/operación."""
     _trip_or_404(cur, trip_id)
@@ -181,7 +181,7 @@ def update_trip_location(
     trip_id: int,
     payload: LocationUpdate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     """Guarda la última ubicación del conductor sin llamar al proveedor externo."""
     _trip_or_404(cur, trip_id)
@@ -415,13 +415,13 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
 def driver_history(
     date_from: date = Query(...),
     date_to: date = Query(...),
-    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_driver),
 ):
     return _history_response(cur, user["id"], date_from, date_to)
 
 
 @router.get("/driver/shift-closures", response_model=list[DriverShiftClosure])
-def driver_shift_closures(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
+def driver_shift_closures(cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)):
     cur.execute(
         """SELECT id, closure_date, trip_count, total_revenue, driver_revenue,
                   commission, created_at
@@ -437,7 +437,7 @@ def driver_shift_closures(cur=Depends(get_cursor_dep), user: dict = Depends(requ
 @router.post("/driver/shift-closures", response_model=DriverShiftClosure, status_code=201)
 def create_driver_shift_closure(
     payload: DriverShiftClosureCreate,
-    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_driver),
 ):
     history = _history_response(cur, user["id"], payload.closure_date, payload.closure_date)
     cur.execute(
@@ -457,7 +457,7 @@ def create_driver_shift_closure(
 
 @router.get("/driver/shift-closures/{closure_id}/pdf")
 def driver_shift_closure_pdf(
-    closure_id: int, cur=Depends(get_cursor_dep), user: dict = Depends(require_auth),
+    closure_id: int, cur=Depends(get_cursor_dep), user: dict = Depends(require_driver),
 ):
     cur.execute(
         """SELECT id, closure_date, trip_count, total_revenue, driver_revenue, commission
@@ -491,7 +491,7 @@ def driver_shift_closure_pdf(
 
 @router.get("/driver/operational-status", response_model=DriverOperationalStatusResponse)
 def get_driver_operational_status(
-    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)
 ):
     cur.execute(
         """SELECT operational_status
@@ -508,7 +508,7 @@ def get_driver_operational_status(
 @router.put("/driver/operational-status", response_model=DriverOperationalStatusResponse)
 def update_driver_operational_status(
     payload: DriverOperationalStatusUpdate,
-    cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
+    cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)
 ):
     cur.execute(
         """UPDATE livre_driver_accounts
@@ -524,7 +524,7 @@ def update_driver_operational_status(
 
 
 @router.get("/driver/trips", response_model=list[DriverTrip])
-def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
+def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)):
     """Lists every open trip for any conductor in service or with fresh GPS."""
     cur.execute(
         """
@@ -577,7 +577,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
 def driver_trip_messages(
     trip_id: int,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
@@ -595,7 +595,7 @@ def driver_send_trip_message(
     trip_id: int,
     payload: TripMessageCreate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
@@ -612,7 +612,7 @@ def driver_send_trip_message(
 def open_handie(
     payload: HandieOpenRequest,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     if payload.trip_id is not None:
         _driver_trip_or_404(cur, payload.trip_id, user)
@@ -630,7 +630,7 @@ def send_handie_message(
     session_id: str,
     payload: HandieMessageCreate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     cur.execute(
         """SELECT id, trip_id FROM livre_handie_sessions
@@ -656,7 +656,7 @@ def send_handie_message(
 def close_handie(
     session_id: str,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     cur.execute(
         """UPDATE livre_handie_sessions SET status = 'closed', closed_at = now()
@@ -674,7 +674,7 @@ def close_handie(
 def driver_handie_messages(
     session_id: str,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     cur.execute(
         """SELECT s.id FROM livre_handie_sessions s
@@ -739,7 +739,7 @@ def driver_update_status(
     trip_id: int,
     payload: StatusUpdate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     """Claims an assigned trip for the first conductor who takes it."""
     try:
@@ -815,7 +815,7 @@ def driver_update_status(
 def driver_update_live_location(
     payload: LocationUpdate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     """Stores the driver's latest GPS position even without an active trip."""
     _require_current_driver_device(cur, user, payload.device_id)
@@ -872,7 +872,7 @@ def driver_update_location(
     trip_id: int,
     payload: LocationUpdate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(require_driver),
 ):
     """Stores GPS only for a trip assigned to the authenticated driver."""
     _require_current_driver_device(cur, user, payload.device_id)

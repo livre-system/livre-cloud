@@ -40,3 +40,10 @@ def require_auth(authorization: Optional[str] = Header(default=None)) -> dict:
         "device_id": payload.get("device_id"),
         "roles": payload.get("roles", ["passenger"]),
     }
+
+
+def require_driver(user: dict = Depends(require_auth)) -> dict:
+    """Require an authenticated token carrying the driver role."""
+    if "driver" not in (user.get("roles") or []):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Se requiere el rol de conductor")
+    return user
