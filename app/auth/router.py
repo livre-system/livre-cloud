@@ -113,8 +113,8 @@ def login_driver(body: LoginBody):
                SET active = TRUE, last_seen_at = NOW(), revoked_at = NULL""",
             [user["id"], device_id],
         )
+        roles = _roles_for_user(cur, user["id"])
 
-    roles = _roles_for_user(cur, user["id"])
     token = create_token(id=user["id"], name=user["name"], email=user["username"], device_id=device_id, roles=roles)
     return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"], "roles": roles}}
 
