@@ -31,7 +31,7 @@ def _roles_for_user(cur, user_id: str) -> list[str]:
         "SELECT EXISTS (SELECT 1 FROM livre_driver_accounts WHERE user_id = %s AND active = TRUE) AS is_driver",
         [user_id],
     )
-    return ["passenger", "driver"] if cur.fetchone()["is_driver"] else ["passenger"]
+    return ["driver"] if cur.fetchone()["is_driver"] else ["passenger"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -131,6 +131,8 @@ def login(body: LoginBody):
         if not user or not _verify_password(body.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="Credenciales inválidas")
         roles = _roles_for_user(cur, user["id"])
+        if "driver" in roles:
+            raise HTTPException(status_code=403, detail="Esta cuenta debe ingresar como conductor")
 
     token = create_token(id=user["id"], name=user["name"], email=user["username"], roles=roles)
     return {"token": token, "user": {"id": user["id"], "username": user["username"], "name": user["name"], "roles": roles}}
