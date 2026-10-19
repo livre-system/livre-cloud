@@ -47,12 +47,7 @@ def apply_backfill(dsn: str) -> dict[str, int]:
                 VALUES (%(source_magiis_id)s, %(first_name)s, %(last_name)s, %(identification)s,
                         %(email)s, %(phone)s, %(city)s, %(province)s, %(street)s,
                         %(street_number)s, %(raw_payload)s)
-                ON CONFLICT (source_magiis_id) WHERE source_magiis_id IS NOT NULL DO UPDATE SET
-                    first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name,
-                    identification=EXCLUDED.identification, email=EXCLUDED.email,
-                    phone=EXCLUDED.phone, city=EXCLUDED.city, province=EXCLUDED.province,
-                    street=EXCLUDED.street, street_number=EXCLUDED.street_number,
-                    raw_payload=EXCLUDED.raw_payload, updated_at=now()"""
+                ON CONFLICT (source_magiis_id) WHERE source_magiis_id IS NOT NULL DO NOTHING"""
             owner_params = [{**r, "raw_payload": Json(r["raw_payload"])} for r in owners if r["eligible"]]
             execute_batch(cur, owner_sql, owner_params)
 
@@ -63,10 +58,7 @@ def apply_backfill(dsn: str) -> dict[str, int]:
                 (source_magiis_id, first_name, last_name, email, phone, country, raw_payload)
                 VALUES (%(source_magiis_id)s, %(first_name)s, %(last_name)s, %(email)s,
                         %(phone)s, %(country)s, %(raw_payload)s)
-                ON CONFLICT (source_magiis_id) WHERE source_magiis_id IS NOT NULL DO UPDATE SET
-                    first_name=EXCLUDED.first_name, last_name=EXCLUDED.last_name,
-                    email=EXCLUDED.email, phone=EXCLUDED.phone, country=EXCLUDED.country,
-                    raw_payload=EXCLUDED.raw_payload, updated_at=now()"""
+                ON CONFLICT (source_magiis_id) WHERE source_magiis_id IS NOT NULL DO NOTHING"""
             passenger_params = [{**r, "raw_payload": Json(r["raw_payload"])} for r in passengers if r["eligible"]]
             execute_batch(cur, passenger_sql, passenger_params)
 
@@ -76,12 +68,7 @@ def apply_backfill(dsn: str) -> dict[str, int]:
                 VALUES (%(source_magiis_id)s, %(plate)s, %(brand)s, %(model)s, %(year)s,
                         %(color)s, %(chassis)s, %(motor)s, %(vehicle_type)s, %(owner_id)s,
                         %(image_url)s, %(raw_payload)s)
-                ON CONFLICT (source_magiis_id) WHERE source_magiis_id IS NOT NULL DO UPDATE SET
-                    plate=EXCLUDED.plate, brand=EXCLUDED.brand, model=EXCLUDED.model,
-                    year=EXCLUDED.year, color=EXCLUDED.color, chassis=EXCLUDED.chassis,
-                    motor=EXCLUDED.motor, vehicle_type=EXCLUDED.vehicle_type,
-                    owner_id=EXCLUDED.owner_id, image_url=EXCLUDED.image_url,
-                    raw_payload=EXCLUDED.raw_payload, updated_at=now()"""
+                ON CONFLICT (source_magiis_id) WHERE source_magiis_id IS NOT NULL DO NOTHING"""
             vehicle_params = []
             for row in vehicles:
                 if not row["promote_to_operational"] or row["owner_source_magiis_id"] not in owner_local_ids:
@@ -98,8 +85,7 @@ def apply_backfill(dsn: str) -> dict[str, int]:
             link_sql = """INSERT INTO livre_driver_vehicles
                 (driver_user_id, vehicle_magiis_id, vehicle_label, is_primary)
                 VALUES (%(driver_user_id)s, %(vehicle_magiis_id)s, %(vehicle_label)s, FALSE)
-                ON CONFLICT (driver_user_id, vehicle_magiis_id) DO UPDATE SET
-                    vehicle_label=EXCLUDED.vehicle_label, updated_at=now()"""
+                ON CONFLICT (driver_user_id, vehicle_magiis_id) DO NOTHING"""
             execute_batch(cur, link_sql, [r for r in links if r["eligible"]])
             return {
                 "passengers": len(passenger_params),
