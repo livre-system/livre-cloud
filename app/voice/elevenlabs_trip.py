@@ -58,10 +58,49 @@ ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv(
 ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME = os.getenv(
     "ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME", ""
 ).strip()
+ELEVENLABS_WHATSAPP_REJECTION_TEMPLATE_NAME = os.getenv(
+    "ELEVENLABS_WHATSAPP_REJECTION_TEMPLATE_NAME", ""
+).strip()
 ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv(
     "ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE", "es_AR"
 )
 ARRIVING_MESSAGE = "Tu viaje Livre fue tomado. El conductor ya está en camino."
+REJECTION_MESSAGE = "El conductor no pudo tomar tu viaje. Estamos buscando otra opción."
+
+
+def send_rejection_message(trip: dict) -> str:
+    """Avisa al pasajero que el conductor rechazó el viaje."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    whatsapp_user = str(trip.get("whatsapp_user") or "").strip()
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY no configurada")
+    if not whatsapp_user:
+        raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user")
+    if not ELEVENLABS_WHATSAPP_REJECTION_TEMPLATE_NAME:
+        raise RuntimeError(
+            "Bloqueado: falta ELEVENLABS_WHATSAPP_REJECTION_TEMPLATE_NAME"
+        )
+    payload = {
+        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        "whatsapp_user_id": whatsapp_user,
+        "template_name": ELEVENLABS_WHATSAPP_REJECTION_TEMPLATE_NAME,
+        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        "template_params": [{"type": "body", "parameters": [{"text": REJECTION_MESSAGE}]}],
+        "agent_id": ELEVENLABS_AGENT_ID,
+    }
+    response = httpx.post(
+        ELEVENLABS_API_URL,
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=20.0,
+    )
+    if response.is_error:
+        log.error("[ELEVEN OUTBOUND] rechazo trip=%s status=%s body=%s", trip.get("id"), response.status_code, response.text[:500])
+        response.raise_for_status()
+    result = response.json()
+    conversation_id = result.get("conversation_id") or ""
+    log.info("[ELEVEN OUTBOUND] rechazo enviado trip=%s conversation_id=%s", trip.get("id"), conversation_id)
+    return conversation_id
 
 
 def _tracking_url(token: str | None) -> str | None:

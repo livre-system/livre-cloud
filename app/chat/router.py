@@ -78,7 +78,11 @@ def _build_system_prompt(user_id: str, query: str = "") -> str:
     return (
         f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
         + (f"Contexto operativo:\n{memory_text}\n\n" if memory_text else "")
-        + f"Estilo:\n{style_context['sources']['style']}"
+        + f"Estilo:\n{style_context['sources']['style']}\n\n"
+        + "Regla de preservación de transcripciones de LIVI:\n"
+        + "Conservá cada transcripción del usuario literalmente, sin corregir, resumir ni reformular sus palabras. "
+        + "Si agregás interpretación, análisis o una decisión, escribila debajo en un bloque separado titulado 'Conclusión'. "
+        + "Nunca mezcles la conclusión con la transcripción original ni la presentes como si fuera texto del usuario."
     )
 
 

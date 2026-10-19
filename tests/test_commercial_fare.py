@@ -2,6 +2,7 @@ from decimal import Decimal
 import unittest
 
 from app.integrations.historical_quote import apply_commercial_discount, commercial_fare, historical_options
+from app.mobility.router import _driver_fare
 
 
 class CommercialFareTests(unittest.TestCase):
@@ -43,6 +44,14 @@ class CommercialFareTests(unittest.TestCase):
         self.assertNotIn("discountPercentage", options[0])
         self.assertNotIn("discountAmount", options[0])
         self.assertNotIn("fareSource", options[0])
+
+    def test_driver_gets_exactly_85_percent_from_original_pending_fare(self):
+        trip = {"status": "assigned", "original_fare": Decimal("3200.00"), "final_fare": Decimal("2720.00")}
+        self.assertEqual(_driver_fare(trip), 2720.0)
+
+    def test_driver_gets_original_fare_after_completion(self):
+        trip = {"status": "completed", "original_fare": Decimal("3200.00"), "final_fare": Decimal("2720.00")}
+        self.assertEqual(_driver_fare(trip), 3200.0)
 
     def test_invalid_discount_is_rejected(self):
         with self.assertRaises(ValueError):

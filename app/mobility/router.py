@@ -31,7 +31,7 @@ from app.mobility.schemas import (
     TripRequest,
     TripRequestResponse,
 )
-from app.voice.elevenlabs_trip import send_tracking_message
+from app.voice.elevenlabs_trip import send_rejection_message, send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 
@@ -278,7 +278,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                END) AS service_type_name,
                COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
-               t.final_fare, t.fare_source
+               t.final_fare, t.fare_source, t.whatsapp_user
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         LEFT JOIN LATERAL (
@@ -301,17 +301,17 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
 
 
 def _driver_fare(trip) -> float | None:
-    """Devuelve el importe ya final; nunca aplica el porcentaje aquí."""
-    fare = trip.get("fare")
-    if fare is None:
+    """Calcula una sola vez el ingreso del conductor desde la tarifa bruta."""
+    gross = trip.get("original_fare") or trip.get("fare")
+    if gross is None:
         return None
-    if trip.get("final_fare") is not None:
-        return float(trip["final_fare"])
-    # Compatibilidad únicamente para viajes antiguos sin campos comerciales.
-    net = (Decimal(str(fare)) * Decimal("0.85")).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
+    if trip.get("status") == "completed":
+        return float(gross)
+    return float(
+        (Decimal(str(gross)) * Decimal("0.85")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
     )
-    return float(net)
 
 
 def _driver_trip(trip) -> DriverTrip:
@@ -371,7 +371,10 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
                t.fare AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare,
-               COALESCE(t.final_fare, ROUND(t.fare * 0.85, 2)) AS driver_fare,
+               CASE WHEN t.status = 'completed'
+                    THEN COALESCE(t.original_fare, t.fare)
+                    ELSE ROUND(COALESCE(t.original_fare, t.fare) * 0.85, 2)
+               END AS driver_fare,
                CASE WHEN t.final_fare IS NOT NULL THEN 'commercial' ELSE t.fare_source END AS fare_source
         FROM livi_trips t
         WHERE t.assigned_driver_user_id = %s
@@ -541,7 +544,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                END) AS service_type_name,
                COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
-               t.final_fare, t.fare_source
+               t.final_fare, t.fare_source, t.whatsapp_user
         FROM livi_trips t
         LEFT JOIN LATERAL (
             SELECT q.transport_type_id, q.price_point_to_point
@@ -732,6 +735,58 @@ def base_send_message(
         (session["trip_id"], user["id"], payload.body.strip()),
     )
     return cur.fetchone()
+
+
+@router.post("/driver/trips/{trip_id}/reject", response_model=DriverTrip)
+def driver_reject_trip(
+    trip_id: int,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    """Registra un rechazo de un viaje asignado y avisa al pasajero."""
+    trip = _driver_trip_or_404(cur, trip_id, user)
+    if trip["status"] != "assigned":
+        raise HTTPException(status_code=409, detail="Sólo se puede rechazar un viaje pendiente")
+    cur.execute(
+        """UPDATE livi_trips
+           SET status = 'cancelled', updated_at = NOW()
+           WHERE id = %s AND assigned_driver_user_id = %s AND status = 'assigned'
+           RETURNING id""",
+        (trip_id, user["id"]),
+    )
+    if not cur.fetchone():
+        raise HTTPException(status_code=409, detail="El viaje ya cambió de estado")
+    cur.execute(
+        """INSERT INTO livre_trip_messages
+           (trip_id, channel, sender_role, sender_id, body)
+           VALUES (%s, 'passenger_chat', 'driver', %s, %s)""",
+        (trip_id, user["id"], "Rechazo registrado por el conductor"),
+    )
+    cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
+    rejected_trip = cur.fetchone()
+    try:
+        conversation_id = send_rejection_message(rejected_trip)
+        cur.execute(
+            """UPDATE livi_trips
+               SET tracking_message_sent_at = NOW(),
+                   tracking_message_conversation_id = %s,
+                   tracking_message_error = NULL,
+                   updated_at = NOW()
+               WHERE id = %s""",
+            (conversation_id or None, trip_id),
+        )
+    except Exception as exc:
+        cur.execute(
+            """UPDATE livi_trips
+               SET tracking_message_error = %s, updated_at = NOW()
+               WHERE id = %s""",
+            (f"rejection_notification: {str(exc)[:450]}", trip_id),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Rechazo registrado, pero no se pudo avisar al pasajero por WhatsApp",
+        ) from exc
+    return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
 
 
 @router.post("/driver/trips/{trip_id}/status", response_model=DriverTrip)
