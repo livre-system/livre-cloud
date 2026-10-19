@@ -16,6 +16,7 @@ from app.crm.historical_migration import (
     owner_source_audit,
     passenger_migration_plan,
     passenger_classification,
+    source_identity_audit,
     vehicle_migration_plan,
     vehicle_relationship_report,
 )
@@ -75,12 +76,15 @@ def main() -> int:
     owner_report = owner_source_audit(owners, livre_emails)
     passenger_plan = passenger_migration_plan(passengers)
     owner_plan = owner_migration_plan(owners)
+    eligible_owner_ids = {
+        item["source_magiis_id"] for item in owner_plan if item["eligible"]
+    }
     vehicle_report = vehicle_relationship_report(
-        vehicles, {row["magiis_id"] for row in owners}
+        vehicles, eligible_owner_ids
     )
     financial_report = financial_audit(financial_rows)
     review_queue = manual_review_queue(passengers)
-    vehicle_plan = vehicle_migration_plan(vehicles, {row["magiis_id"] for row in owners})
+    vehicle_plan = vehicle_migration_plan(vehicles, eligible_owner_ids)
     driver_link_plan = driver_vehicle_relationship_plan(
         drivers,
         {row["magiis_id"] for row in vehicles},
@@ -94,12 +98,18 @@ def main() -> int:
             "already_present_by_source_id": sum(item["source_magiis_id"] in existing for item in eligible),
             "would_insert": sum(item["source_magiis_id"] not in existing for item in eligible),
             "source_id_unique_in_plan": len({item["source_magiis_id"] for item in eligible}) == len(eligible),
+            "eligible_identity_audit": source_identity_audit(eligible),
             "source_key_column_available": table in source_key_available,
         }
     report = {
         "mode": "read-only dry-run",
         "writes": False,
         "source": {
+            "identity_audit": {
+                "passengers": source_identity_audit(passengers),
+                "owners": source_identity_audit(owners),
+                "vehicles": source_identity_audit(vehicles),
+            },
             "passengers": {**passenger_report, "migration_eligible": sum(item["eligible"] for item in passenger_plan)},
             "manual_review": {
                 "total": len(review_queue),
@@ -125,6 +135,12 @@ def main() -> int:
             "passengers": idempotency(passenger_plan, "livre_crm_passengers"),
             "owners": idempotency(owner_plan, "livre_crm_vehicle_owners"),
             "vehicles": idempotency(vehicle_plan, "livre_crm_vehicles", "promote_to_operational"),
+            "conflict_policy": {
+                "source_entities": "ON CONFLICT (source_magiis_id) DO NOTHING",
+                "driver_vehicle_links": "ON CONFLICT (driver_user_id, vehicle_magiis_id) DO NOTHING",
+                "preserves_local_changes": True,
+                "does_not_overwrite_raw_payload": True,
+            },
         },
         "migration_candidates": {
             "passengers": sum(item["eligible"] for item in passenger_plan),

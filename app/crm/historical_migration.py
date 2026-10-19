@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from decimal import Decimal, ROUND_HALF_UP
 import re
+import unicodedata
 from typing import Any, Iterable
 
 CENT = Decimal("0.01")
@@ -38,11 +39,47 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_COMPANY_MARKERS = {
+    "sa", "s.a", "srl", "s.r.l", "sas", "s.a.s", "sau", "s.a.u",
+    "sc", "cooperativa", "fundacion", "asociacion", "municipalidad",
+    "empresa", "transporte", "servicios", "constructora", "comercial",
+    "consorcio", "instituto", "iglesia", "club", "sociedad",
+}
+
+
+def _name_tokens(value: Any) -> list[str]:
+    return re.findall(r"[^\s]+", _text(value))
+
+
+def classify_owner_name(value: Any) -> dict[str, Any]:
+    """Classify titularDescription without mutating or guessing ambiguous names."""
+    original = _text(value)
+    tokens = _name_tokens(original)
+    folded = {
+        unicodedata.normalize("NFKD", token.casefold()).encode("ascii", "ignore").decode()
+        for token in tokens
+    }
+    if not original:
+        category = "ambiguous"
+        reason = "missing_titularDescription"
+    elif folded & _COMPANY_MARKERS:
+        category = "company"
+        reason = "company_marker"
+    elif len(tokens) < 2 or len(tokens) > 4 or any(not re.fullmatch(r"[\wÁÉÍÓÚÜÑáéíóúüñ'’-]+", token) for token in tokens):
+        category = "ambiguous"
+        reason = "insufficient_or_irregular_name_tokens"
+    else:
+        category = "person"
+        reason = "two_to_four_name_tokens"
+    return {"full_name": original, "category": category, "reason": reason}
+
+
 def split_owner_name(value: Any) -> tuple[str, str] | None:
-    """Split titularDescription conservatively; never invent a surname."""
-    parts = _text(value).split()
-    if len(parts) < 2:
+    """Split only high-confidence person names; preserve all other names whole."""
+    classification = classify_owner_name(value)
+    if classification["category"] != "person":
         return None
+    parts = _name_tokens(value)
     return parts[0], " ".join(parts[1:])
 
 
@@ -69,11 +106,32 @@ def passenger_migration_plan(rows: Iterable[dict[str, Any]]) -> list[dict[str, A
     return plan
 
 
+def source_identity_audit(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Verify immutable source IDs before any local insert is considered."""
+    ids = [row.get("source_magiis_id", row.get("magiis_id", row.get("id"))) for row in rows]
+    non_null = [source_id for source_id in ids if source_id not in (None, "")]
+    groups: defaultdict[Any, int] = defaultdict(int)
+    for source_id in non_null:
+        groups[source_id] += 1
+    duplicate_groups = {source_id: count for source_id, count in groups.items() if count > 1}
+    return {
+        "total": len(ids),
+        "null_or_empty": len(ids) - len(non_null),
+        "non_null": len(non_null),
+        "unique_non_null": len(groups),
+        "duplicate_groups": len(duplicate_groups),
+        "duplicate_rows": sum(count - 1 for count in duplicate_groups.values()),
+        "unique_and_non_null": not duplicate_groups and len(ids) == len(non_null),
+        "duplicate_examples": dict(list(duplicate_groups.items())[:20]),
+    }
+
+
 def owner_migration_plan(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map historical owners from titularDescription, preserving the payload."""
     plan = []
     for row in rows:
         source_id = row.get("magiis_id", row.get("id"))
+        classification = classify_owner_name(row.get("titularDescription"))
         name = split_owner_name(row.get("titularDescription"))
         eligible = bool(source_id not in (None, "") and name)
         plan.append({
@@ -88,8 +146,14 @@ def owner_migration_plan(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]
             "street": _first(row, "street", "streetName"),
             "street_number": _first(row, "street_number", "streetNumber"),
             "raw_payload": _payload(row),
+            "titular_description": classification["full_name"],
+            "name_category": classification["category"],
+            "name_classification_reason": classification["reason"],
             "eligible": eligible,
-            "exclusion_reason": None if eligible else "missing_titularDescription_or_source_id",
+            "exclusion_reason": None if eligible else (
+                "missing_source_id" if source_id in (None, "") else
+                f"name_review_{classification['category']}"
+            ),
         })
     return plan
 
@@ -143,6 +207,10 @@ def owner_source_audit(owner_rows: Iterable[dict[str, Any]], livre_user_emails: 
         if email and email in emails:
             matches.append(row.get("magiis_id", row.get("id")))
     complete_names = sum(bool(item["eligible"]) for item in owner_plan)
+    by_category = {category: [
+        {"source_magiis_id": item["source_magiis_id"], "full_name": item["titular_description"], "reason": item["name_classification_reason"]}
+        for item in owner_plan if item["name_category"] == category
+    ] for category in ("person", "company", "ambiguous")}
     return {
         "owners_total": len(owner_rows),
         "complete_names": complete_names,
@@ -152,6 +220,10 @@ def owner_source_audit(owner_rows: Iterable[dict[str, Any]], livre_user_emails: 
         "titular_description_names": sum(bool(split_owner_name(row.get("titularDescription"))) for row in owner_rows),
         "excluded_missing_titular_description": sum(not item["eligible"] for item in owner_plan),
         "source": "historical.titularDescription",
+        "name_categories": {category: len(items) for category, items in by_category.items()},
+        "name_review": {category: by_category[category] for category in ("company", "ambiguous")},
+        "person_examples": by_category["person"][:10],
+        "automatic_split_policy": "person only; company and ambiguous names remain whole in raw_payload and are excluded pending review",
     }
 
 
@@ -171,8 +243,8 @@ def vehicle_relationship_report(rows: Iterable[dict[str, Any]], owner_ids: set[A
         "missing_owner": len(missing_owner),
         "unresolved_owner": len(unresolved_owner),
         "linked_owner_count": len(rows) - len(missing_owner) - len(unresolved_owner),
-        "promotable": 0,
-        "blocked_until_owner_resolution": True,
+        "promotable": len(rows) - len(missing_owner) - len(unresolved_owner),
+        "blocked_until_owner_resolution": bool(unresolved_owner),
     }
 
 

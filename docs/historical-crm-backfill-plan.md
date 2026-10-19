@@ -4,7 +4,7 @@ Estado: preparado, no aplicado. El script `scripts/historical_crm_dry_run.py` ab
 
 ## Regla de idempotencia
 
-Cada entidad se identifica por `source_magiis_id`, que conserva el `magiis_id` histórico y tiene índice único parcial en las tablas locales. El backfill futuro debe usar `INSERT ... ON CONFLICT (source_magiis_id) DO UPDATE`, conservando `raw_payload` y sin crear filas duplicadas. No se debe usar nombre, teléfono o patente como identidad de origen.
+Cada entidad se identifica por `source_magiis_id`, que conserva el `magiis_id` histórico y tiene índice único parcial en las tablas locales. El backfill usa `INSERT ... ON CONFLICT (source_magiis_id) DO NOTHING`: una fila ya existente queda intacta, incluyendo cambios locales y `raw_payload`; nunca se pisa una edición local. No se debe usar nombre, teléfono o patente como identidad de origen.
 
 ## Mapeo exacto
 
@@ -39,10 +39,11 @@ Origen: `magiis_crm_vehicle_owners.magiis_id` + `raw_payload`.
 - `street_number` <- `raw_payload.streetNumber`
 - `raw_payload` <- payload completo sin modificaciones
 
-Inclusión: `titularDescription` con al menos dos tokens. No se consultan `firstName`/`lastName`, porque no existen en el snapshot de propietarios.
-Exclusión: un propietario sin `titularDescription` utilizable. No se inventan nombres ni se vincula por email.
+Inclusión automática: `titularDescription` clasificado como persona, con 2 a 4 tokens regulares y un ID de origen no nulo.
+Revisión manual: empresas y nombres ambiguos. Se conserva el texto completo en `raw_payload.titularDescription` y no se lo separa ni se lo inserta en `first_name`/`last_name` hasta decidir su representación local.
+Exclusión: ID ausente o `titularDescription` faltante/irregular. No se inventan nombres ni se vincula por email.
 
-La separación del nombre es una normalización técnica mínima para satisfacer las columnas locales obligatorias; el nombre completo original siempre queda preservado en `raw_payload.titularDescription`.
+La separación se hace sólo para personas de alta confianza; empresas y ambiguos quedan reportados sin deformar el nombre original.
 
 ### Vehículos
 
