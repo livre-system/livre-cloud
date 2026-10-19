@@ -43,6 +43,7 @@ class TripRequest(BaseModel):
     whatsapp_user: str = Field(default="web-test", min_length=2, max_length=120)
     fare: Decimal = Field(gt=0)
     service_type_id: int | None = Field(default=None, ge=1)
+    activity_type: Literal["real", "test"] = "real"
 
 
 class TripRequestResponse(BaseModel):
@@ -60,6 +61,7 @@ class PublicTrip(BaseModel):
     origin: str
     destination: str
     status: str
+    created_at: datetime | None = None
     driver_name: str | None = None
     plate: str | None = None
     vehicle_model: str | None = None

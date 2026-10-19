@@ -114,8 +114,8 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
             (conversation_id, origen, destino, whatsapp_user, tracking_token,
              assigned_driver_user_id, tracking_driver_name, service_type_id,
              fare, original_fare, discount_percentage, discount_amount, final_fare, fare_source,
-             status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
+             activity_type, source, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
         (
@@ -131,6 +131,8 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
             financials["discount_amount"],
             financials["final_fare"],
             FARE_SOURCE_COMMERCIAL,
+            payload.activity_type,
+            "web",
         ),
     )
     trip = cur.fetchone()
@@ -265,7 +267,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
     """Returns a trip only when it is assigned to the authenticated driver."""
     cur.execute(
         """
-        SELECT t.id, t.origen, t.destino, t.status,
+        SELECT t.id, t.origen, t.destino, t.status, t.created_at,
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
@@ -320,6 +322,7 @@ def _driver_trip(trip) -> DriverTrip:
         origin=trip["origen"],
         destination=trip["destino"],
         status=trip["status"],
+        created_at=trip["created_at"],
         driver_name=trip["tracking_driver_name"],
         plate=trip["tracking_plate"],
         vehicle_model=trip["tracking_vehicle_model"],
@@ -531,7 +534,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
     """Lists open trips available to this conductor and trips already assigned to them."""
     cur.execute(
         """
-        SELECT t.id, t.origen, t.destino, t.status,
+        SELECT t.id, t.origen, t.destino, t.status, t.created_at,
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,

@@ -223,6 +223,8 @@ def _save_trip(
     discount_amount: Decimal | None = None,
     final_fare: Decimal | None = None,
     fare_source: str | None = None,
+    activity_type: str = "real",
+    source: str = "whatsapp",
 ) -> tuple[int, str]:
     """Inserta el viaje con la distribución comercial canónica de Livre."""
     if original_fare is not None or fare is not None:
@@ -243,8 +245,8 @@ def _save_trip(
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
-                 status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
+                 activity_type, source, status, created_at, updated_at)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
@@ -263,6 +265,8 @@ def _save_trip(
                 discount_amount,
                 final_fare,
                 fare_source,
+                activity_type,
+                source,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
@@ -722,6 +726,14 @@ async def elevenlabs_trip(request: Request):
     ).strip() or None
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
+    activity_type = str(
+        parameters.get("activity_type")
+        or body.get("activity_type")
+        or data.get("activity_type")
+        or "real"
+    ).strip()
+    if activity_type not in {"real", "test"}:
+        return {"result": "Error: activity_type debe ser real o test."}
 
     log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
     log.info(f"[ELEVEN TRIP] origen={origen!r}")
@@ -812,6 +824,8 @@ async def elevenlabs_trip(request: Request):
             discount_amount=discount_amount,
             final_fare=final_fare,
             fare_source="official",
+            activity_type=activity_type,
+            source="whatsapp",
         )
         if quote_id:
             with get_cursor() as cur:

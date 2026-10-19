@@ -362,17 +362,43 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
 
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    """Returns the current Livre operational snapshot."""
+    """Returns one consistent, auditable Livre operational snapshot."""
     drivers = _operational_snapshot(cur, user.get("id"))
-    cur.execute("SELECT count(*) AS total FROM livi_trips")
-    travels = int(cur.fetchone()["total"])
+    cur.execute(
+        """
+        SELECT status, activity_type, count(*) AS total
+        FROM livi_trips
+        GROUP BY status, activity_type
+        """
+    )
+    trip_totals = {(row["status"], row["activity_type"]): int(row["total"]) for row in cur.fetchall()}
+    completed_real = trip_totals.get(("completed", "real"), 0)
+    completed_test = trip_totals.get(("completed", "test"), 0)
+    completed_unclassified = trip_totals.get(("completed", "unclassified"), 0)
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
-    available = sum(item["operationalStatus"] == "available" for item in drivers)
-    unavailable = sum(item["operationalStatus"] == "unavailable" for item in drivers)
-    out_of_service = sum(item["operationalStatus"] == "out_of_service" for item in drivers)
+    available = sum(item["operationalStatus"] == "available" and item["operationalState"] != "EN VIAJE" for item in drivers)
+    unavailable = sum(item["operationalStatus"] == "unavailable" and item["operationalState"] != "EN VIAJE" for item in drivers)
+    out_of_service = sum(item["operationalStatus"] == "out_of_service" and item["operationalState"] != "EN VIAJE" for item in drivers)
+    known_vehicles = {item["vehicle"]["plate"] for item in drivers if item["vehicle"].get("plate")}
     return {
         "source": "livre",
-        "status": {"travelsQuantity": travels, "workingVehiclesQuantity": len(drivers), "clientsIndividualsAmount": 0},
+        "status": {
+            "travelsQuantity": completed_real,
+            "testTravelsQuantity": completed_test,
+            "unclassifiedTravelsQuantity": completed_unclassified,
+            "workingVehiclesQuantity": len(known_vehicles) if known_vehicles else None,
+            "kilometersTotal": None,
+            "clientsIndividualsAmount": None,
+        },
+        "trip_totals": {
+            "completed_real": completed_real,
+            "completed_test": completed_test,
+            "completed_unclassified": completed_unclassified,
+        },
+        "vehicle_totals": {
+            "identified": len(known_vehicles),
+            "unidentified": len(drivers) - len(known_vehicles),
+        },
         "driver_totals": {
             "totalDrivers": len(drivers),
             "totalDriversOnline": available,
@@ -388,6 +414,47 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
         "report_042": {},
         "chats": {},
     }
+
+
+@router.post("/operational/events", status_code=201)
+def create_operational_event(
+    payload: dict = Body(...),
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Registers auditable trip/test/WhatsApp operations without changing old rows."""
+    event_type = str(payload.get("event_type", "")).strip()
+    source = str(payload.get("source", "")).strip()
+    activity_type = str(payload.get("activity_type", "unclassified")).strip()
+    status = str(payload.get("status", "recorded")).strip()
+    if not event_type or not source or activity_type not in {"real", "test", "unclassified"}:
+        raise HTTPException(status_code=422, detail="event_type, source y activity_type son obligatorios")
+    occurred_at = payload.get("occurred_at")
+    if occurred_at:
+        try:
+            occurred_at = datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="occurred_at debe ser ISO-8601") from exc
+    else:
+        occurred_at = datetime.now(timezone.utc)
+    external_id = str(payload.get("external_id", "")).strip() or None
+    event_payload = payload.get("payload", {})
+    if not isinstance(event_payload, dict):
+        raise HTTPException(status_code=422, detail="payload debe ser un objeto JSON")
+    cur.execute(
+        """
+        INSERT INTO livi_operational_events
+            (event_type, source, activity_type, status, external_id, payload, occurred_at)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
+        ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL
+        DO UPDATE SET status = EXCLUDED.status, payload = EXCLUDED.payload,
+                      activity_type = EXCLUDED.activity_type, occurred_at = EXCLUDED.occurred_at
+        RETURNING id, event_type, source, activity_type, status, external_id, occurred_at
+        """,
+        (event_type, source, activity_type, status, external_id, json.dumps(event_payload), occurred_at),
+    )
+    row = cur.fetchone()
+    return dict(row)
 
 
 @router.get("/drivers/live")
