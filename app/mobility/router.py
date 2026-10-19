@@ -31,7 +31,7 @@ from app.mobility.schemas import (
     TripRequest,
     TripRequestResponse,
 )
-from app.voice.elevenlabs_trip import send_rejection_message, send_tracking_message
+from app.voice.elevenlabs_trip import send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 
@@ -743,47 +743,25 @@ def driver_reject_trip(
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_driver),
 ):
-    """Registra un rechazo de un viaje asignado y avisa al pasajero."""
+    """Libera un viaje rechazado para que pueda tomarlo otro conductor."""
     trip = _driver_trip_or_404(cur, trip_id, user)
     if trip["status"] != "assigned":
         raise HTTPException(status_code=409, detail="Sólo se puede rechazar un viaje pendiente")
     cur.execute(
         """UPDATE livi_trips
-           SET status = 'cancelled', updated_at = NOW()
+           SET status = 'searching',
+               assigned_driver_user_id = NULL,
+               tracking_driver_name = NULL,
+               updated_at = NOW()
            WHERE id = %s AND assigned_driver_user_id = %s AND status = 'assigned'
            RETURNING id""",
         (trip_id, user["id"]),
     )
     if not cur.fetchone():
         raise HTTPException(status_code=409, detail="El viaje ya cambió de estado")
-    cur.execute(
-        """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body)
-           VALUES (%s, 'passenger_chat', 'driver', %s, %s)""",
-        (trip_id, user["id"], "Rechazo registrado por el conductor"),
-    )
     cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
     rejected_trip = cur.fetchone()
-    try:
-        conversation_id = send_rejection_message(rejected_trip)
-        cur.execute(
-            """UPDATE livi_trips
-               SET tracking_message_sent_at = NOW(),
-                   tracking_message_conversation_id = %s,
-                   tracking_message_error = NULL,
-                   updated_at = NOW()
-               WHERE id = %s""",
-            (conversation_id or None, trip_id),
-        )
-    except Exception as exc:
-        cur.execute(
-            """UPDATE livi_trips
-               SET tracking_message_error = %s, updated_at = NOW()
-               WHERE id = %s""",
-            (f"rejection_notification: {str(exc)[:450]}", trip_id),
-        )
-        log.warning("No se pudo avisar el rechazo por WhatsApp trip=%s: %s", trip_id, exc)
-    return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
+    return _driver_trip(rejected_trip)
 
 
 @router.post("/driver/trips/{trip_id}/status", response_model=DriverTrip)
