@@ -525,7 +525,7 @@ def update_driver_operational_status(
 
 @router.get("/driver/trips", response_model=list[DriverTrip])
 def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)):
-    """Lists only trips assigned to the authenticated conductor."""
+    """Lists open trips available to this conductor and trips already assigned to them."""
     cur.execute(
         """
         SELECT t.id, t.origen, t.destino, t.status,
@@ -552,10 +552,23 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
             ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
             LIMIT 1
         ) selected_quote ON TRUE
-        WHERE t.assigned_driver_user_id = %s
+        WHERE (
+            (
+                EXISTS (
+                    SELECT 1 FROM livre_driver_accounts active_driver
+                    WHERE active_driver.user_id = %s
+                      AND active_driver.operational_status = 'available'
+                      AND (active_driver.active = TRUE
+                           OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
+                )
+                AND t.status IN ('searching', 'assigned')
+                AND t.assigned_driver_user_id IS NULL
+            )
+            OR t.assigned_driver_user_id = %s
+        )
         ORDER BY t.created_at DESC
         """,
-        (user["id"],),
+        (user["id"], user["id"]),
     )
     return [_driver_trip(row) for row in cur.fetchall()]
 

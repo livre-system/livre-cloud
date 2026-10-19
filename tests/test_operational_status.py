@@ -48,16 +48,18 @@ def driver_row(user_id, status, trip_status=None):
     }
 
 
-def test_driver_trips_returns_only_trips_assigned_to_authenticated_driver():
+def test_driver_trips_returns_available_open_trips_and_own_assignments():
     cur = FakeCursor([[]])
 
     result = driver_trips(cur=cur, user={"id": "driver-a"})
 
     assert result == []
     query, params = cur.calls[0]
-    assert "WHERE t.assigned_driver_user_id = %s" in query
-    assert "t.assigned_driver_user_id IS NULL" not in query
-    assert params == ("driver-a",)
+    assert "active_driver.operational_status = 'available'" in query
+    assert "t.status IN ('searching', 'assigned')" in query
+    assert "t.assigned_driver_user_id IS NULL" in query
+    assert "OR t.assigned_driver_user_id = %s" in query
+    assert params == ("driver-a", "driver-a")
 
 
 def test_driver_trip_serializes_commercial_fare_fields():
