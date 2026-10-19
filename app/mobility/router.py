@@ -272,26 +272,17 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
                t.tracking_location_updated_at,
-               COALESCE(t.service_type_id, selected_quote.transport_type_id::text)::integer AS service_type_id,
-               COALESCE(t.service_type_name, CASE selected_quote.transport_type_id
-                   WHEN 1 THEN 'Premium'
-                   WHEN 2 THEN 'Ahorro'
+               COALESCE(t.service_type_id, NULL)::integer AS service_type_id,
+               COALESCE(t.service_type_name, CASE t.service_type_id
+                   WHEN '1' THEN 'Premium'
+                   WHEN '2' THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
+               t.fare AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare, t.fare_source, t.whatsapp_user
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
-        LEFT JOIN LATERAL (
-            SELECT q.transport_type_id, q.price_point_to_point
-            FROM magiis_quote_requests qr
-            JOIN magiis_quotes q ON q.quote_request_id = qr.id
-            WHERE qr.livi_trip_id = t.id
-              AND q.transport_type_id = NULLIF(qr.request_payload->>'serviceTypeId', '')::integer
-            ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
-            LIMIT 1
-        ) selected_quote ON TRUE
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
         """,
         (trip_id, user["id"]),
@@ -539,25 +530,16 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
                t.tracking_location_updated_at,
-               COALESCE(t.service_type_id, selected_quote.transport_type_id::text)::integer AS service_type_id,
-               COALESCE(t.service_type_name, CASE selected_quote.transport_type_id
-                   WHEN 1 THEN 'Premium'
-                   WHEN 2 THEN 'Ahorro'
+               COALESCE(t.service_type_id, NULL)::integer AS service_type_id,
+               COALESCE(t.service_type_name, CASE t.service_type_id
+                   WHEN '1' THEN 'Premium'
+                   WHEN '2' THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
+               t.fare AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare, t.fare_source, t.whatsapp_user
         FROM livi_trips t
-        LEFT JOIN LATERAL (
-            SELECT q.transport_type_id, q.price_point_to_point
-            FROM magiis_quote_requests qr
-            JOIN magiis_quotes q ON q.quote_request_id = qr.id
-            WHERE qr.livi_trip_id = t.id
-              AND q.transport_type_id = NULLIF(qr.request_payload->>'serviceTypeId', '')::integer
-            ORDER BY qr.created_at DESC, q.created_at DESC, q.id DESC
-            LIMIT 1
-        ) selected_quote ON TRUE
         WHERE (
             (
                 EXISTS (

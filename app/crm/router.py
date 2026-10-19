@@ -2,26 +2,24 @@
 import json
 import logging
 import math
+import secrets
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
-import httpx
+import bcrypt
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
-from app.integrations import magiis_web
-from app.integrations.magiis_crm import MagiisCrmReader
-from app.crm.sync import sync_all
 from app.mobility.schemas import DriverOperationalStatusResponse, DriverOperationalStatusUpdate
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 log = logging.getLogger(__name__)
 
 _RESOURCES = {
-    "passengers": "magiis_crm_passengers",
-    "drivers": "magiis_crm_drivers",
-    "vehicles": "magiis_crm_vehicles",
-    "travels": "magiis_crm_travels",
-    "vehicle_owners": "magiis_crm_vehicle_owners",
+    "passengers": "livre_crm_passengers",
+    "vehicles": "livre_crm_vehicles",
+    "travels": "livi_trips",
+    "vehicle_owners": "livre_crm_vehicle_owners",
 }
 
 # These accounts remain in livre_users/CRM, but are not GPS/map conductors.
@@ -31,20 +29,26 @@ _HIDDEN_GPS_DRIVER_USER_IDS = ()
 
 
 def _local_page(cur, table: str, page: int, size: int, q: str = ""):
-    """Lee el snapshot local importado; nunca abre una sesión externa."""
-    where = ""
-    params = []
-    if q.strip():
-        where = " WHERE raw_payload::text ILIKE %s"
-        params.append("%" + q.strip() + "%")
-    cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
-    total = int(cur.fetchone()["total"])
-    cur.execute(
-        f"SELECT magiis_id, raw_payload FROM {table}{where} ORDER BY magiis_id DESC LIMIT %s OFFSET %s",
-        params + [size, (page - 1) * size],
-    )
-    items = [{"magiis_id": row["magiis_id"], "raw_payload": row["raw_payload"]} for row in cur.fetchall()]
-    return {"source": "local", "items": items, "page": page, "size": size, "total": total}
+    """Lista entidades propias de Livre; nunca abre una sesión externa."""
+    if table == "livre_crm_passengers":
+        search = "(first_name ILIKE %s OR last_name ILIKE %s OR phone ILIKE %s OR COALESCE(email, '') ILIKE %s)"
+        params = [f"%{q.strip()}%"] * 4 if q.strip() else []
+        where = f" WHERE {search}" if params else ""
+        cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
+        total = int(cur.fetchone()["total"])
+        cur.execute(f"SELECT id, first_name, last_name, email, phone, country, raw_payload FROM {table}{where} ORDER BY id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
+        items = [{"id": r["id"], "raw_payload": {**(r["raw_payload"] or {}), "firstName": r["first_name"], "lastName": r["last_name"], "email": r["email"], "phone": r["phone"], "country": r["country"]}} for r in cur.fetchall()]
+    elif table == "livre_crm_vehicle_owners":
+        search = "(first_name ILIKE %s OR last_name ILIKE %s OR phone ILIKE %s OR COALESCE(email, '') ILIKE %s OR COALESCE(identification, '') ILIKE %s)"
+        params = [f"%{q.strip()}%"] * 5 if q.strip() else []
+        where = f" WHERE {search}" if params else ""
+        cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
+        total = int(cur.fetchone()["total"])
+        cur.execute(f"SELECT id, first_name, last_name, identification, email, phone, city, province, raw_payload FROM {table}{where} ORDER BY id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
+        items = [{"id": r["id"], "raw_payload": {**(r["raw_payload"] or {}), "firstName": r["first_name"], "lastName": r["last_name"], "idNumber": r["identification"], "contactEmail": r["email"], "contactPhone": r["phone"], "city": r["city"], "province": r["province"]}} for r in cur.fetchall()]
+    else:
+        raise HTTPException(status_code=500, detail="Recurso local sin adaptador")
+    return {"source": "livre-cloud", "items": items, "page": page, "size": size, "total": total}
 
 
 def _local_driver_page(cur, page: int, size: int, q: str = ""):
@@ -67,7 +71,7 @@ def _local_driver_page(cur, page: int, size: int, q: str = ""):
               LEFT JOIN LATERAL (
                   SELECT vehicle_label FROM livre_driver_vehicles
                    WHERE driver_user_id = a.user_id
-                   ORDER BY updated_at DESC NULLS LAST, vehicle_magiis_id DESC LIMIT 1
+                   ORDER BY updated_at DESC NULLS LAST LIMIT 1
               ) v ON TRUE{where}
              ORDER BY u.name NULLS LAST, a.user_id
              LIMIT %s OFFSET %s""",
@@ -185,104 +189,6 @@ def _local_trip_page(
     return {"source": "livre", "items": items, "page": page, "size": size, "total": total, "totals": totals}
 
 
-def _find_provider_id(value: object, keys: tuple[str, ...]) -> int | None:
-    """Busca el id real devuelto por MAGIIS, incluso si viene anidado."""
-    if isinstance(value, dict):
-        for key in keys:
-            candidate = value.get(key)
-            if candidate not in (None, ""):
-                try:
-                    return int(candidate)
-                except (TypeError, ValueError):
-                    pass
-        for child in value.values():
-            found = _find_provider_id(child, keys)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find_provider_id(child, keys)
-            if found is not None:
-                return found
-    return None
-
-
-def _sync_trip_assignment(cur, item: dict) -> bool:
-    """Guarda asignación de MAGIIS sin borrar datos ya recolectados."""
-    travel_id = _find_provider_id(item, ("travelId",))
-    if travel_id is None:
-        return False
-    assignment_payload = {
-        key: item.get(key)
-        for key in (
-            "travelId",
-            "state",
-            "driverId",
-            "driverFirstName",
-            "driverLastName",
-            "vehicleDomain",
-            "vehicleMark",
-            "vehicleModel",
-            "vehicleColor",
-            "carPlate",
-        )
-        if item.get(key) is not None
-    }
-    cur.execute(
-        """
-        UPDATE livi_trips
-        SET magiis_status = COALESCE(%s, magiis_status),
-            magiis_driver_id = COALESCE(%s, magiis_driver_id),
-            magiis_driver_first_name = COALESCE(NULLIF(%s, ''), magiis_driver_first_name),
-            magiis_driver_last_name = COALESCE(NULLIF(%s, ''), magiis_driver_last_name),
-            magiis_vehicle_domain = COALESCE(NULLIF(%s, ''), magiis_vehicle_domain),
-            magiis_vehicle_mark = COALESCE(NULLIF(%s, ''), magiis_vehicle_mark),
-            magiis_vehicle_model = COALESCE(NULLIF(%s, ''), magiis_vehicle_model),
-            magiis_vehicle_color = COALESCE(NULLIF(%s, ''), magiis_vehicle_color),
-            magiis_car_plate = COALESCE(NULLIF(%s, ''), magiis_car_plate),
-            tracking_driver_name = COALESCE(NULLIF(%s, ''), tracking_driver_name),
-            tracking_plate = COALESCE(NULLIF(%s, ''), tracking_plate),
-            tracking_vehicle_color = COALESCE(NULLIF(%s, ''), tracking_vehicle_color),
-            tracking_vehicle_model = COALESCE(NULLIF(%s, ''), tracking_vehicle_model),
-            magiis_response = %s,
-            magiis_updated_at = NOW(),
-            updated_at = NOW()
-        WHERE magiis_travel_id = %s
-        """,
-        (
-            item.get("state"),
-            _find_provider_id(item, ("driverId",)),
-            str(item.get("driverFirstName") or ""),
-            str(item.get("driverLastName") or ""),
-            str(item.get("vehicleDomain") or ""),
-            str(item.get("vehicleMark") or ""),
-            str(item.get("vehicleModel") or ""),
-            str(item.get("vehicleColor") or ""),
-            str(item.get("carPlate") or ""),
-            str(item.get("driverFirstName") or ""),
-            str(item.get("carPlate") or item.get("vehicleDomain") or ""),
-            str(item.get("vehicleColor") or ""),
-            str(item.get("vehicleModel") or ""),
-            json.dumps(assignment_payload, ensure_ascii=False),
-            travel_id,
-        ),
-    )
-    return cur.rowcount > 0
-
-
-def _persist_created_record(cur, table: str, response: object, fallback: dict, id_keys: tuple[str, ...]) -> None:
-    """Replica inmediatamente una alta exitosa en la tabla local de CRM."""
-    provider_id = _find_provider_id(response, id_keys)
-    if provider_id is None:
-        return
-    raw_payload = response if isinstance(response, (dict, list)) else fallback
-    cur.execute(
-        f"""INSERT INTO {table} (magiis_id, raw_payload)
-            VALUES (%s, %s::jsonb)
-            ON CONFLICT (magiis_id) DO UPDATE SET raw_payload = EXCLUDED.raw_payload, last_seen_at = now()""",
-        (provider_id, json.dumps(raw_payload, separators=(",", ":"))),
-    )
-
 @router.post("/trips/{trip_id}/tracking")
 def update_trip_tracking(
     trip_id: int,
@@ -363,7 +269,7 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
             SELECT vehicle_label
               FROM livre_driver_vehicles
              WHERE driver_user_id = a.user_id
-             ORDER BY updated_at DESC NULLS LAST, vehicle_magiis_id DESC
+             ORDER BY updated_at DESC NULLS LAST
              LIMIT 1
         ) vehicle_link ON TRUE
         LEFT JOIN LATERAL (
@@ -717,33 +623,6 @@ def agency_commissions(
         "page": page, "size": size, "value": "—",
         "warning": "Livre aún no registra comisiones; MAGIIS no es fuente operativa.",
     }
-    # El panel envía fechas DD/MM/YYYY al reporte, no fechas ISO.
-    def report_date(value: str) -> str:
-        if not value:
-            value = today
-        try:
-            return date.fromisoformat(value).strftime("%d/%m/%Y")
-        except ValueError:
-            return value
-
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        owners = reader.agency_commission_owners()
-        report = reader.agency_commission_report(
-            date_from=report_date(date_from),
-            date_to=report_date(date_to),
-            owner_id=owner_id,
-            page=page,
-            size=size,
-        )
-    return {
-        "source": "magiis",
-        "date_from": date_from or today,
-        "date_to": date_to or today,
-        "owner_id": owner_id,
-        "owners": owners,
-        **report,
-    }
 
 
 @router.get("/travel-history")
@@ -773,15 +652,16 @@ def live_passengers(
     cur=Depends(get_cursor_dep),
 ):
     """Clientes almacenados en la base local."""
-    return _local_page(cur, "magiis_crm_passengers", page, size, q)
+    return _local_page(cur, "livre_crm_passengers", page, size, q)
 
 
 @router.get("/passengers/{passenger_id}")
-def live_passenger(passenger_id: int, user: dict = Depends(require_auth)):
-    """Detalle de un cliente, solo lectura contra MAGIIS."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.passenger(passenger_id)
+def live_passenger(passenger_id: int, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    cur.execute("SELECT id, first_name, last_name, email, phone, country, raw_payload FROM livre_crm_passengers WHERE id = %s", (passenger_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Cliente no encontrado en Livre Cloud")
+    return {"id": row["id"], "firstName": row["first_name"], "lastName": row["last_name"], "email": row["email"], "phone": row["phone"], "country": row["country"], **(row["raw_payload"] or {}), "source": "livre-cloud"}
 
 
 @router.put("/travels/{travel_id}/cancel")
@@ -804,105 +684,130 @@ def cancel_live_travel(
 
 
 @router.get("/vehicles/live")
-def live_vehicles(
-    page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=100),
-    q: str = Query(default="", max_length=120),
-    user: dict = Depends(require_auth),
-    cur=Depends(get_cursor_dep),
-):
-    """Vehículos que tienen una asociación local en Livre."""
-    return _local_vehicle_page(cur, page, size, q)
+def live_vehicles(page: int = Query(default=1, ge=1), size: int = Query(default=20, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    filters, params = [], []
+    if q.strip():
+        filters.append("(plate ILIKE %s OR brand ILIKE %s OR model ILIKE %s)")
+        params = [f"%{q.strip()}%"] * 3
+    where = " WHERE " + " AND ".join(filters) if filters else ""
+    cur.execute(f"SELECT count(*) AS total FROM livre_crm_vehicles{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(f"SELECT * FROM livre_crm_vehicles{where} ORDER BY id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
+    return {"source": "livre-cloud", "items": [dict(row) for row in cur.fetchall()], "page": page, "size": size, "total": total}
+
 
 
 @router.get("/vehicles/types")
 def live_vehicle_types(user: dict = Depends(require_auth)):
-    return {"items": [], "source": "livre-cloud", "value": "—", "warning": "Livre aún no registra tipos de vehículo."}
+    return {"items": [{"id": "taxi", "name": "Taxi"}, {"id": "remis", "name": "Remis"}, {"id": "van", "name": "Van"}], "source": "livre-cloud"}
 
 
-@router.post("/vehicles")
+@router.post("/vehicles", status_code=201)
 def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    raise HTTPException(status_code=410, detail="Alta de vehículos MAGIIS retirada: Livre aún no tiene un alta local implementada.")
+    card = payload.get("identificationCard") or payload
+    characteristics = payload.get("characteristics") or {}
+    normalized = {
+        "plate": card.get("plate") or card.get("domain"), "brand": card.get("brand") or card.get("mark"),
+        "model": card.get("model"), "year": card.get("year") or card.get("yearOfVehicle"),
+        "color": card.get("color"), "chassis": card.get("chassis"), "motor": card.get("motor"),
+        "vehicleType": card.get("vehicleType") or card.get("vehicleTypeId") or card.get("type"),
+        "ownerId": payload.get("ownerId") or payload.get("vehicleOwnerId"),
+        "imageUrl": payload.get("imageUrl") or payload.get("photo"),
+    }
+    required = ("plate", "brand", "model", "year", "color", "vehicleType")
+    if any(not str(normalized.get(key) or "").strip() for key in required):
+        raise HTTPException(status_code=422, detail="Patente, marca, modelo, año, color y tipo son obligatorios")
+    cur.execute("""INSERT INTO livre_crm_vehicles (plate, brand, model, year, color, chassis, motor, vehicle_type, owner_id, image_url, raw_payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) RETURNING *""",
+                (str(normalized["plate"]).strip().upper(), str(normalized["brand"]).strip(), str(normalized["model"]).strip(), int(normalized["year"]), str(normalized["color"]).strip(), normalized["chassis"], normalized["motor"], normalized["vehicleType"], normalized["ownerId"], normalized["imageUrl"], json.dumps(payload)))
+    return {**dict(cur.fetchone()), "source": "livre-cloud"}
 
 
-@router.post("/drivers")
+@router.post("/drivers", status_code=201)
 def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    raise HTTPException(status_code=410, detail="Alta de choferes MAGIIS retirada: el alta local debe venir del flujo Livre.")
+    first_name, last_name, email = str(payload.get("firstName", "")).strip(), str(payload.get("lastName", "")).strip(), str(payload.get("email", "")).strip().lower()
+    if not first_name or not last_name or "@" not in email:
+        raise HTTPException(status_code=422, detail="Nombre, apellido y email válido son obligatorios")
+    driver_id = str(uuid.uuid4())
+    password_hash = bcrypt.hashpw(secrets.token_urlsafe(24).encode(), bcrypt.gensalt()).decode()
+    cur.execute("INSERT INTO livre_users (id, username, email, name, password_hash) VALUES (%s,%s,%s,%s,%s) RETURNING id, username, email, name", (driver_id, email, email, f"{first_name} {last_name}", password_hash))
+    created = dict(cur.fetchone())
+    cur.execute("INSERT INTO livre_driver_accounts (user_id, active) VALUES (%s, TRUE)", (driver_id,))
+    return {**created, "source": "livre-cloud", "operational_status": "unavailable"}
 
 
-@router.post("/clients")
+
+@router.post("/clients", status_code=201)
 def create_live_client(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    provider_payload = dict(payload)
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        response = reader.create_passenger(provider_payload)
-    _persist_created_record(cur, "magiis_crm_passengers", response, provider_payload, ("passengerUserId", "id", "passengerId"))
-    return response
+    first_name = str(payload.get("firstName", "")).strip()
+    last_name = str(payload.get("lastName", "")).strip()
+    phone = str(payload.get("phone", "")).strip()
+    if not first_name or not last_name or not phone:
+        raise HTTPException(status_code=422, detail="Nombre, apellido y teléfono son obligatorios")
+    cur.execute("""INSERT INTO livre_crm_passengers (first_name, last_name, email, phone, country, raw_payload)
+                   VALUES (%s, %s, %s, %s, %s, %s::jsonb)
+                   RETURNING id, first_name, last_name, email, phone, country""",
+                (first_name, last_name, payload.get("email"), phone, payload.get("country") or "Argentina", json.dumps(payload)))
+    row = dict(cur.fetchone())
+    return {"id": row["id"], "firstName": row["first_name"], "lastName": row["last_name"], "email": row["email"], "phone": row["phone"], "country": row["country"], "source": "livre-cloud"}
 
 
 @router.get("/vehicle-owners")
 def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    return {"source": "livre-cloud", "items": [], "total": None, "page": page, "size": size,
-            "value": "—", "warning": "Livre aún no registra dueños de vehículos."}
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        result = reader.vehicle_owner_page(page=1, size=50, find=q.strip())
-        page_data = result.get("page", result)
-        items = list(page_data.get("content", [])) if isinstance(page_data, dict) else []
-        total_pages = int(page_data.get("totalPages", 1)) if isinstance(page_data, dict) else 1
-        for current_page in range(2, total_pages + 1):
-            next_result = reader.vehicle_owner_page(page=current_page, size=50, find=q.strip())
-            next_data = next_result.get("page", next_result)
-            items.extend(next_data.get("content", []) if isinstance(next_data, dict) else [])
-    for item in items:
-        owner_id = _find_provider_id(item, ("id", "vehicleOwnerId"))
-        if owner_id is not None:
-            cur.execute("""INSERT INTO magiis_crm_vehicle_owners (magiis_id, raw_payload) VALUES (%s, %s::jsonb) ON CONFLICT (magiis_id) DO UPDATE SET raw_payload=EXCLUDED.raw_payload, last_seen_at=now()""", (owner_id, json.dumps(item, separators=(",", ":"))))
-    return {"items": [{"magiis_id": item.get("id"), "raw_payload": item} for item in items], "total": len(items), "page": 1, "size": len(items)}
+    return _local_page(cur, "livre_crm_vehicle_owners", page, size, q)
 
 
 @router.post("/confirm-email")
 def confirm_crm_email(payload: dict = Body(...), user: dict = Depends(require_auth)):
     email = str(payload.get("email", "")).strip()
     role = str(payload.get("role", "")).strip().upper()
-    if not email or role not in {"DRIVER", "VEHICLEOWNER"}:
-        from fastapi import HTTPException
+    if "@" not in email or role not in {"DRIVER", "VEHICLEOWNER"}:
         raise HTTPException(status_code=422, detail="Email y rol son obligatorios")
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.confirm_email(email=email, role=role)
+    return {"email": email, "role": role, "verified": False, "source": "livre-cloud", "message": "El email quedó validado por formato; Livre no usa verificación externa."}
 
 
 @router.get("/vehicle-owners/{owner_id}")
-def live_vehicle_owner(owner_id: int, user: dict = Depends(require_auth)):
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.vehicle_owner(owner_id)
+def live_vehicle_owner(owner_id: int, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    cur.execute("SELECT * FROM livre_crm_vehicle_owners WHERE id = %s", (owner_id,))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Propietario no encontrado en Livre Cloud")
+    return {**dict(row), "source": "livre-cloud"}
 
 
-@router.post("/vehicle-owners")
+@router.post("/vehicle-owners", status_code=201)
 def create_live_vehicle_owner(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    provider_payload = dict(payload)
-    provider_payload["carrierId"] = str(magiis_web.CARRIER_USER_ID)
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        response = reader.create_vehicle_owner(provider_payload)
-    _persist_created_record(cur, "magiis_crm_vehicle_owners", response, provider_payload, ("vehicleOwnerId", "id"))
-    return response
+    first_name, last_name = str(payload.get("firstName", "")).strip(), str(payload.get("lastName", "")).strip()
+    if not first_name or not last_name:
+        raise HTTPException(status_code=422, detail="Nombre y apellido son obligatorios")
+    cur.execute("""INSERT INTO livre_crm_vehicle_owners (first_name, last_name, identification, email, phone, city, province, street, street_number, notes, raw_payload)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb) RETURNING *""",
+                (first_name, last_name, payload.get("cuitNumberTitular") or payload.get("idNumber"), payload.get("contactEmail"), payload.get("contactPhone"), payload.get("city"), payload.get("province"), payload.get("streetName"), payload.get("streetNumber"), payload.get("notes"), json.dumps(payload)))
+    return {**dict(cur.fetchone()), "source": "livre-cloud"}
 
 
 @router.put("/vehicle-owners/{owner_id}")
-def update_live_vehicle_owner(owner_id: int, payload: dict = Body(...), user: dict = Depends(require_auth)):
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.update_vehicle_owner(owner_id, payload)
+def update_live_vehicle_owner(owner_id: int, payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    cur.execute("""UPDATE livre_crm_vehicle_owners SET first_name=%s,last_name=%s,identification=%s,email=%s,phone=%s,city=%s,province=%s,street=%s,street_number=%s,notes=%s,raw_payload=%s::jsonb,updated_at=now() WHERE id=%s RETURNING *""",
+                (payload.get("firstName", "").strip(), payload.get("lastName", "").strip(), payload.get("cuitNumberTitular") or payload.get("idNumber"), payload.get("contactEmail"), payload.get("contactPhone"), payload.get("city"), payload.get("province"), payload.get("streetName"), payload.get("streetNumber"), payload.get("notes"), json.dumps(payload), owner_id))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Propietario no encontrado en Livre Cloud")
+    return {**dict(row), "source": "livre-cloud"}
 
 
 @router.put("/vehicles/{vehicle_id}")
-def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict = Depends(require_auth)):
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.update_vehicle(vehicle_id, payload)
+def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    card = payload.get("identificationCard") or payload
+    normalized = {"plate": card.get("plate") or card.get("domain"), "brand": card.get("brand") or card.get("mark"), "model": card.get("model"), "year": card.get("year") or card.get("yearOfVehicle"), "color": card.get("color"), "chassis": card.get("chassis"), "motor": card.get("motor"), "vehicleType": card.get("vehicleType") or card.get("vehicleTypeId") or card.get("type"), "ownerId": payload.get("ownerId") or payload.get("vehicleOwnerId"), "imageUrl": payload.get("imageUrl") or payload.get("photo")}
+    if any(not str(normalized.get(key) or "").strip() for key in ("plate", "brand", "model", "year", "color", "vehicleType")):
+        raise HTTPException(status_code=422, detail="Patente, marca, modelo, año, color y tipo son obligatorios")
+    cur.execute("""UPDATE livre_crm_vehicles SET plate=%s, brand=%s, model=%s, year=%s, color=%s, chassis=%s, motor=%s, vehicle_type=%s, owner_id=%s, image_url=%s, raw_payload=%s::jsonb, updated_at=now() WHERE id=%s RETURNING *""",
+                (str(normalized["plate"]).strip().upper(), str(normalized["brand"]).strip(), str(normalized["model"]).strip(), int(normalized["year"]), str(normalized["color"]).strip(), normalized["chassis"], normalized["motor"], normalized["vehicleType"], normalized["ownerId"], normalized["imageUrl"], json.dumps(payload), vehicle_id))
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Vehículo no encontrado en Livre Cloud")
+    return {**dict(row), "source": "livre-cloud"}
 
 
 @router.get("/{resource}")
@@ -916,32 +821,15 @@ def resource(
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
+    if resource == "drivers":
+        page = offset // limit + 1
+        result = _local_driver_page(cur, page, limit, q)
+        return {"resource": resource, "total": result["total"], "limit": limit, "offset": offset, "items": result["items"]}
     table = _RESOURCES.get(resource)
     if not table:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Recurso CRM inexistente")
-    where_parts = []
-    params = []
-    if q.strip():
-        where_parts.append("raw_payload::text ILIKE %s")
-        params.append("%" + q.strip() + "%")
-    if resource == "travels" and state.strip():
-        where_parts.append("state = %s")
-        params.append(state.strip())
-    if resource == "travels" and travel_date.strip():
-        where_parts.append("travel_date::date = %s::date")
-        params.append(travel_date.strip())
-    where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
-    cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
-    total = int(cur.fetchone()["total"])
-    columns = "magiis_id, raw_payload, first_seen_at, last_seen_at"
     if resource == "travels":
-        columns = "magiis_id, raw_payload, travel_date, state, passenger_magiis_id, driver_magiis_id, first_seen_at, last_seen_at"
-    cur.execute(
-        f"""SELECT {columns}
-            FROM {table}{where}
-            ORDER BY magiis_id DESC LIMIT %s OFFSET %s""",
-        params + [limit, offset],
-    )
-    rows = [dict(row) for row in cur.fetchall()]
-    return {"resource": resource, "total": total, "limit": limit, "offset": offset, "items": rows}
+        result = _local_trip_page(cur, offset // limit + 1, limit, q, state, "", "")
+        return {"resource": resource, "total": result["total"], "limit": limit, "offset": offset, "items": result["items"], "totals": result.get("totals")}
+    result = _local_page(cur, table, offset // limit + 1, limit, q)
+    return {"resource": resource, "total": result["total"], "limit": limit, "offset": offset, "items": result["items"]}

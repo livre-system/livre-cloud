@@ -32,7 +32,6 @@ from decimal import Decimal
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
-from app.integrations import magiis_web
 from app.integrations.google_maps import geocode_address, route_distance_km
 from app.integrations.historical_quote import (
     FARE_SOURCE_COMMERCIAL,
@@ -40,7 +39,6 @@ from app.integrations.historical_quote import (
     commercial_fare,
     historical_options,
 )
-from app.integrations.magiis_quotes import persist_quote_response
 
 log = logging.getLogger(__name__)
 
@@ -841,12 +839,7 @@ async def elevenlabs_trip(request: Request):
                     "UPDATE livi_whatsapp_quotes SET consumed_at = NOW() WHERE quote_id = %s",
                     (quote_id,),
                 )
-        persist_quote_response(
-            livi_trip_id=trip_id,
-            http_status=200,
-            request_payload={"serviceTypeId": service_type_id, "quoteId": quote_id},
-            response_body=quote["options"],
-        )
+        log.info(f"[ELEVEN TRIP] quote consumed locally quote_id={quote_id!r}")
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")
     except Exception as e:
         log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
