@@ -30,6 +30,70 @@ def _digits(value: Any) -> str:
     return re.sub(r"\D", "", _text(value))
 
 
+def _payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Return the provider payload without losing any source fields."""
+    value = row.get("raw_payload")
+    return value if isinstance(value, dict) else {
+        key: value for key, value in row.items() if key != "magiis_id"
+    }
+
+
+def split_owner_name(value: Any) -> tuple[str, str] | None:
+    """Split titularDescription conservatively; never invent a surname."""
+    parts = _text(value).split()
+    if len(parts) < 2:
+        return None
+    return parts[0], " ".join(parts[1:])
+
+
+def passenger_migration_plan(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prepare one local row per source passenger; duplicates are not merged."""
+    plan = []
+    for row in rows:
+        source_id = row.get("magiis_id", row.get("id"))
+        first = _first(row, "first_name", "firstName", "name")
+        last = _first(row, "last_name", "lastName", "surname")
+        phone = _first(row, "phone", "telephone", "phoneNumber", "contactPhone")
+        eligible = bool(source_id not in (None, "") and first and last and phone)
+        plan.append({
+            "source_magiis_id": source_id,
+            "first_name": first,
+            "last_name": last,
+            "email": _first(row, "email", "passengerUserEmail"),
+            "phone": phone,
+            "country": _first(row, "country") or "Argentina",
+            "raw_payload": _payload(row),
+            "eligible": eligible,
+            "exclusion_reason": None if eligible else "missing_required_identity_field",
+        })
+    return plan
+
+
+def owner_migration_plan(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Map historical owners from titularDescription, preserving the payload."""
+    plan = []
+    for row in rows:
+        source_id = row.get("magiis_id", row.get("id"))
+        name = split_owner_name(row.get("titularDescription"))
+        eligible = bool(source_id not in (None, "") and name)
+        plan.append({
+            "source_magiis_id": source_id,
+            "first_name": name[0] if name else "",
+            "last_name": name[1] if name else "",
+            "identification": _first(row, "identification"),
+            "email": _first(row, "email", "contactEmail"),
+            "phone": _first(row, "phone", "contactPhone"),
+            "city": _first(row, "city"),
+            "province": _first(row, "province"),
+            "street": _first(row, "street", "streetName"),
+            "street_number": _first(row, "street_number", "streetNumber"),
+            "raw_payload": _payload(row),
+            "eligible": eligible,
+            "exclusion_reason": None if eligible else "missing_titularDescription_or_source_id",
+        })
+    return plan
+
+
 def passenger_classification(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     rows = list(rows)
     groups: defaultdict[tuple[str, str, str], list[Any]] = defaultdict(list)
@@ -71,23 +135,23 @@ def passenger_classification(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
 def owner_source_audit(owner_rows: Iterable[dict[str, Any]], livre_user_emails: Iterable[str]) -> dict[str, Any]:
     """Compare owners only with an authorized first-party Livre user source."""
     owner_rows = list(owner_rows)
+    owner_plan = owner_migration_plan(owner_rows)
     emails = {email.strip().casefold() for email in livre_user_emails if _text(email)}
     matches = []
     for row in owner_rows:
         email = _first(row, "email", "contactEmail").casefold()
         if email and email in emails:
             matches.append(row.get("magiis_id", row.get("id")))
-    complete_names = sum(
-        bool(_first(row, "first_name", "firstName")) and bool(_first(row, "last_name", "lastName"))
-        for row in owner_rows
-    )
+    complete_names = sum(bool(item["eligible"]) for item in owner_plan)
     return {
-        "owners_total": len(list(owner_rows)) if not isinstance(owner_rows, list) else len(owner_rows),
+        "owners_total": len(owner_rows),
         "complete_names": complete_names,
         "authorized_email_matches": len(matches),
         "matched_owner_ids": matches,
-        "safe_candidates": 0 if complete_names == 0 else len(matches),
-        "source": "livre_users.email",
+        "safe_candidates": complete_names,
+        "titular_description_names": sum(bool(split_owner_name(row.get("titularDescription"))) for row in owner_rows),
+        "excluded_missing_titular_description": sum(not item["eligible"] for item in owner_plan),
+        "source": "historical.titularDescription",
     }
 
 
@@ -222,6 +286,11 @@ def vehicle_migration_plan(rows: Iterable[dict[str, Any]], owner_source_ids: set
         source_id = row.get("magiis_id", row.get("id"))
         owner_id = row.get("owner_id", row.get("ownerId"))
         linked = owner_id not in (None, "") and owner_id in owner_source_ids
+        year = _first(card, "year", "yearOfVehicle")
+        vehicle_type = _first(card, "vehicleType", "vehicleTypeId", "type")
+        eligible = bool(source_id not in (None, "") and _first(card, "domain", "plate") and
+                        _first(card, "mark", "brand") and _first(card, "model") and year and
+                        _first(card, "color") and vehicle_type)
         plan.append({
             "source_magiis_id": source_id,
             "owner_source_magiis_id": owner_id,
@@ -229,8 +298,42 @@ def vehicle_migration_plan(rows: Iterable[dict[str, Any]], owner_source_ids: set
             "plate": _first(card, "domain", "plate"),
             "brand": _first(card, "mark", "brand"),
             "model": _first(card, "model"),
-            "status": "blocked_until_owner_resolution",
+            "year": year,
+            "color": _first(card, "color"),
+            "chassis": _first(card, "chassis"),
+            "motor": _first(card, "motor"),
+            "vehicle_type": vehicle_type,
+            "image_url": _first(row, "image_url", "imageUrl", "photo"),
+            "raw_payload": _payload(row),
+            "status": "ready_after_owner_resolution" if eligible and linked else "blocked_until_owner_resolution",
             "owner_source_exists": linked,
-            "promote_to_operational": False,
+            "eligible": eligible,
+            "promote_to_operational": eligible and linked,
+            "exclusion_reason": None if eligible else "missing_required_vehicle_field",
+        })
+    return plan
+
+
+def driver_vehicle_relationship_plan(
+    rows: Iterable[dict[str, Any]],
+    vehicle_source_ids: set[Any],
+    livre_user_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Prepare only links whose driver identity is already local and authorized."""
+    plan = []
+    for row in rows:
+        driver_id = _first(row, "driverUserId")
+        vehicle_id = row.get("vehicleId")
+        eligible = bool(driver_id and vehicle_id in vehicle_source_ids and driver_id in livre_user_ids)
+        plan.append({
+            "driver_user_id": driver_id,
+            "vehicle_magiis_id": vehicle_id,
+            "vehicle_label": _first(row, "vehicleDomain", "vehiclePlate"),
+            "eligible": eligible,
+            "exclusion_reason": None if eligible else (
+                "driver_not_local" if driver_id not in livre_user_ids else
+                "vehicle_not_in_source" if vehicle_id not in vehicle_source_ids else
+                "missing_driver_or_vehicle_id"
+            ),
         })
     return plan

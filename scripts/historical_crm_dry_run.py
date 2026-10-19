@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 import os
 import sys
-import psycopg
+import psycopg2
 
 from app.crm.historical_migration import (
     commission_rule,
     financial_audit,
     manual_review_queue,
+    driver_vehicle_relationship_plan,
+    owner_migration_plan,
     owner_source_audit,
+    passenger_migration_plan,
     passenger_classification,
     vehicle_migration_plan,
     vehicle_relationship_report,
@@ -30,13 +33,16 @@ def main() -> int:
         return 2
     # The connection is read-only at the server level for this process. Every
     # statement below is SELECT; no migration runner is imported or invoked.
-    with psycopg.connect(dsn, options="-c default_transaction_read_only=on") as conn:
+    with psycopg2.connect(dsn, options="-c default_transaction_read_only=on") as conn:
         with conn.cursor() as cur:
             passengers = rows(cur, "magiis_crm_passengers")
             owners = rows(cur, "magiis_crm_vehicle_owners")
             vehicles = rows(cur, "magiis_crm_vehicles")
+            drivers = rows(cur, "magiis_crm_drivers")
             cur.execute("SELECT email FROM livre_users WHERE email IS NOT NULL")
             livre_emails = [row[0] for row in cur.fetchall()]
+            cur.execute("SELECT id::text FROM livre_users")
+            livre_user_ids = {row[0] for row in cur.fetchall()}
             cur.execute("""SELECT id, gross_fare, livre_commission, driver_net,
                 commission_rate_percent, commission_amount, driver_net_amount,
                 financial_status, payment_confirmed
@@ -53,20 +59,48 @@ def main() -> int:
             local_owners = cur.fetchone()[0]
             cur.execute("""SELECT count(*) FROM livre_crm_vehicles""")
             local_vehicles = cur.fetchone()[0]
+            local_source_ids = {}
+            source_key_available = set()
+            for table in ("livre_crm_passengers", "livre_crm_vehicle_owners", "livre_crm_vehicles"):
+                cur.execute("""SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='public' AND table_name=%s AND column_name='source_magiis_id'""", (table,))
+                if cur.fetchone():
+                    source_key_available.add(table)
+                    cur.execute(f"SELECT source_magiis_id FROM {table} WHERE source_magiis_id IS NOT NULL")
+                    local_source_ids[table] = {row[0] for row in cur.fetchall()}
+                else:
+                    local_source_ids[table] = set()
 
     passenger_report = passenger_classification(passengers)
     owner_report = owner_source_audit(owners, livre_emails)
+    passenger_plan = passenger_migration_plan(passengers)
+    owner_plan = owner_migration_plan(owners)
     vehicle_report = vehicle_relationship_report(
         vehicles, {row["magiis_id"] for row in owners}
     )
     financial_report = financial_audit(financial_rows)
     review_queue = manual_review_queue(passengers)
     vehicle_plan = vehicle_migration_plan(vehicles, {row["magiis_id"] for row in owners})
+    driver_link_plan = driver_vehicle_relationship_plan(
+        drivers,
+        {row["magiis_id"] for row in vehicles},
+        livre_user_ids,
+    )
+    def idempotency(plan, table, eligibility_key="eligible"):
+        existing = local_source_ids[table]
+        eligible = [item for item in plan if item.get(eligibility_key)]
+        return {
+            "eligible": len(eligible),
+            "already_present_by_source_id": sum(item["source_magiis_id"] in existing for item in eligible),
+            "would_insert": sum(item["source_magiis_id"] not in existing for item in eligible),
+            "source_id_unique_in_plan": len({item["source_magiis_id"] for item in eligible}) == len(eligible),
+            "source_key_column_available": table in source_key_available,
+        }
     report = {
         "mode": "read-only dry-run",
         "writes": False,
         "source": {
-            "passengers": passenger_report,
+            "passengers": {**passenger_report, "migration_eligible": sum(item["eligible"] for item in passenger_plan)},
             "manual_review": {
                 "total": len(review_queue),
                 "ambiguous": sum(item["reason"] == "ambiguous_identity" for item in review_queue),
@@ -75,17 +109,29 @@ def main() -> int:
             },
             "owners": owner_report,
             "vehicles": vehicle_report,
+            "driver_vehicle_links": {
+                "source_rows": len(driver_link_plan),
+                "eligible_local_links": sum(item["eligible"] for item in driver_link_plan),
+                "blocked_driver_not_local": sum(item["exclusion_reason"] == "driver_not_local" for item in driver_link_plan),
+                "blocked_vehicle_not_in_source": sum(item["exclusion_reason"] == "vehicle_not_in_source" for item in driver_link_plan),
+            },
         },
         "local_counts_before": {
             "passengers": local_passengers,
             "owners": local_owners,
             "vehicles": local_vehicles,
         },
+        "idempotency": {
+            "passengers": idempotency(passenger_plan, "livre_crm_passengers"),
+            "owners": idempotency(owner_plan, "livre_crm_vehicle_owners"),
+            "vehicles": idempotency(vehicle_plan, "livre_crm_vehicles", "promote_to_operational"),
+        },
         "migration_candidates": {
-            "passengers": passenger_report["eligible"],
-            "owners": owner_report["safe_candidates"],
+            "passengers": sum(item["eligible"] for item in passenger_plan),
+            "owners": sum(item["eligible"] for item in owner_plan),
             "vehicles_operational": sum(item["promote_to_operational"] for item in vehicle_plan),
-            "vehicles_linked_but_blocked": vehicle_report["linked_owner_count"],
+            "vehicles_without_owner": vehicle_report["missing_owner"],
+            "driver_vehicle_links": sum(item["eligible"] for item in driver_link_plan),
         },
         "commissions": {
             **financial_report,

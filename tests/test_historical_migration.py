@@ -6,9 +6,13 @@ from app.crm.historical_migration import (
     financial_audit,
     manual_review_queue,
     owner_source_audit,
+    owner_migration_plan,
     passenger_classification,
+    passenger_migration_plan,
+    split_owner_name,
     vehicle_migration_plan,
     vehicle_relationship_report,
+    driver_vehicle_relationship_plan,
 )
 
 
@@ -38,6 +42,46 @@ def test_owner_source_does_not_invent_identity_and_checks_first_party_source():
     assert result["complete_names"] == 0
     assert result["authorized_email_matches"] == 1
     assert result["safe_candidates"] == 0
+
+
+def test_owner_mapping_uses_titular_description_and_preserves_payload():
+    assert split_owner_name("Ana María Pérez") == ("Ana", "María Pérez")
+    plan = owner_migration_plan([{
+        "magiis_id": 10,
+        "titularDescription": "Ana María Pérez",
+        "contactEmail": "a@example.test",
+        "identification": "DNI",
+    }])
+    assert plan[0]["eligible"] is True
+    assert plan[0]["first_name"] == "Ana"
+    assert plan[0]["last_name"] == "María Pérez"
+    assert plan[0]["email"] == "a@example.test"
+    assert plan[0]["raw_payload"]["titularDescription"] == "Ana María Pérez"
+    assert owner_source_audit([plan[0]["raw_payload"] | {"magiis_id": 10}], [])["safe_candidates"] == 1
+
+
+def test_passenger_plan_keeps_ambiguous_source_rows_separate_and_is_source_idempotent():
+    rows = [
+        {"magiis_id": 1, "firstName": "A", "lastName": "B", "phoneNumber": "1"},
+        {"magiis_id": 2, "firstName": "A", "lastName": "B", "phoneNumber": "1"},
+    ]
+    plan = passenger_migration_plan(rows)
+    assert len(plan) == 2
+    assert {item["source_magiis_id"] for item in plan} == {1, 2}
+    assert all(item["eligible"] for item in plan)
+    assert plan == passenger_migration_plan(rows)
+
+
+def test_driver_vehicle_links_require_local_driver_and_source_vehicle():
+    plan = driver_vehicle_relationship_plan(
+        [{"driverUserId": "local-1", "vehicleId": 7, "vehicleDomain": "AA"},
+         {"driverUserId": "old-2", "vehicleId": 7}],
+        {7},
+        {"local-1"},
+    )
+    assert plan[0]["eligible"] is True
+    assert plan[1]["eligible"] is False
+    assert plan[1]["exclusion_reason"] == "driver_not_local"
 
 
 def test_vehicles_do_not_promote_unresolved_owner_relationships():
