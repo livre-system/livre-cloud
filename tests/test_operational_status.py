@@ -357,6 +357,8 @@ def test_schema_rejects_active_and_other_noncanonical_statuses():
 
 def test_operational_cleanup_migration_drops_defaults_and_preserves_explicit_labels():
     migration = open("app/migrations/20261019_operational_activity_audit_cleanup.sql").read()
+    assert "ALTER COLUMN activity_type DROP NOT NULL" in migration
+    assert "ALTER COLUMN source DROP NOT NULL" in migration
     assert "ALTER COLUMN activity_type DROP DEFAULT" in migration
     assert "ALTER COLUMN source DROP DEFAULT" in migration
     assert "SET activity_type = NULL" in migration
