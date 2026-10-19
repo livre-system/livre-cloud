@@ -244,7 +244,7 @@ def _save_trip(
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  activity_type, source, status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
             RETURNING id;
             """,
             (
