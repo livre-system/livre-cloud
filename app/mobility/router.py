@@ -782,10 +782,7 @@ def driver_reject_trip(
                WHERE id = %s""",
             (f"rejection_notification: {str(exc)[:450]}", trip_id),
         )
-        raise HTTPException(
-            status_code=502,
-            detail="Rechazo registrado, pero no se pudo avisar al pasajero por WhatsApp",
-        ) from exc
+        log.warning("No se pudo avisar el rechazo por WhatsApp trip=%s: %s", trip_id, exc)
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
 
 

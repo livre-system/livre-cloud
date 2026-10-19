@@ -838,7 +838,7 @@ async def elevenlabs_trip(request: Request):
     # ElevenLabs Webhook Tool requiere { "result": "..." }
     tracking_url = _tracking_url(tracking_token)
     return {
-        "result": f"{_response} Link de seguimiento: {tracking_url}",
+        "result": _response,
         "tracking_url": tracking_url,
         "trip_id": trip_id,
     }
