@@ -353,3 +353,15 @@ def test_schema_rejects_active_and_other_noncanonical_statuses():
         except ValidationError:
             continue
         raise AssertionError(f"unexpected operational status accepted: {status}")
+
+
+def test_operational_cleanup_migration_drops_defaults_and_preserves_explicit_labels():
+    migration = open("app/migrations/20261019_operational_activity_audit_cleanup.sql").read()
+    assert "ALTER COLUMN activity_type DROP DEFAULT" in migration
+    assert "ALTER COLUMN source DROP DEFAULT" in migration
+    assert "SET activity_type = NULL" in migration
+    assert "source = NULL" in migration
+    assert "activity_type = 'unclassified'" in migration
+    assert "source = 'unknown'" in migration
+    assert "activity_type = 'real'" not in migration
+    assert "activity_type = 'test'" not in migration
