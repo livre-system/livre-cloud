@@ -375,6 +375,22 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     completed_real = trip_totals.get(("completed", "real"), 0)
     completed_test = trip_totals.get(("completed", "test"), 0)
     completed_unclassified = trip_totals.get(("completed", "unclassified"), 0)
+    cur.execute(
+        """
+        SELECT
+          (SELECT count(*) FROM livi_trips) AS trips_total,
+          (SELECT count(*) FROM livi_trips WHERE source = 'whatsapp'
+             OR (source IS NULL AND whatsapp_user IS NOT NULL)) AS whatsapp_trip_requests,
+          (SELECT count(*) FROM livi_trips WHERE activity_type = 'test') AS test_trips_total,
+          (SELECT count(*) FROM magiis_quote_requests) AS whatsapp_quote_requests,
+          (SELECT count(*) FROM livi_whatsapp_quotes) AS whatsapp_quotes_total,
+          (SELECT count(DISTINCT md.key)
+             FROM memory_documents md
+             JOIN memory_rows mr ON mr.document_id = md.id
+            WHERE md.key LIKE 'livi_%%') AS whatsapp_conversations_with_transcript
+        """
+    )
+    activity_row = cur.fetchone()
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
     available = sum(item["operationalStatus"] == "available" and item["operationalState"] != "EN VIAJE" for item in drivers)
     unavailable = sum(item["operationalStatus"] == "unavailable" and item["operationalState"] != "EN VIAJE" for item in drivers)
@@ -389,6 +405,24 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
             "workingVehiclesQuantity": len(known_vehicles) if known_vehicles else None,
             "kilometersTotal": None,
             "clientsIndividualsAmount": None,
+        },
+        "activity": {
+            "source": "livre-cloud",
+            "trips": {
+                "total": int(activity_row["trips_total"]),
+                "by_status_and_type": {
+                    f"{status}:{activity_type}": total
+                    for (status, activity_type), total in trip_totals.items()
+                },
+                "test_total": int(activity_row["test_trips_total"]),
+            },
+            "whatsapp": {
+                "trip_requests": int(activity_row["whatsapp_trip_requests"]),
+                "quote_requests": int(activity_row["whatsapp_quote_requests"]),
+                "quotes": int(activity_row["whatsapp_quotes_total"]),
+                "conversations_with_transcript": int(activity_row["whatsapp_conversations_with_transcript"]),
+            },
+            "note": "Los contadores salen de tablas existentes; no se generan eventos paralelos.",
         },
         "trip_totals": {
             "completed_real": completed_real,
@@ -414,47 +448,6 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
         "report_042": {},
         "chats": {},
     }
-
-
-@router.post("/operational/events", status_code=201)
-def create_operational_event(
-    payload: dict = Body(...),
-    user: dict = Depends(require_auth),
-    cur=Depends(get_cursor_dep),
-):
-    """Registers auditable trip/test/WhatsApp operations without changing old rows."""
-    event_type = str(payload.get("event_type", "")).strip()
-    source = str(payload.get("source", "")).strip()
-    activity_type = str(payload.get("activity_type", "unclassified")).strip()
-    status = str(payload.get("status", "recorded")).strip()
-    if not event_type or not source or activity_type not in {"real", "test", "unclassified"}:
-        raise HTTPException(status_code=422, detail="event_type, source y activity_type son obligatorios")
-    occurred_at = payload.get("occurred_at")
-    if occurred_at:
-        try:
-            occurred_at = datetime.fromisoformat(str(occurred_at).replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail="occurred_at debe ser ISO-8601") from exc
-    else:
-        occurred_at = datetime.now(timezone.utc)
-    external_id = str(payload.get("external_id", "")).strip() or None
-    event_payload = payload.get("payload", {})
-    if not isinstance(event_payload, dict):
-        raise HTTPException(status_code=422, detail="payload debe ser un objeto JSON")
-    cur.execute(
-        """
-        INSERT INTO livi_operational_events
-            (event_type, source, activity_type, status, external_id, payload, occurred_at)
-        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s)
-        ON CONFLICT (source, external_id) WHERE external_id IS NOT NULL
-        DO UPDATE SET status = EXCLUDED.status, payload = EXCLUDED.payload,
-                      activity_type = EXCLUDED.activity_type, occurred_at = EXCLUDED.occurred_at
-        RETURNING id, event_type, source, activity_type, status, external_id, occurred_at
-        """,
-        (event_type, source, activity_type, status, external_id, json.dumps(event_payload), occurred_at),
-    )
-    row = cur.fetchone()
-    return dict(row)
 
 
 @router.get("/drivers/live")

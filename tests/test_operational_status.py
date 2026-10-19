@@ -1,7 +1,6 @@
 from app.crm.router import (
     _HIDDEN_GPS_DRIVER_USER_IDS,
     _operational_snapshot,
-    create_operational_event,
     operational,
     update_operational_driver_status,
 )
@@ -182,7 +181,14 @@ def test_snapshot_query_excludes_verified_non_map_ids_but_keeps_real_driver():
 
 def test_crm_operational_counts_each_canonical_status_without_active_as_status():
     rows = [driver_row(1, "available"), driver_row(2, "unavailable"), driver_row(3, "out_of_service")]
-    cur = FakeCursor([rows, []])
+    cur = FakeCursor([rows, [], {
+        "trips_total": 0,
+        "whatsapp_trip_requests": 0,
+        "test_trips_total": 0,
+        "whatsapp_quote_requests": 0,
+        "whatsapp_quotes_total": 0,
+        "whatsapp_conversations_with_transcript": 0,
+    }])
     result = operational(user={"id": "crm"}, cur=cur)
     assert result["driver_totals"] == {
         "totalDrivers": 3,
@@ -211,6 +217,14 @@ def test_crm_operational_separates_trip_activity_and_deduplicates_vehicles():
             {"status": "completed", "activity_type": "unclassified", "total": 7},
             {"status": "assigned", "activity_type": "real", "total": 1},
         ],
+        {
+            "trips_total": 14,
+            "whatsapp_trip_requests": 5,
+            "test_trips_total": 2,
+            "whatsapp_quote_requests": 3,
+            "whatsapp_quotes_total": 3,
+            "whatsapp_conversations_with_transcript": 4,
+        },
     ])
 
     result = operational(user={"id": "crm"}, cur=cur)
@@ -226,46 +240,34 @@ def test_crm_operational_separates_trip_activity_and_deduplicates_vehicles():
     assert result["driver_totals"]["totalDriversInTravel"] == 1
     assert result["driver_totals"]["available"] == 1
     assert result["vehicle_totals"] == {"identified": 2, "unidentified": 1}
+    assert result["activity"]["source"] == "livre-cloud"
+    assert result["activity"]["trips"]["total"] == 14
+    assert result["activity"]["whatsapp"] == {
+        "trip_requests": 5,
+        "quote_requests": 3,
+        "quotes": 3,
+        "conversations_with_transcript": 4,
+    }
 
 
 def test_crm_operational_counts_legacy_null_activity_as_unclassified():
     cur = FakeCursor([
         [],
         [{"status": "completed", "activity_type": "unclassified", "total": 3}],
+        {
+            "trips_total": 3,
+            "whatsapp_trip_requests": 0,
+            "test_trips_total": 0,
+            "whatsapp_quote_requests": 0,
+            "whatsapp_quotes_total": 0,
+            "whatsapp_conversations_with_transcript": 0,
+        },
     ])
 
     result = operational(user={"id": "crm"}, cur=cur)
 
     assert result["status"]["unclassifiedTravelsQuantity"] == 3
     assert "COALESCE(activity_type, 'unclassified')" in cur.calls[1][0]
-
-
-def test_operational_event_is_idempotent_by_source_and_external_id():
-    cur = FakeCursor([{
-        "id": 9,
-        "event_type": "whatsapp_change_request",
-        "source": "whatsapp",
-        "activity_type": "test",
-        "status": "recorded",
-        "external_id": "msg-9",
-        "occurred_at": None,
-    }])
-
-    result = create_operational_event(
-        payload={
-            "event_type": "whatsapp_change_request",
-            "source": "whatsapp",
-            "activity_type": "test",
-            "external_id": "msg-9",
-            "payload": {"request": "cambio de destino"},
-        },
-        user={"id": "crm"},
-        cur=cur,
-    )
-
-    assert result["id"] == 9
-    assert "ON CONFLICT (source, external_id)" in cur.calls[0][0]
-    assert cur.calls[0][1][0:5] == ("whatsapp_change_request", "whatsapp", "test", "recorded", "msg-9")
 
 
 def test_crm_status_update_writes_the_canonical_value_returned_by_backend():
