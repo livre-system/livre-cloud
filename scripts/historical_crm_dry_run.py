@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import os
 import sys
-from decimal import Decimal
-
 import psycopg
 
 from app.crm.historical_migration import (
     commission_rule,
+    financial_audit,
+    manual_review_queue,
     owner_source_audit,
     passenger_classification,
+    vehicle_migration_plan,
     vehicle_relationship_report,
 )
 
@@ -36,10 +37,16 @@ def main() -> int:
             vehicles = rows(cur, "magiis_crm_vehicles")
             cur.execute("SELECT email FROM livre_users WHERE email IS NOT NULL")
             livre_emails = [row[0] for row in cur.fetchall()]
-            cur.execute("""SELECT count(*), coalesce(sum(gross_fare),0),
-                coalesce(sum(livre_commission),0), coalesce(sum(driver_net),0)
-                FROM livi_trips WHERE gross_fare IS NOT NULL""")
-            financial_count, gross, commission, driver_net = cur.fetchone()
+            cur.execute("""SELECT id, gross_fare, livre_commission, driver_net,
+                commission_rate_percent, commission_amount, driver_net_amount,
+                financial_status, payment_confirmed
+                FROM livi_trips WHERE gross_fare IS NOT NULL ORDER BY id""")
+            financial_rows = [
+                dict(zip(("id", "gross_fare", "livre_commission", "driver_net",
+                          "commission_rate_percent", "commission_amount", "driver_net_amount",
+                          "financial_status", "payment_confirmed"), row))
+                for row in cur.fetchall()
+            ]
             cur.execute("""SELECT count(*) FROM livre_crm_passengers""")
             local_passengers = cur.fetchone()[0]
             cur.execute("""SELECT count(*) FROM livre_crm_vehicle_owners""")
@@ -52,11 +59,20 @@ def main() -> int:
     vehicle_report = vehicle_relationship_report(
         vehicles, {row["magiis_id"] for row in owners}
     )
+    financial_report = financial_audit(financial_rows)
+    review_queue = manual_review_queue(passengers)
+    vehicle_plan = vehicle_migration_plan(vehicles, {row["magiis_id"] for row in owners})
     report = {
         "mode": "read-only dry-run",
         "writes": False,
         "source": {
             "passengers": passenger_report,
+            "manual_review": {
+                "total": len(review_queue),
+                "ambiguous": sum(item["reason"] == "ambiguous_identity" for item in review_queue),
+                "missing_phone": sum(item["reason"] == "missing_phone" for item in review_queue),
+                "all_pending": all(item["status"] == "pending_manual_review" and item["decision"] is None for item in review_queue),
+            },
             "owners": owner_report,
             "vehicles": vehicle_report,
         },
@@ -68,20 +84,17 @@ def main() -> int:
         "migration_candidates": {
             "passengers": passenger_report["eligible"],
             "owners": owner_report["safe_candidates"],
-        "vehicles_operational": 0,
+            "vehicles_operational": sum(item["promote_to_operational"] for item in vehicle_plan),
             "vehicles_linked_but_blocked": vehicle_report["linked_owner_count"],
         },
         "commissions": {
-            "trips_with_financial_data": financial_count,
-            "gross": str(Decimal(str(gross))),
-            "livre_commission_existing": str(Decimal(str(commission))),
-            "driver_net_existing": str(Decimal(str(driver_net))),
+            **financial_report,
             "rule": {key: str(value) for key, value in commission_rule().items()},
             "liquidations_generated": False,
             "payments_marked": False,
         },
     }
-    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0
 
 
