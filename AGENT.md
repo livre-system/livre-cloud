@@ -505,3 +505,14 @@ Pendientes explícitos:
 - Test agregado: `test_trip_status_semantics_does_not_promote_errors_to_open`, cubre 68 no clasificados, 17 `magiis_error`, 1 `cancel_error` y un estado futuro desconocido.
 - GPS: el código confirma inicio al abrir el panel, `watchPosition`/servicio nativo, POST al endpoint y persistencia local. No hay logs productivos suficientes para ubicar el corte entre dispositivo, permisos, envío, endpoint y persistencia. La comprobación faltante es una sesión autorizada con logs correlacionados de permisos/callback, POST (status sanitizado) y lectura posterior de `location_updated_at`; no se simularán coordenadas.
 - La validación autenticada read-only queda preparada en `/tmp/livre_prod_route_readonly.py` y requiere una sesión iniciada por el usuario; no se almacenan credenciales, cookies ni tokens.
+
+## Corrección de historial, cierres y regla comercial (2026-10-19)
+
+- `_history_response()` y `_driver_fare()` aplican una sola vez la regla comercial: el cliente paga el total bruto, Livre retiene 15% y el conductor recibe 85%.
+- El cálculo usa `original_fare` y cae a `fare` cuando `original_fare` es NULL. `total_revenue` conserva el bruto y `final_fare` no recibe una segunda deducción.
+- Con tarifa bruta `3200.00`, el resultado esperado es conductor `2720.00`, comisión `480.00` y cliente `3200.00`.
+- `GET /mobility/driver/history` y `POST /mobility/driver/shift-closures` comparten `_history_response()`. `GET /mobility/driver/shift-closures` sólo lee cierres persistidos.
+- `/crm/agency-commissions` es un camino independiente basado en `livre_crm_commissions`; no mezclarlo con la liquidación del conductor sin una decisión comercial explícita.
+- Regresiones agregadas en `tests/test_commercial_fare.py` cubren viajes completados y no completados, `original_fare`, fallback a `fare`, 85/15 y preservación de `final_fare`.
+- Validación local: `PYTHONPATH=. .venv/bin/pytest -q` → `59 passed`; `python -m compileall -q app` → OK; `git diff --check` → OK.
+- No se ejecutaron migraciones, escrituras productivas, despliegues ni operaciones contra MAGIIS. La validación autenticada de datos reales sigue pendiente.
