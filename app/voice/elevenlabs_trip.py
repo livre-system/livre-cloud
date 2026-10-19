@@ -394,8 +394,10 @@ def _run_local_quote(origen: str, destino: str) -> dict:
         origin = geocode_address(origen)
         destination = geocode_address(destino)
         distance_km = route_distance_km(origin, destination)
+        # WhatsApp/LIVI comunica el total bruto al pasajero. La distribución
+        # 85/15 se calcula únicamente al confirmar y persistir el viaje.
         options = [
-            apply_commercial_discount(item)
+            item
             for item in historical_options(Decimal(str(distance_km)))
             if str(item.get("transportTypeId")) in {"1", "2"}
         ]
@@ -453,7 +455,7 @@ async def elevenlabs_quote(request: Request):
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
     )[:2]]
     option_text = " ".join(
-        f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['price']}."
+        f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['pricePointToPoint']}."
         for index, option in enumerate(options, 1)
     )
     quote_id = _save_whatsapp_quote(
@@ -741,10 +743,13 @@ async def elevenlabs_trip(request: Request):
         if selected is None:
             raise RuntimeError(f"Tipo de servicio no cotizado: {service_type_id}")
 
-        final_fare = Decimal(str(selected.get("finalFare", selected["pricePointToPoint"])))
-        original_fare = Decimal(str(selected.get("originalFare", selected["pricePointToPoint"])))
-        discount_percentage = Decimal(str(selected.get("discountPercentage", "0")))
-        discount_amount = Decimal(str(selected.get("discountAmount", "0")))
+        # El snapshot de cotización contiene el total bruto. Aplicar el split
+        # aquí mantiene el 85% para el conductor sin descontarlo en WhatsApp.
+        financials = apply_commercial_discount(selected)
+        final_fare = Decimal(str(financials["finalFare"]))
+        original_fare = Decimal(str(financials["originalFare"]))
+        discount_percentage = Decimal(str(financials["discountPercentage"]))
+        discount_amount = Decimal(str(financials["discountAmount"]))
         fare_value = original_fare
         if selected_fare is not None and Decimal(str(selected_fare).replace("$", "").replace(",", "").strip()) != original_fare:
             raise RuntimeError(

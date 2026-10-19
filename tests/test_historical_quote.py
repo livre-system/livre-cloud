@@ -32,6 +32,40 @@ def test_exposes_historical_service_options():
     assert all(item["serviceStatus"] == "AVAILABLE" for item in options)
 
 
+def test_whatsapp_quote_options_are_gross_and_split_is_not_embedded():
+    options = historical_options(Decimal("2.63"), [{
+        "rate_id": 6243,
+        "transport_type_id": "2",
+        "price_per_km": "1046.5",
+        "fixed_cost": "1399.3",
+    }])
+
+    assert options[0]["price"] == 4152
+    assert options[0]["pricePointToPoint"] == 4152
+    assert "finalFare" not in options[0]
+    assert "discountAmount" not in options[0]
+
+
+def test_whatsapp_local_quote_does_not_apply_driver_split(monkeypatch):
+    import app.voice.elevenlabs_trip as trip
+
+    monkeypatch.setattr(trip, "geocode_address", lambda address: {"address": address})
+    monkeypatch.setattr(trip, "route_distance_km", lambda origin, destination: 2.63)
+    monkeypatch.setattr(trip, "historical_options", lambda distance: [{
+        "price": 4152,
+        "pricePointToPoint": 4152,
+        "transportTypeId": "2",
+        "serviceName": "Livre Ahorro",
+        "serviceStatus": "AVAILABLE",
+    }])
+
+    quote = trip._run_local_quote("Origen", "Destino")
+
+    assert quote["options"][0]["price"] == 4152
+    assert "finalFare" not in quote["options"][0]
+    assert "discountAmount" not in quote["options"][0]
+
+
 def test_rejects_invalid_distance():
     try:
         calculate_quote(
