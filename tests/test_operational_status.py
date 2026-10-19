@@ -4,6 +4,7 @@ from app.crm.router import (
     operational,
     update_operational_driver_status,
 )
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.mobility.schemas import DriverOperationalStatusUpdate
@@ -11,15 +12,30 @@ from app.mobility.router import _driver_trip, driver_trips
 
 
 class FakeCursor:
-    def __init__(self, rows_by_query):
+    def __init__(self, rows_by_query, schema_rows=None):
         self.rows_by_query = list(rows_by_query)
+        self.schema_rows = schema_rows or [
+            {"table_name": "livi_trips", "column_name": column}
+            for column in ("status", "activity_type", "source", "whatsapp_user")
+        ] + [
+            {"table_name": table, "column_name": "id"}
+            for table in ("magiis_quote_requests", "livi_whatsapp_quotes", "memory_documents", "memory_rows")
+        ] + [
+            {"table_name": "memory_rows", "column_name": "document_id"},
+            {"table_name": "memory_documents", "column_name": "key"},
+        ]
+        self._schema_pending = False
         self.calls = []
         self.rowcount = 1
 
     def execute(self, query, params=()):
         self.calls.append((query, params))
+        self._schema_pending = "information_schema.columns" in query
 
     def fetchall(self):
+        if self._schema_pending:
+            self._schema_pending = False
+            return self.schema_rows
         return self.rows_by_query.pop(0)
 
     def fetchone(self):
@@ -267,7 +283,55 @@ def test_crm_operational_counts_legacy_null_activity_as_unclassified():
     result = operational(user={"id": "crm"}, cur=cur)
 
     assert result["status"]["unclassifiedTravelsQuantity"] == 3
-    assert "COALESCE(activity_type, 'unclassified')" in cur.calls[1][0]
+    assert "COALESCE(activity_type, 'unclassified')" in cur.calls[2][0]
+
+
+def test_crm_operational_uses_explicit_legacy_capabilities_without_querying_new_objects():
+    legacy_schema = [
+        {"table_name": "livi_trips", "column_name": column}
+        for column in ("status", "whatsapp_user")
+    ] + [
+        {"table_name": "magiis_quote_requests", "column_name": "id"},
+        {"table_name": "memory_documents", "column_name": "id"},
+        {"table_name": "memory_documents", "column_name": "key"},
+        {"table_name": "memory_rows", "column_name": "id"},
+        {"table_name": "memory_rows", "column_name": "document_id"},
+    ]
+    cur = FakeCursor(
+        [
+            [],
+            [{"status": "completed", "activity_type": "unclassified", "total": 2}],
+            {
+                "trips_total": 2,
+                "whatsapp_trip_requests": 1,
+                "test_trips_total": None,
+                "whatsapp_quote_requests": 4,
+                "whatsapp_quotes_total": None,
+                "whatsapp_conversations_with_transcript": 2,
+            },
+        ],
+        schema_rows=legacy_schema,
+    )
+
+    result = operational(user={"id": "crm"}, cur=cur)
+
+    assert result["activity"]["schema"]["status"] == "legacy"
+    assert result["activity"]["trips"]["test_total"] is None
+    assert result["activity"]["whatsapp"]["quotes"] is None
+    assert "livi_whatsapp_quotes" not in cur.calls[3][0]
+    assert "COALESCE(activity_type" not in cur.calls[2][0]
+
+
+def test_operational_schema_rejects_missing_required_trips_status():
+    cur = FakeCursor([[]], schema_rows=[{"table_name": "livi_trips", "column_name": "id"}])
+
+    try:
+        operational(user={"id": "crm"}, cur=cur)
+    except HTTPException as exc:
+        assert exc.status_code == 503
+        assert exc.detail["code"] == "CRM_SCHEMA_INCOMPATIBLE"
+    else:
+        raise AssertionError("missing required schema was accepted")
 
 
 def test_crm_status_update_writes_the_canonical_value_returned_by_backend():

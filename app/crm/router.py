@@ -360,37 +360,117 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
     return items
 
 
+_OPERATIONAL_SCHEMA_TABLES = {
+    "livi_trips",
+    "magiis_quote_requests",
+    "livi_whatsapp_quotes",
+    "memory_documents",
+    "memory_rows",
+}
+
+
+def _operational_schema(cur) -> dict:
+    """Detecta capacidades sin DDL y sin ocultar errores de catálogo."""
+    cur.execute(
+        """
+        SELECT table_name, column_name
+          FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = ANY(%s)
+        """,
+        (sorted(_OPERATIONAL_SCHEMA_TABLES),),
+    )
+    rows = cur.fetchall()
+    columns = {table: set() for table in _OPERATIONAL_SCHEMA_TABLES}
+    for row in rows:
+        table = row["table_name"]
+        if table in columns:
+            columns[table].add(row["column_name"])
+    tables = {table for table, names in columns.items() if names}
+    if "livi_trips" not in tables or "status" not in columns["livi_trips"]:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "CRM_SCHEMA_INCOMPATIBLE",
+                "message": "Falta livi_trips.status; no se puede calcular la actividad operativa.",
+            },
+        )
+
+    capabilities = {
+        "trip_activity_type": "activity_type" in columns["livi_trips"],
+        "trip_source": "source" in columns["livi_trips"],
+        "quote_requests": "magiis_quote_requests" in tables,
+        "whatsapp_quotes": "livi_whatsapp_quotes" in tables,
+        "conversation_transcripts": {
+            "memory_documents": "memory_documents" in tables,
+            "memory_rows": "memory_rows" in tables,
+        },
+    }
+    warnings = []
+    if not capabilities["trip_activity_type"]:
+        warnings.append("livi_trips.activity_type no disponible: los viajes se agrupan como unclassified")
+    if not capabilities["trip_source"]:
+        warnings.append("livi_trips.source no disponible: WhatsApp usa el fallback whatsapp_user")
+    if not capabilities["quote_requests"]:
+        warnings.append("magiis_quote_requests no disponible: solicitudes de cotización no disponibles")
+    if not capabilities["whatsapp_quotes"]:
+        warnings.append("livi_whatsapp_quotes no disponible: cotizaciones WhatsApp no disponibles")
+    if not all(capabilities["conversation_transcripts"].values()):
+        warnings.append("memory_documents/memory_rows incompletas: conversaciones con transcripción no disponibles")
+    return {
+        "status": "updated" if not warnings else "legacy",
+        "capabilities": capabilities,
+        "warnings": warnings,
+    }
+
+
 @router.get("/operational")
 def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     """Returns one consistent, auditable Livre operational snapshot."""
     drivers = _operational_snapshot(cur, user.get("id"))
+    schema = _operational_schema(cur)
+    activity_type_sql = "COALESCE(activity_type, 'unclassified')" if schema["capabilities"]["trip_activity_type"] else "'unclassified'"
     cur.execute(
-        """
-        SELECT status, COALESCE(activity_type, 'unclassified') AS activity_type, count(*) AS total
+        f"""
+        SELECT status, {activity_type_sql} AS activity_type, count(*) AS total
         FROM livi_trips
-        GROUP BY status, COALESCE(activity_type, 'unclassified')
+        GROUP BY status, {activity_type_sql}
         """
     )
     trip_totals = {(row["status"], row["activity_type"]): int(row["total"]) for row in cur.fetchall()}
     completed_real = trip_totals.get(("completed", "real"), 0)
     completed_test = trip_totals.get(("completed", "test"), 0)
     completed_unclassified = trip_totals.get(("completed", "unclassified"), 0)
+
+    source_filter = (
+        "source = 'whatsapp' OR (source IS NULL AND whatsapp_user IS NOT NULL)"
+        if schema["capabilities"]["trip_source"]
+        else "whatsapp_user IS NOT NULL"
+    )
+    # Keep missing optional metrics NULL: zero would falsely claim the source was checked.
+    test_count = "(SELECT count(*) FROM livi_trips WHERE activity_type = 'test')" if schema["capabilities"]["trip_activity_type"] else "NULL::bigint"
+    quote_requests_count = "(SELECT count(*) FROM magiis_quote_requests)" if schema["capabilities"]["quote_requests"] else "NULL::bigint"
+    whatsapp_quotes_count = "(SELECT count(*) FROM livi_whatsapp_quotes)" if schema["capabilities"]["whatsapp_quotes"] else "NULL::bigint"
+    transcripts_count = (
+        "(SELECT count(DISTINCT md.key) FROM memory_documents md "
+        "JOIN memory_rows mr ON mr.document_id = md.id "
+        "WHERE md.key LIKE 'livi_%%')"
+        if all(schema["capabilities"]["conversation_transcripts"].values())
+        else "NULL::bigint"
+    )
     cur.execute(
-        """
+        f"""
         SELECT
           (SELECT count(*) FROM livi_trips) AS trips_total,
-          (SELECT count(*) FROM livi_trips WHERE source = 'whatsapp'
-             OR (source IS NULL AND whatsapp_user IS NOT NULL)) AS whatsapp_trip_requests,
-          (SELECT count(*) FROM livi_trips WHERE activity_type = 'test') AS test_trips_total,
-          (SELECT count(*) FROM magiis_quote_requests) AS whatsapp_quote_requests,
-          (SELECT count(*) FROM livi_whatsapp_quotes) AS whatsapp_quotes_total,
-          (SELECT count(DISTINCT md.key)
-             FROM memory_documents md
-             JOIN memory_rows mr ON mr.document_id = md.id
-            WHERE md.key LIKE 'livi_%%') AS whatsapp_conversations_with_transcript
+          (SELECT count(*) FROM livi_trips WHERE {source_filter}) AS whatsapp_trip_requests,
+          {test_count} AS test_trips_total,
+          {quote_requests_count} AS whatsapp_quote_requests,
+          {whatsapp_quotes_count} AS whatsapp_quotes_total,
+          {transcripts_count} AS whatsapp_conversations_with_transcript
         """
     )
     activity_row = cur.fetchone()
+    metric = lambda name: None if activity_row[name] is None else int(activity_row[name])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
     available = sum(item["operationalStatus"] == "available" and item["operationalState"] != "EN VIAJE" for item in drivers)
     unavailable = sum(item["operationalStatus"] == "unavailable" and item["operationalState"] != "EN VIAJE" for item in drivers)
@@ -408,19 +488,20 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
         },
         "activity": {
             "source": "livre-cloud",
+            "schema": schema,
             "trips": {
-                "total": int(activity_row["trips_total"]),
+                "total": metric("trips_total"),
                 "by_status_and_type": {
                     f"{status}:{activity_type}": total
                     for (status, activity_type), total in trip_totals.items()
                 },
-                "test_total": int(activity_row["test_trips_total"]),
+                "test_total": metric("test_trips_total"),
             },
             "whatsapp": {
-                "trip_requests": int(activity_row["whatsapp_trip_requests"]),
-                "quote_requests": int(activity_row["whatsapp_quote_requests"]),
-                "quotes": int(activity_row["whatsapp_quotes_total"]),
-                "conversations_with_transcript": int(activity_row["whatsapp_conversations_with_transcript"]),
+                "trip_requests": metric("whatsapp_trip_requests"),
+                "quote_requests": metric("whatsapp_quote_requests"),
+                "quotes": metric("whatsapp_quotes_total"),
+                "conversations_with_transcript": metric("whatsapp_conversations_with_transcript"),
             },
             "note": "Los contadores salen de tablas existentes; no se generan eventos paralelos.",
         },
