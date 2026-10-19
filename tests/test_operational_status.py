@@ -228,6 +228,18 @@ def test_crm_operational_separates_trip_activity_and_deduplicates_vehicles():
     assert result["vehicle_totals"] == {"identified": 2, "unidentified": 1}
 
 
+def test_crm_operational_counts_legacy_null_activity_as_unclassified():
+    cur = FakeCursor([
+        [],
+        [{"status": "completed", "activity_type": "unclassified", "total": 3}],
+    ])
+
+    result = operational(user={"id": "crm"}, cur=cur)
+
+    assert result["status"]["unclassifiedTravelsQuantity"] == 3
+    assert "COALESCE(activity_type, 'unclassified')" in cur.calls[1][0]
+
+
 def test_operational_event_is_idempotent_by_source_and_external_id():
     cur = FakeCursor([{
         "id": 9,

@@ -732,8 +732,16 @@ async def elevenlabs_trip(request: Request):
         or data.get("activity_type")
         or "real"
     ).strip()
+    source = str(
+        parameters.get("source")
+        or body.get("source")
+        or data.get("source")
+        or "whatsapp"
+    ).strip()
     if activity_type not in {"real", "test"}:
         return {"result": "Error: activity_type debe ser real o test."}
+    if not source:
+        return {"result": "Error: source no puede estar vacío."}
 
     log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
     log.info(f"[ELEVEN TRIP] origen={origen!r}")
@@ -825,7 +833,7 @@ async def elevenlabs_trip(request: Request):
             final_fare=final_fare,
             fare_source="official",
             activity_type=activity_type,
-            source="whatsapp",
+            source=source,
         )
         if quote_id:
             with get_cursor() as cur:

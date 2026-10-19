@@ -366,9 +366,9 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     drivers = _operational_snapshot(cur, user.get("id"))
     cur.execute(
         """
-        SELECT status, activity_type, count(*) AS total
+        SELECT status, COALESCE(activity_type, 'unclassified') AS activity_type, count(*) AS total
         FROM livi_trips
-        GROUP BY status, activity_type
+        GROUP BY status, COALESCE(activity_type, 'unclassified')
         """
     )
     trip_totals = {(row["status"], row["activity_type"]): int(row["total"]) for row in cur.fetchall()}
