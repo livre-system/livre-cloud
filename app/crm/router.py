@@ -47,6 +47,68 @@ def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     return {"source": "local", "items": items, "page": page, "size": size, "total": total}
 
 
+def _local_driver_page(cur, page: int, size: int, q: str = ""):
+    """Lista conductores desde la identidad y estado propios de Livre."""
+    filters = ["a.active = TRUE"]
+    params = []
+    if q.strip():
+        term = "%" + q.strip() + "%"
+        filters.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR a.user_id::text ILIKE %s)")
+        params.extend([term, term, term, term])
+    where = " WHERE " + " AND ".join(filters)
+    cur.execute(f"SELECT count(*) AS total FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(
+        f"""SELECT a.user_id AS id, u.name, u.username, u.email, a.operational_status,
+                   a.active, a.current_latitude, a.current_longitude, a.location_updated_at,
+                   v.vehicle_label
+              FROM livre_driver_accounts a
+              JOIN livre_users u ON u.id = a.user_id
+              LEFT JOIN LATERAL (
+                  SELECT vehicle_label FROM livre_driver_vehicles
+                   WHERE driver_user_id = a.user_id
+                   ORDER BY updated_at DESC NULLS LAST, vehicle_magiis_id DESC LIMIT 1
+              ) v ON TRUE{where}
+             ORDER BY u.name NULLS LAST, a.user_id
+             LIMIT %s OFFSET %s""",
+        params + [size, (page - 1) * size],
+    )
+    items = []
+    for row in cur.fetchall():
+        items.append({
+            "id": row["id"], "driverUserId": row["id"], "driverName": row["name"] or row["username"],
+            "email": row["email"], "operationalStatus": row["operational_status"],
+            "active": row["active"], "vehicle": {"plate": row["vehicle_label"]},
+            "lastSee": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
+            "source": "livre-cloud",
+        })
+    return {"source": "livre-cloud", "items": items, "page": page, "size": size, "total": total}
+
+
+def _local_vehicle_page(cur, page: int, size: int, q: str = ""):
+    """Lista únicamente vehículos asociados en Livre; no inventa atributos."""
+    filters = ["NULLIF(trim(vehicle_label), '') IS NOT NULL"]
+    params = []
+    if q.strip():
+        filters.append("vehicle_label ILIKE %s")
+        params.append("%" + q.strip() + "%")
+    where = " WHERE " + " AND ".join(filters)
+    base = "livre_driver_vehicles"
+    cur.execute(f"SELECT count(*) AS total FROM (SELECT vehicle_label FROM {base}{where} GROUP BY vehicle_label) vehicles", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(
+        f"""SELECT vehicle_label AS id, vehicle_label AS plate, count(*) AS assigned_drivers
+              FROM {base}{where}
+             GROUP BY vehicle_label ORDER BY vehicle_label
+             LIMIT %s OFFSET %s""",
+        params + [size, (page - 1) * size],
+    )
+    items = [{"id": row["id"], "plate": row["plate"], "assignedDrivers": int(row["assigned_drivers"]),
+              "source": "livre-cloud", "dataQuality": {"model": "unavailable", "color": "unavailable"}}
+             for row in cur.fetchall()]
+    return {"source": "livre-cloud", "items": items, "page": page, "size": size, "total": total}
+
+
 def _local_trip_page(
     cur, page: int, size: int, q: str = "", state: str = "",
     date_from: str = "", date_to: str = "",
@@ -286,12 +348,9 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
                COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
                COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
                COALESCE(a.location_updated_at, active_trip.tracking_location_updated_at) AS location_updated_at,
-               COALESCE(driver_source.raw_payload->>'vehicleDomain', vehicle_source.raw_payload #>> '{identificationCard,domain}') AS associated_vehicle_plate,
-               COALESCE(
-                   NULLIF(trim(concat_ws(' ', driver_source.raw_payload->>'vehicleBrand', driver_source.raw_payload->>'vehicleModel')), ''),
-                   NULLIF(trim(concat_ws(' ', vehicle_source.raw_payload #>> '{identificationCard,mark}', vehicle_source.raw_payload #>> '{identificationCard,model}')), '')
-               ) AS associated_vehicle_model,
-               COALESCE(vehicle_source.raw_payload #>> '{identificationCard,color}', driver_source.raw_payload->>'vehicleColor') AS associated_vehicle_color,
+               COALESCE(vehicle_link.vehicle_label, active_trip.tracking_plate) AS associated_vehicle_plate,
+               NULL::text AS associated_vehicle_model,
+               NULL::text AS associated_vehicle_color,
                active_trip.id AS trip_id,
                active_trip.status AS trip_status,
                active_trip.tracking_driver_name,
@@ -300,10 +359,13 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
                active_trip.tracking_vehicle_color
         FROM livre_driver_accounts a
         JOIN livre_users u ON u.id = a.user_id
-        LEFT JOIN magiis_crm_drivers driver_source
-          ON driver_source.magiis_id = a.magiis_driver_id
-        LEFT JOIN magiis_crm_vehicles vehicle_source
-          ON vehicle_source.magiis_id::text = driver_source.raw_payload->>'vehicleId'
+        LEFT JOIN LATERAL (
+            SELECT vehicle_label
+              FROM livre_driver_vehicles
+             WHERE driver_user_id = a.user_id
+             ORDER BY updated_at DESC NULLS LAST, vehicle_magiis_id DESC
+             LIMIT 1
+        ) vehicle_link ON TRUE
         LEFT JOIN LATERAL (
             SELECT t.id, t.status, t.tracking_driver_name, t.tracking_plate,
                    t.tracking_vehicle_model, t.tracking_vehicle_color,
@@ -315,7 +377,8 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
             ORDER BY t.updated_at DESC NULLS LAST, t.id DESC
             LIMIT 1
         ) active_trip ON TRUE
-        WHERE a.user_id <> ALL(%s) OR a.user_id = %s
+        WHERE a.active = TRUE
+          AND (a.user_id <> ALL(%s) OR a.user_id = %s)
         ORDER BY u.name NULLS LAST, a.user_id
         """,
         (list(_HIDDEN_GPS_DRIVER_USER_IDS), viewer_user_id),
@@ -362,7 +425,9 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
 
 _OPERATIONAL_SCHEMA_TABLES = {
     "livi_trips",
-    "magiis_quote_requests",
+    "livre_driver_accounts",
+    "livre_driver_vehicles",
+    "livre_users",
     "livi_whatsapp_quotes",
     "memory_documents",
     "memory_rows",
@@ -399,7 +464,8 @@ def _operational_schema(cur) -> dict:
     capabilities = {
         "trip_activity_type": "activity_type" in columns["livi_trips"],
         "trip_source": "source" in columns["livi_trips"],
-        "quote_requests": "magiis_quote_requests" in tables,
+        "local_driver_accounts": "livre_driver_accounts" in tables and "livre_users" in tables,
+        "local_vehicle_links": "livre_driver_vehicles" in tables,
         "whatsapp_quotes": "livi_whatsapp_quotes" in tables,
         "conversation_transcripts": {
             "memory_documents": "memory_documents" in tables,
@@ -411,8 +477,10 @@ def _operational_schema(cur) -> dict:
         warnings.append("livi_trips.activity_type no disponible: los viajes se agrupan como unclassified")
     if not capabilities["trip_source"]:
         warnings.append("livi_trips.source no disponible: WhatsApp usa el fallback whatsapp_user")
-    if not capabilities["quote_requests"]:
-        warnings.append("magiis_quote_requests no disponible: solicitudes de cotización no disponibles")
+    if not capabilities["local_driver_accounts"]:
+        warnings.append("livre_driver_accounts/livre_users incompletas: choferes no disponibles")
+    if not capabilities["local_vehicle_links"]:
+        warnings.append("livre_driver_vehicles no disponible: vehículos no disponibles")
     if not capabilities["whatsapp_quotes"]:
         warnings.append("livi_whatsapp_quotes no disponible: cotizaciones WhatsApp no disponibles")
     if not all(capabilities["conversation_transcripts"].values()):
@@ -449,7 +517,6 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     )
     # Keep missing optional metrics NULL: zero would falsely claim the source was checked.
     test_count = "(SELECT count(*) FROM livi_trips WHERE activity_type = 'test')" if schema["capabilities"]["trip_activity_type"] else "NULL::bigint"
-    quote_requests_count = "(SELECT count(*) FROM magiis_quote_requests)" if schema["capabilities"]["quote_requests"] else "NULL::bigint"
     whatsapp_quotes_count = "(SELECT count(*) FROM livi_whatsapp_quotes)" if schema["capabilities"]["whatsapp_quotes"] else "NULL::bigint"
     transcripts_count = (
         "(SELECT count(DISTINCT md.key) FROM memory_documents md "
@@ -464,7 +531,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
           (SELECT count(*) FROM livi_trips) AS trips_total,
           (SELECT count(*) FROM livi_trips WHERE {source_filter}) AS whatsapp_trip_requests,
           {test_count} AS test_trips_total,
-          {quote_requests_count} AS whatsapp_quote_requests,
+          NULL::bigint AS whatsapp_quote_requests,
           {whatsapp_quotes_count} AS whatsapp_quotes_total,
           {transcripts_count} AS whatsapp_conversations_with_transcript
         """
@@ -545,22 +612,31 @@ def live_drivers(
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
-    """Listado de conductores almacenados en la base local."""
-    return _local_page(cur, "magiis_crm_drivers", page, size, driver_name or driver_code or phone or email or vehicle)
+    """Listado de conductores desde livre_driver_accounts, sin snapshot externo."""
+    return _local_driver_page(cur, page, size, driver_name or driver_code or phone or email or vehicle)
 
 
 @router.get("/drivers/{driver_user_id}/detail")
-def live_driver_detail(driver_user_id: int, user: dict = Depends(require_auth)):
-    """Detalle en vivo del chofer según la ruta observada en el Web."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.driver_detail_web(driver_user_id)
+def live_driver_detail(driver_user_id: str, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    """Detalle del conductor según el registro propio de Livre."""
+    cur.execute(
+        """SELECT a.user_id, a.operational_status, a.active, u.name, u.username, u.email
+             FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id
+            WHERE a.user_id = %s""", (str(driver_user_id),)
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Conductor no encontrado en Livre")
+    return {**dict(row), "source": "livre-cloud"}
 
 @router.get("/operational/driver/{driver_user_id}")
-def operational_driver(driver_user_id: int, user: dict = Depends(require_auth)):
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return reader.driver(driver_user_id)
+def operational_driver(driver_user_id: str, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    items = _operational_snapshot(cur, user.get("id"))
+    return next((item for item in items if item["driverUserId"] == str(driver_user_id)), None) or (_raise_driver_not_found())
+
+
+def _raise_driver_not_found():
+    raise HTTPException(status_code=404, detail="Conductor no encontrado en Livre")
 
 
 @router.put("/operational/driver/{driver_user_id}/status", response_model=DriverOperationalStatusResponse)
@@ -585,8 +661,10 @@ def update_operational_driver_status(
 
 @router.post("/sync")
 def sync_crm(user: dict = Depends(require_auth)):
-    """Fuerza una sincronización: queda deshabilitada porque MAGIIS no es fuente operativa."""
-    return sync_all()
+    raise HTTPException(
+        status_code=410,
+        detail="La sincronización MAGIIS fue retirada: Livre Cloud es la fuente operativa.",
+    )
 
 
 @router.get("/summary")
@@ -594,16 +672,13 @@ def summary(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
     cur.execute(
         """
         SELECT
-          (SELECT count(*) FROM magiis_crm_passengers) AS passengers,
-          (SELECT count(*) FROM magiis_crm_drivers) AS drivers,
-          (SELECT count(*) FROM magiis_crm_vehicles) AS vehicles,
+          NULL::bigint AS passengers,
+          (SELECT count(*) FROM livre_driver_accounts WHERE active = TRUE) AS drivers,
+          (SELECT count(DISTINCT vehicle_label) FROM livre_driver_vehicles WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicles,
           (SELECT count(*) FROM livi_trips) AS travels,
           (SELECT jsonb_object_agg(COALESCE(status, 'sin_estado'), total)
              FROM (SELECT status, count(*) AS total FROM livi_trips GROUP BY status) s) AS travel_states,
-          (SELECT row_to_json(s) FROM (
-             SELECT id, started_at, finished_at, status, resources
-             FROM magiis_crm_sync_runs ORDER BY id DESC LIMIT 1
-          ) s) AS last_sync
+          NULL::json AS last_sync
         """
     )
     row = dict(cur.fetchone())
@@ -636,8 +711,12 @@ def agency_commissions(
     size: int = Query(default=20, ge=1, le=100),
     user: dict = Depends(require_auth),
 ):
-    """Comisiones de agencia del panel Web, solo lectura contra MAGIIS."""
-    today = date.today().isoformat()
+    """Comisiones: sin fuente local confiable, no se consulta MAGIIS."""
+    return {
+        "source": "livre-cloud", "owners": [], "items": [], "total": None,
+        "page": page, "size": size, "value": "—",
+        "warning": "Livre aún no registra comisiones; MAGIIS no es fuente operativa.",
+    }
     # El panel envía fechas DD/MM/YYYY al reporte, no fechas ISO.
     def report_date(value: str) -> str:
         if not value:
@@ -676,43 +755,13 @@ def travel_history(
     date_from: str = Query(default="", max_length=10),
     date_to: str = Query(default="", max_length=10),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
-    """Histórico de viajes del reporte Web 023 de MAGIIS, solo lectura."""
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        # El reporte 023 trae la sumatoria que el panel muestra debajo de la tabla.
-        # Se consulta una vez completo para no sumar solo la página visible.
-        result = reader.travel_history_page(page=1, size=1000000, date_from=date_from, date_to=date_to, state=state, find=q)
-    page_info = result.get("page", result)
-    content = page_info.get("content", []) if isinstance(page_info, dict) else []
-    items = []
-    for entry in content:
-        row = entry.get("row", entry) if isinstance(entry, dict) else entry
-        if isinstance(row, list):
-            row = {f"Col{index + 1}": value for index, value in enumerate(row)}
-        items.append(row)
-    def amount(index: int) -> float:
-        total = 0.0
-        for row in items:
-            value = row.get(f"Col{index}")
-            if isinstance(value, (int, float)):
-                total += float(value)
-            elif isinstance(value, str):
-                try:
-                    total += float(value.replace("$", "").replace("ARS", "").replace(".", "").replace(",", ".").strip())
-                except ValueError:
-                    pass
-        return round(total, 2)
-    total = len(items)
-    start = (page - 1) * size
-    return {
-        "source": "magiis",
-        "items": items[start:start + size],
-        "page": page,
-        "size": size,
-        "total": total,
-        "summary": {"trips": total, "final_amount_ars": amount(11), "amount_ars": amount(14), "budget_ars": amount(15)},
-    }
+    """Histórico de viajes de livi_trips; no agrega reportes externos."""
+    result = _local_trip_page(cur, page, size, q, state, date_from, date_to)
+    result["summary"] = {"trips": result["total"], "final_amount_ars": None, "amount_ars": None, "budget_ars": None}
+    result["warning"] = "Los importes no tienen una fuente confiable en Livre y se muestran como —."
+    return result
 
 
 @router.get("/passengers")
@@ -740,19 +789,18 @@ def cancel_live_travel(
     travel_id: int,
     reason: str = Query(default="Cancelación solicitada desde Gestión de Viajes", max_length=250),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
-    """Cancela un viaje activo usando el contrato Web observado en MAGIIS."""
-    session = magiis_web.login()
-    response, _, _ = magiis_web.cancel_travel(
-        session=session,
-        travel_id=travel_id,
-        operator_name=user.get("name") or "Livre",
-        reason=reason,
-        canceled_by="CARRIER_MANAGER",
+    """Cancela el registro local de Livre, sin proveedor externo."""
+    cur.execute(
+        """UPDATE livi_trips SET status = 'cancelled', updated_at = NOW()
+            WHERE id = %s AND status NOT IN ('completed', 'cancelled')
+            RETURNING id""", (travel_id,)
     )
-    if response.status_code >= 400:
-        raise HTTPException(status_code=502, detail="MAGIIS no pudo cancelar el viaje")
-    return {"travel_id": travel_id, "status": "cancelled", "message": "Viaje cancelado correctamente."}
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Viaje no encontrado o ya finalizado")
+    return {"travel_id": travel_id, "status": "cancelled", "message": "Viaje cancelado correctamente.", "source": "livre-cloud"}
 
 
 @router.get("/vehicles/live")
@@ -763,39 +811,23 @@ def live_vehicles(
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
-    """Vehículos almacenados en la base local."""
-    return _local_page(cur, "magiis_crm_vehicles", page, size, q)
+    """Vehículos que tienen una asociación local en Livre."""
+    return _local_vehicle_page(cur, page, size, q)
 
 
 @router.get("/vehicles/types")
 def live_vehicle_types(user: dict = Depends(require_auth)):
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        return {"items": reader.vehicle_types()}
+    return {"items": [], "source": "livre-cloud", "value": "—", "warning": "Livre aún no registra tipos de vehículo."}
 
 
 @router.post("/vehicles")
 def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    # La identidad del carrier queda en backend; el navegador no decide el carrier.
-    provider_payload = dict(payload)
-    provider_payload["carrierUserId"] = str(magiis_web.CARRIER_USER_ID)
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        response = reader.create_vehicle(provider_payload)
-    _persist_created_record(cur, "magiis_crm_vehicles", response, provider_payload, ("vehicleId", "vehicle_id", "id"))
-    return response
+    raise HTTPException(status_code=410, detail="Alta de vehículos MAGIIS retirada: Livre aún no tiene un alta local implementada.")
 
 
 @router.post("/drivers")
 def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
-    # El carrier se fija en backend para no confiar en datos enviados por el navegador.
-    provider_payload = dict(payload)
-    provider_payload["carrierUserId"] = int(magiis_web.CARRIER_USER_ID)
-    session = magiis_web.login()
-    with MagiisCrmReader(session) as reader:
-        response = reader.create_driver(provider_payload)
-    _persist_created_record(cur, "magiis_crm_drivers", response, provider_payload, ("driverUserId", "driverId", "driver_id", "id"))
-    return response
+    raise HTTPException(status_code=410, detail="Alta de choferes MAGIIS retirada: el alta local debe venir del flujo Livre.")
 
 
 @router.post("/clients")
@@ -810,6 +842,8 @@ def create_live_client(payload: dict = Body(...), user: dict = Depends(require_a
 
 @router.get("/vehicle-owners")
 def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    return {"source": "livre-cloud", "items": [], "total": None, "page": page, "size": size,
+            "value": "—", "warning": "Livre aún no registra dueños de vehículos."}
     session = magiis_web.login()
     with MagiisCrmReader(session) as reader:
         result = reader.vehicle_owner_page(page=1, size=50, find=q.strip())
