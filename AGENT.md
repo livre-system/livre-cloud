@@ -72,6 +72,40 @@ No iniciar login, scraping, requests, sincronizaciones ni pruebas contra MAGIIS.
 
 Los archivos, migraciones, HARs, tests, columnas y documentos con `magiis` pueden seguir existiendo como histórico o compatibilidad de datos. Su existencia no demuestra que el flujo esté activo. No borrarlos ni migrarlos automáticamente: primero identificar dependencias y hacer una tarea aislada si se decide limpiar el legado.
 
+## Auditoría de referencias MAGIIS en los cuatro repositorios
+
+Auditoría de código/configuración/logs realizada el 2026-10-19, sin escrituras en producción, sin login, scraping, requests ni pruebas contra MAGIIS.
+
+Resultado ejecutivo: no hay una llamada MAGIIS activa en ninguno de los cuatro repositorios ni en los cuatro servicios Railway revisados. `livre-chatbot`, `livre-conductor` y `livre-pasajeros` no tienen referencias operativas MAGIIS en el código buscado ni variables MAGIIS configuradas en Railway. `livre-cloud` conserva módulos de compatibilidad, scripts de pruebas, migraciones, snapshots/documentación y columnas de origen, pero el runtime actual los deja inactivos o los usa solamente como identificación histórica.
+
+Clasificación comprobada en `livre-cloud`:
+
+- **Legado inactivo:** `app/integrations/magiis.py`, `magiis_web.py`, `magiis_crm.py`, `magiis_quotes.py` y `app/memory/magiis.py`. No contienen cliente HTTP ni URLs activas. Sus funciones fallan explícitamente con `RuntimeError` o devuelven estado `disabled`.
+- **Legado inactivo:** `app/crm/sync.py` y `scripts/sync_magiis_crm_once.py`. El script todavía puede ser invocado manualmente, pero `sync_all()` sólo devuelve `disabled`, no abre sesión externa y no modifica snapshots. El endpoint `POST /crm/sync` también responde `410` y no sincroniza.
+- **Histórico:** `app/crm/historical_migration.py`, `scripts/historical_crm_backfill.py`, `scripts/historical_crm_dry_run.py`, migraciones `004`, `005`, `006`, `20260911_magiis_crm.sql` y `20260913_magiis_vehicle_owners.sql`, además de tablas/campos `magiis_*`, `source_magiis_id`, `magiis_driver_id` y `vehicle_magiis_id`. Conservan identidad, payloads o planes de migración; no forman parte del request operativo actual. El backfill de producción no fue ejecutado.
+- **Legado inactivo:** `magiis_test.py` y `magiis_web_test.py`. Aunque documentan login, `trip/create` o `simulateAll`, importan funciones que hoy están deshabilitadas; no son parte del arranque ni de los routers incluidos en `app/main.py`. No ejecutarlos.
+- **Histórico:** `docs/magiis-har-endpoints.md`, `1apps.magiis.com.har`, fixtures de tests y `reports/magiis_quotes_audit_2026-09.md`. Son evidencia/contrato histórico, no conexiones.
+- **Histórico:** `app/integrations/historical_quote.py` conserva nombres, IDs de servicio y perfiles derivados de cotizaciones históricas; la cotización actual lee `livre_quote_profiles` y calcula localmente. No llama a MAGIIS.
+- **Histórico:** `app/crm/router.py` conserva `magiis` en el mensaje de `POST /crm/sync` y en nombres de tablas históricas, pero Operaciones, conductores, pasajeros y viajes consultan PostgreSQL propio (`livre_*`, `livi_trips`) y no clientes externos.
+- **Activo, pero no MAGIIS:** mapas y cotización usan Google Maps, Nominatim/OpenStreetMap y OSRM como fuentes externas autorizadas; el fallback no pasa por MAGIIS. Los viajes operativos entran por `/mobility/*`, LIVI/WhatsApp y CRM, y se persisten en `livi_trips`.
+
+Configuración y ejecución:
+
+- En Railway producción, las variables históricas `MAGIIS_CRM_SYNC_ENABLED=0`, `MAGIIS_WEB_CREATE_ENABLED=0` y `MAGIIS_WEB_FLOW_ENABLED=0` están explícitamente desactivadas. También existen nombres/credenciales históricas en `livre-cloud`; sus valores no se documentan ni se exponen. La presencia de una variable no prueba una conexión.
+- En Railway, las variables de `livre-chatbot`, `livre-conductor` y `livre-pasajeros` fueron consultadas sólo por nombre: no aparecen variables `MAGIIS_*`. En `livre-cloud` sí quedan nombres y credenciales históricas, con los tres flags de ejecución en `0`; sus valores secretos no se documentan ni se exponen.
+- El estado read-only de Railway muestra el entorno `production` con cinco instancias del proyecto (Postgres y los cuatro repos), sin `cronSchedule`; cuatro instancias figuran `RUNNING` y una no tiene instancia activa. Esto confirma que no hay una tarea programada MAGIIS, pero no se usa como prueba de salud funcional de cada aplicación.
+- No se encontraron schedulers, workers, webhooks ni tareas de arranque que invoquen `sync_all`, `magiis_web`, `MagiisCrmReader` o un cliente MAGIIS. `app/main.py` incluye routers propios y no importa módulos MAGIIS.
+- En los logs de producción de `livre-cloud` revisados de los últimos 7 días no aparecieron coincidencias de login, sync, endpoint, host ni error MAGIIS. La salida filtrada no permite reconstruir toda la actividad, así que esto sólo prueba ausencia de evidencia MAGIIS en ese recorte.
+- No se modificaron variables, despliegues, bases, tablas ni procesos de producción.
+
+Riesgos residuales:
+
+- **Medio:** mantener credenciales/nombres MAGIIS en Railway deja una superficie de confusión y podría permitir una reactivación accidental si alguien cambia flags o restaura código antiguo. No se tocaron porque la auditoría no autorizaba cambios.
+- **Bajo:** scripts, endpoints 410, migraciones y módulos de compatibilidad pueden inducir a un operador a creer que existe sincronización. La documentación y los tests de deshabilitación lo hacen explícito, pero el legado sigue presente.
+- **Bajo:** las columnas `magiis_*` son identificadores históricos; no deben interpretarse como una dependencia de tiempo real ni reemplazarse automáticamente por IDs locales.
+
+Conclusión operativa: CRM/Operaciones, mapas, conductores, pasajeros y viajes no consultan MAGIIS directa ni indirectamente en el código desplegado revisado. Lo que queda es histórico o legado inactivo, con configuración histórica desactivada. La limpieza de variables, scripts o migraciones requiere una tarea separada y autorización explícita.
+
 ## Arquitectura activa
 
 ```text
