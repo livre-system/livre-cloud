@@ -495,3 +495,13 @@ Pendientes explícitos:
 
 - Conclusión: no está confirmado que los números sean decoración estadística ni que sean correctos. Sí está confirmado que la pantalla dejó de depender de MAGIIS y calcula bajo demanda con tablas locales. La vigencia de los estados depende de que los endpoints de Livre sigan escribiendo esas tablas; para los contadores derivados de clasificación, la confianza queda baja hasta verificar datos poblados y una lectura autenticada de producción.
 - No cambiar la fuente, reactivar sincronizaciones con MAGIIS ni modificar datos hasta presentar un plan con indicador afectado, campo faltante, migración requerida, backfill, prueba read-only y rollback.
+
+## Cierre de pendientes: vínculos, contadores y GPS (2026-10-19)
+
+- El backfill preparado usa únicamente `livre_driver_vehicles.vehicle_magiis_id = livre_crm_vehicles.source_magiis_id`, exige correspondencia única y sólo asigna `livre_driver_vehicles.vehicle_id`; no actualiza `updated_at`, no toca otras columnas y no fue ejecutado. SQL y rollback están en `Backups/Livre/20261019T120928Z/phase1-link-plan.md`.
+- Resultado auditado: 182/182 relaciones resolubles, sin duplicados ni huérfanos. La ausencia de FK en `vehicle_id` queda documentada; el preflight del SQL la compensa con validaciones explícitas.
+- El endpoint de Operaciones ahora expone `trips.status_semantics`: sólo estados operativos explícitos cuentan como abiertos; `completed`, `cancelled`, `magiis_error` y `cancel_error` son terminales históricos; cualquier estado no conocido queda separado como `unknown`.
+- Los 68 `completed` sin `activity_type` permanecen `completed_unclassified`; no se convierten en `real` ni `test`. No se modificaron filas productivas.
+- Test agregado: `test_trip_status_semantics_does_not_promote_errors_to_open`, cubre 68 no clasificados, 17 `magiis_error`, 1 `cancel_error` y un estado futuro desconocido.
+- GPS: el código confirma inicio al abrir el panel, `watchPosition`/servicio nativo, POST al endpoint y persistencia local. No hay logs productivos suficientes para ubicar el corte entre dispositivo, permisos, envío, endpoint y persistencia. La comprobación faltante es una sesión autorizada con logs correlacionados de permisos/callback, POST (status sanitizado) y lectura posterior de `location_updated_at`; no se simularán coordenadas.
+- La validación autenticada read-only queda preparada en `/tmp/livre_prod_route_readonly.py` y requiere una sesión iniciada por el usuario; no se almacenan credenciales, cookies ni tokens.

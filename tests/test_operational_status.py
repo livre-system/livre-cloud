@@ -1,6 +1,7 @@
 from app.crm.router import (
     _HIDDEN_GPS_DRIVER_USER_IDS,
     _operational_snapshot,
+    _trip_status_semantics,
     operational,
     update_operational_driver_status,
 )
@@ -9,6 +10,21 @@ from pydantic import ValidationError
 
 from app.mobility.schemas import DriverOperationalStatusUpdate
 from app.mobility.router import _driver_trip, driver_trips
+
+
+def test_trip_status_semantics_does_not_promote_errors_to_open():
+    semantics = _trip_status_semantics({
+        ("pending", "unclassified"): 2,
+        ("completed", "unclassified"): 68,
+        ("magiis_error", "unclassified"): 17,
+        ("cancel_error", "unclassified"): 1,
+        ("future_state", "unclassified"): 3,
+    })
+    assert semantics["open"] == 2
+    assert semantics["terminal"] == 86
+    assert semantics["unknown"] == 3
+    assert semantics["by_status"]["magiis_error"] == 17
+    assert "magiis_error" in semantics["terminal_statuses"]
 
 
 class FakeCursor:

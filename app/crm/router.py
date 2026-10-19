@@ -27,6 +27,37 @@ _RESOURCES = {
 # "Perez Ezequiel" and "IBAÑEZ PUCHULO CARLOS MARTIN" are real drivers.
 _HIDDEN_GPS_DRIVER_USER_IDS = ()
 
+# Estados operativos explícitos. Los estados de error son históricos/terminales:
+# no deben aparecer como "en viaje" por el solo hecho de no ser completed.
+_OPEN_TRIP_STATUSES = frozenset({
+    "pending", "searching", "created", "confirmed", "assigned",
+    "arriving", "in_progress",
+})
+_TERMINAL_TRIP_STATUSES = frozenset({
+    "completed", "cancelled", "magiis_error", "cancel_error",
+})
+
+
+def _trip_status_semantics(trip_totals: dict[tuple[str, str], int]) -> dict:
+    """Classify observed statuses without treating unknown/error as open."""
+    by_status = {}
+    for (status, _activity_type), total in trip_totals.items():
+        by_status[status] = by_status.get(status, 0) + total
+    open_total = sum(by_status.get(status, 0) for status in _OPEN_TRIP_STATUSES)
+    terminal_total = sum(by_status.get(status, 0) for status in _TERMINAL_TRIP_STATUSES)
+    unknown_total = sum(
+        total for status, total in by_status.items()
+        if status not in _OPEN_TRIP_STATUSES and status not in _TERMINAL_TRIP_STATUSES
+    )
+    return {
+        "open": open_total,
+        "terminal": terminal_total,
+        "unknown": unknown_total,
+        "by_status": by_status,
+        "open_statuses": sorted(_OPEN_TRIP_STATUSES),
+        "terminal_statuses": sorted(_TERMINAL_TRIP_STATUSES),
+    }
+
 
 def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     """Lista entidades propias de Livre; nunca abre una sesión externa."""
@@ -419,6 +450,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
     completed_real = trip_totals.get(("completed", "real"), 0)
     completed_test = trip_totals.get(("completed", "test"), 0)
     completed_unclassified = trip_totals.get(("completed", "unclassified"), 0)
+    status_semantics = _trip_status_semantics(trip_totals)
 
     source_filter = (
         "source = 'whatsapp' OR (source IS NULL AND whatsapp_user IS NOT NULL)"
@@ -473,6 +505,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
                     for (status, activity_type), total in trip_totals.items()
                 },
                 "test_total": metric("test_trips_total"),
+                "status_semantics": status_semantics,
             },
             "whatsapp": {
                 "trip_requests": metric("whatsapp_trip_requests"),
@@ -486,6 +519,7 @@ def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep))
             "completed_real": completed_real,
             "completed_test": completed_test,
             "completed_unclassified": completed_unclassified,
+            "status_semantics": status_semantics,
         },
         "vehicle_totals": {
             "identified": len(known_vehicles),
