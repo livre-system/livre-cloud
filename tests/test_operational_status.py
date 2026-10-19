@@ -7,7 +7,7 @@ from app.crm.router import (
 from pydantic import ValidationError
 
 from app.mobility.schemas import DriverOperationalStatusUpdate
-from app.mobility.router import _driver_trip
+from app.mobility.router import _driver_trip, driver_trips
 
 
 class FakeCursor:
@@ -46,6 +46,18 @@ def driver_row(user_id, status, trip_status=None):
         "tracking_vehicle_model": None,
         "tracking_vehicle_color": None,
     }
+
+
+def test_driver_trips_returns_only_trips_assigned_to_authenticated_driver():
+    cur = FakeCursor([[]])
+
+    result = driver_trips(cur=cur, user={"id": "driver-a"})
+
+    assert result == []
+    query, params = cur.calls[0]
+    assert "WHERE t.assigned_driver_user_id = %s" in query
+    assert "t.assigned_driver_user_id IS NULL" not in query
+    assert params == ("driver-a",)
 
 
 def test_driver_trip_serializes_commercial_fare_fields():
