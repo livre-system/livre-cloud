@@ -427,3 +427,37 @@ Pendientes explícitos:
 - No se crearon viajes, no se modificaron datos reales, pagos, liquidaciones ni APKs. No se detectaron escrituras de esquema o datos necesarias; no hay plan de migración pendiente por esta auditoría.
 - Validaciones: `npm test` en `livre-chatbot` pasó 10/10; `python -m py_compile app/crm/router.py` pasó; `git diff --check` pasó en ambos repositorios. La suite Python histórica no pudo ejecutarse en este entorno porque `pytest` no está instalado.
 - Pendiente: ejecutar una prueba visual/read-only autenticada contra un entorno CRM autorizado para confirmar el render final y tiempos de respuesta; no usar producción sin permisos.
+
+## Auditoría de Operaciones: origen, vigencia y actualización (2026-10-19)
+
+- La pantalla Operaciones del CRM consume `GET /crm/operational` desde `livre-chatbot/js/app.js`; no consulta MAGIIS ni un endpoint de sincronización heredado.
+- El endpoint arma la respuesta en cada request desde PostgreSQL local mediante `_operational_snapshot()` y no usa Redis, caché persistente, tabla de resumen ni snapshot diario.
+- Tabla principal de estados: `livre_driver_accounts`, unida con `livre_users`. Sólo considera `active = TRUE`; el estado visible `available`, `unavailable` u `out_of_service` sale directamente de `operational_status`.
+- Tabla de ubicación: `livre_driver_accounts.current_latitude`, `current_longitude` y `location_updated_at`. `lastSee` es el ISO de `location_updated_at`; no significa que el conductor esté actualmente disponible por sí solo.
+- Tabla de viajes: `livi_trips`. Para cada conductor se toma el viaje no terminal más reciente (`status NOT IN ('completed','cancelled')`, ordenado por `updated_at DESC`, `id DESC`). El estado de viaje y `tracking_*` salen de esa fila local.
+- Tabla de vehículos: `livre_driver_vehicles`, agregada por `driver_user_id` con `ARRAY_AGG(DISTINCT vehicle_label)`. No se consulta MAGIIS.
+- Los indicadores de la tarjeta de Operaciones se calculan con `COUNT(*) FILTER` sobre el snapshot local: `totalDrivers`, `availableDrivers`, `unavailableDrivers`, `outOfServiceDrivers`, `driversInTravel` y `totalTrips`. `totalTrips` cuenta filas de `livi_trips` cuyo estado no es terminal; no es un contador de viajes del día ni una métrica de actividad reciente.
+- `realTrips` y `testTrips` dependen de `livi_trips.activity_type`; `clientsIndividualsAmount` depende de `livi_trips.passenger_type`; `totalKms` depende de `livi_trips.distance_km`. El código no convierte ni completa valores faltantes. Si las columnas están NULL, esos indicadores quedan en cero o `null`/guion, y no deben interpretarse como métricas confirmadas.
+- La tabla visible de conductores no representa una última sincronización: muestra la lectura actual de las columnas anteriores y los vínculos locales de vehículos. Las tablas de pasajeros, propietarios y vehículos históricos no alimentan estos contadores de Operaciones.
+- Actualización: abrir la vista y el botón `Actualizar` hacen un GET; el polling del CRM está configurado a 5 segundos (`CRM_POLL_MS = 5000`) y excluye el modo mapa. No hay cron, tarea programada, job de 24 horas ni caché identificado en el código revisado. Por eso la observación previa de actualización diaria no queda respaldada como mecanismo de esta pantalla.
+- Evidencia de vigencia: el código demuestra lectura en tiempo real al solicitar el endpoint, pero no hay `refreshed_at`, `snapshot_at` ni auditoría de ingestión en la respuesta. `lastSee` sólo prueba cuándo se escribió la ubicación del conductor, no cuándo se actualizó cada contador.
+- Estado de confianza: la fuente técnica es local y válida para lo que exista en `livre_driver_accounts`/`livi_trips`, pero la vigencia operativa de cada indicador no se puede demostrar sólo con la pantalla. `realTrips`, `testTrips`, clientes y kilómetros requieren verificar que los campos de clasificación/datos estén poblados y mantenidos.
+- Validación read-only de esquema y consultas preparada contra PostgreSQL de Railway con transacción `SET TRANSACTION READ ONLY`; no se ejecutaron inserts, updates, viajes, sincronizaciones MAGIIS ni migraciones. La ejecución autenticada de la consulta productiva no dejó salida verificable en el entorno CLI actual, por lo que no se inventan conteos ni una última fecha de actualización.
+
+### Matriz de Operaciones
+
+| Indicador/tabla visible | Fuente real y criterio | Última actualización comprobable | Confianza | Acción recomendada |
+|---|---|---|---|---|
+| Total conductores | `livre_driver_accounts` + `livre_users`, `active=TRUE`, `COUNT(*)` | En cada GET; sin timestamp de snapshot | Media | Exponer `generated_at` y auditar altas/bajas |
+| Disponibles | `operational_status='available'` sobre cuentas activas | En cada GET; escritura del estado no registrada en la respuesta | Media | Verificar con lectura autenticada y registrar `status_updated_at` |
+| No disponibles | `operational_status='unavailable'` sobre cuentas activas | En cada GET; sin evidencia de última escritura | Media | Igual: timestamp y prueba contra el estado del conductor |
+| Fuera de servicio | `operational_status='out_of_service'` sobre cuentas activas | En cada GET; sin evidencia de última escritura | Media | Igual; no derivarlo de MAGIIS |
+| En viaje | Conductores con último `livi_trips` no terminal | En cada GET; depende de `livi_trips.updated_at` | Media-baja | Validar estados terminales y registrar timestamp de cálculo |
+| Total viajes activos | Filas `livi_trips` con estado no terminal | En cada GET; no es “viajes de hoy” | Media-baja | Renombrar la métrica o mostrar período y definición explícitos |
+| Viajes reales/prueba | `livi_trips.activity_type` agrupado | No demostrable sin comprobar población del campo | Baja hasta auditar NULLs | Completar/validar clasificación; no inferir por apariencia |
+| Clientes individuales | `livi_trips.passenger_type` | No demostrable sin comprobar población | Baja hasta auditar NULLs | Validar contrato del campo y mostrar “sin datos” si falta |
+| Kilómetros | `livi_trips.distance_km` | No demostrable sin comprobar población | Baja hasta auditar NULLs | No mostrar cero como dato operativo; usar null/guion |
+| Tabla de conductores | `livre_driver_accounts`, GPS local y `livre_driver_vehicles` | GPS: `location_updated_at`; resto sin timestamp específico | Media | Mostrar `lastSee` y antigüedad calculada; alertar GPS vencido |
+
+- Conclusión: no está confirmado que los números sean decoración estadística ni que sean correctos. Sí está confirmado que la pantalla dejó de depender de MAGIIS y calcula bajo demanda con tablas locales. La vigencia de los estados depende de que los endpoints de Livre sigan escribiendo esas tablas; para los contadores derivados de clasificación, la confianza queda baja hasta verificar datos poblados y una lectura autenticada de producción.
+- No cambiar la fuente, reactivar sincronizaciones con MAGIIS ni modificar datos hasta presentar un plan con indicador afectado, campo faltante, migración requerida, backfill, prueba read-only y rollback.
