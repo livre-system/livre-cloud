@@ -616,13 +616,47 @@ def agency_commissions(
     page: int = Query(default=1, ge=1, le=10000),
     size: int = Query(default=20, ge=1, le=100),
     user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
 ):
-    """Comisiones: sin fuente local confiable, no se consulta MAGIIS."""
-    return {
-        "source": "livre-cloud", "owners": [], "items": [], "total": None,
-        "page": page, "size": size, "value": "—",
-        "warning": "Livre aún no registra comisiones; MAGIIS no es fuente operativa.",
-    }
+    """Liquidaciones almacenadas por Livre Cloud; no consulta proveedores."""
+    filters, params = [], []
+    if date_from:
+        filters.append("settled_at::date >= %s"); params.append(date_from)
+    if date_to:
+        filters.append("settled_at::date <= %s"); params.append(date_to)
+    if owner_id:
+        filters.append("owner = %s"); params.append(owner_id)
+    where = (" WHERE " + " AND ".join(filters)) if filters else ""
+    cur.execute(f"SELECT count(*) AS total, COALESCE(sum(total), 0) AS total_amount, COALESCE(sum(commission), 0) AS commission_amount FROM livre_crm_commissions{where}", params)
+    totals = cur.fetchone()
+    cur.execute(f"SELECT id, trip_id AS travel_id, vehicle, vehicle_model, owner, total, commission, commission_percent, settled_at FROM livre_crm_commissions{where} ORDER BY settled_at DESC NULLS LAST, id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
+    items = [dict(row) for row in cur.fetchall()]
+    cur.execute("SELECT DISTINCT owner FROM livre_crm_commissions WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner")
+    owners = [{"id": row["owner"], "name": row["owner"]} for row in cur.fetchall()]
+    total = int(totals["total"])
+    return {"source": "livre-cloud", "owners": owners, "items": items, "total": total, "page": page, "size": size, "totals": {"trips": total, "vehicles": len({item["vehicle"] for item in items if item["vehicle"]}), "total": float(totals["total_amount"]), "commission": float(totals["commission_amount"]), "commission_percent": None}, "warning": None if total else "No hay liquidaciones locales cargadas en Livre Cloud."}
+
+
+@router.get("/conversations")
+def conversations(
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Conversaciones/transcripciones locales de Livre, sin fuente externa."""
+    term = f"%{q.strip()}%"
+    params = [term, term] if q.strip() else []
+    where = " WHERE (md.key ILIKE %s OR COALESCE(md.name, '') ILIKE %s)" if params else ""
+    cur.execute(f"SELECT count(*) AS total FROM memory_documents md{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(f"""SELECT md.id, md.key, md.name, md.description, md.chat_id, md.created_at,
+        count(mr.id) AS rows_count, max(mr.created_at) AS updated_at
+        FROM memory_documents md LEFT JOIN memory_rows mr ON mr.document_id = md.id{where}
+        GROUP BY md.id ORDER BY max(mr.created_at) DESC NULLS LAST, md.created_at DESC LIMIT %s OFFSET %s""", params + [limit, offset])
+    items = [dict(row) for row in cur.fetchall()]
+    return {"source": "livre-cloud", "items": items, "total": total, "limit": limit, "offset": offset, "warning": None if total else "No hay conversaciones locales cargadas."}
 
 
 @router.get("/travel-history")

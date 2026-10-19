@@ -290,147 +290,8 @@ def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
         return cur.fetchone()
 
 
-def _update_magiis_state(
-    trip_id: int,
-    *,
-    status: str,
-    travel_id: int | None = None,
-    response: str | None = None,
-    error: str | None = None,
-) -> None:
-    with get_cursor() as cur:
-        cur.execute(
-            """
-            UPDATE livi_trips
-            SET status = %s,
-                magiis_travel_id = %s,
-                magiis_status = %s,
-                magiis_response = %s,
-                magiis_error = %s,
-                magiis_updated_at = %s,
-                updated_at = %s
-            WHERE id = %s;
-            """,
-            (
-                status,
-                travel_id,
-                status,
-                response,
-                error,
-                datetime.now(timezone.utc),
-                datetime.now(timezone.utc),
-                trip_id,
-            ),
-        )
-
-
-def _find_travel_id(value: object) -> int | None:
-    if isinstance(value, dict):
-        for key in ("travelId", "id"):
-            candidate = value.get(key)
-            if isinstance(candidate, int):
-                return candidate
-        for child in value.values():
-            found = _find_travel_id(child)
-            if found is not None:
-                return found
-    elif isinstance(value, list):
-        for child in value:
-            found = _find_travel_id(child)
-            if found is not None:
-                return found
-    return None
-
-
-def _run_magiis_web(
-    trip_id: int,
-    origen: str,
-    destino: str,
-    date_programmed: str | None = None,
-    service_type_id: str | None = None,
-) -> dict:
-    """Resuelve texto en la capa Web y cotiza/crea el viaje."""
-    try:
-        with httpx.Client(
-            base_url=magiis_web.BASE_URL, timeout=magiis_web.TIMEOUT
-        ) as client:
-            session = magiis_web.login(client)
-            origin_text = magiis_web.resolve_address(origen)
-            destination_text = magiis_web.resolve_address(destino)
-            origin, session = magiis_web.get_place(
-                session=session,
-                place_id=origin_text.get("placeId"),
-                latitude=origin_text["latitude"],
-                longitude=origin_text["longitude"],
-                client=client,
-            )
-            destination, session = magiis_web.get_place(
-                session=session,
-                place_id=destination_text.get("placeId"),
-                latitude=destination_text["latitude"],
-                longitude=destination_text["longitude"],
-                client=client,
-            )
-            simulation, session, _ = magiis_web.simulate_all(
-                session=session,
-                origin_lat=origin["latitude"],
-                origin_lon=origin["longitude"],
-                origin_name=origin["shortName"] or origen,
-                destination_lat=destination["latitude"],
-                destination_lon=destination["longitude"],
-                destination_name=destination["shortName"] or destino,
-                origin_place_id=origin["placeId"],
-                destination_place_id=destination["placeId"],
-                client=client,
-                livi_trip_id=trip_id,
-            )
-            body = simulation.json()
-            options = body if isinstance(body, list) else []
-            selected = next(
-                (item for item in options
-                 if str(item.get("transportTypeId")) == str(service_type_id or "2")
-                 and item.get("serviceStatus") == "AVAILABLE"),
-                None,
-            )
-            if selected is None:
-                raise RuntimeError("MAGIIS Web no ofreció el servicio seleccionado disponible")
-
-            if os.getenv("MAGIIS_WEB_CREATE_ENABLED", "0") != "1":
-                _update_magiis_state(
-                    trip_id, status="quoted", response=str(body)[:10000]
-                )
-                return {"created": False, "quote": selected}
-
-            created, _, _ = magiis_web.create_travel(
-                session=session,
-                origin={**origin, "shortName": origin["shortName"] or origen},
-                destination={**destination, "shortName": destination["shortName"] or destino},
-                client=client,
-                is_programmed=bool(date_programmed),
-                date_programmed=date_programmed,
-                service_type_id=str(service_type_id or "2"),
-            )
-            created_body = created.json()
-            travel_id = _find_travel_id(created_body)
-            if created.status_code not in (200, 201) or travel_id is None:
-                raise RuntimeError(
-                    f"MAGIIS Web creación HTTP {created.status_code} sin travelId"
-                )
-            _update_magiis_state(
-                trip_id,
-                status="created",
-                travel_id=travel_id,
-                response=str(created_body)[:10000],
-            )
-            return {"created": True, "travel_id": travel_id}
-    except Exception as exc:
-        log.error("[ELEVEN TRIP] MAGIIS Web error: %s", exc, exc_info=True)
-        _update_magiis_state(trip_id, status="magiis_error", error=str(exc)[:500])
-        return {"created": False, "error": str(exc)}
-
-
 def _run_local_quote(origen: str, destino: str) -> dict:
-    """Cotiza con parámetros históricos; no consulta MAGIIS."""
+    """Cotiza con perfiles propios de Livre; no consulta proveedores externos."""
     try:
         origin = geocode_address(origen)
         destination = geocode_address(destino)
@@ -447,7 +308,7 @@ def _run_local_quote(origen: str, destino: str) -> dict:
             "options": options,
             "locations": {"origin": origin, "destination": destination},
             "distance_km": distance_km,
-            "source": "historical_quotes",
+            "source": "livre_quote_profiles",
         }
     except Exception as exc:
         log.error("[LOCAL QUOTE] error: %s", exc, exc_info=True)

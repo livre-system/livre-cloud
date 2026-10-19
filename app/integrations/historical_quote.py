@@ -97,7 +97,7 @@ def load_historical_profiles() -> list[dict[str, Any]]:
                 AVG(total_cost_price::numeric - distance::numeric *
                     (quote_body->>'pricePerKm')::numeric) AS fixed_cost,
                 COUNT(*) AS samples
-            FROM magiis_quotes
+            FROM livre_quote_profiles
             WHERE rate_id = %s
               AND distance IS NOT NULL
               AND total_cost_price IS NOT NULL
