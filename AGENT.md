@@ -417,3 +417,13 @@ Pendientes explícitos:
 - Regla financiera obligatoria: el cliente paga 100%; Livre retiene 15% una sola vez; el conductor recibe 85%. No duplicar la comisión en viajes, pagos o liquidaciones.
 - No asumir que HTTP 200, `health`, `openapi` o `deploy SUCCESS` prueban funcionamiento de negocio. Verificar el flujo real autorizado, sus datos y su efecto persistido; no modificar datos reales para probar.
 - La fuente de respaldo comprobada del estado de esta migración es `/home/calambre/Backups/livre/20261019_111631`; el dump PostgreSQL fue restaurado con éxito en un clúster aislado y los checksums están en `SHA256SUMS`.
+
+## Auditoría funcional del CRM histórico (2026-10-19)
+
+- La auditoría de código confirmó que pasajeros y propietarios se consultan desde `livre_crm_passengers` y `livre_crm_vehicle_owners`, con filtros, conteo total y paginación local. Vehículos se consulta desde `livre_crm_vehicles` con filtros y paginación. No se agregó ninguna dependencia operativa de MAGIIS.
+- Se corrigió el endpoint local de conductores: antes tomaba sólo un `vehicle_label` con `LIMIT 1`; ahora agrega todos los vínculos locales por conductor en `vehicles`, `vehicle.plate` y `vehicleDescription`. Esto permite mostrar los 182 vínculos conductor-vehículo sin ocultar relaciones adicionales.
+- Se corrigió la pantalla de propietarios: antes solicitaba como máximo 100 registros y podía ocultar 21 de los 121 propietarios migrados; ahora usa páginas de 50, muestra total, página actual y controles anterior/siguiente.
+- Los conteos históricos esperados siguen siendo 20.469 pasajeros, 121 propietarios, 136 vehículos y 182 vínculos conductor-vehículo. La comprobación sobre el dump/restauración aislada permanece como fuente de conteos; no se hicieron lecturas ni escrituras en producción.
+- No se crearon viajes, no se modificaron datos reales, pagos, liquidaciones ni APKs. No se detectaron escrituras de esquema o datos necesarias; no hay plan de migración pendiente por esta auditoría.
+- Validaciones: `npm test` en `livre-chatbot` pasó 10/10; `python -m py_compile app/crm/router.py` pasó; `git diff --check` pasó en ambos repositorios. La suite Python histórica no pudo ejecutarse en este entorno porque `pytest` no está instalado.
+- Pendiente: ejecutar una prueba visual/read-only autenticada contra un entorno CRM autorizado para confirmar el render final y tiempos de respuesta; no usar producción sin permisos.

@@ -65,13 +65,14 @@ def _local_driver_page(cur, page: int, size: int, q: str = ""):
     cur.execute(
         f"""SELECT a.user_id AS id, u.name, u.username, u.email, a.operational_status,
                    a.active, a.current_latitude, a.current_longitude, a.location_updated_at,
-                   v.vehicle_label
+                   COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels
               FROM livre_driver_accounts a
               JOIN livre_users u ON u.id = a.user_id
               LEFT JOIN LATERAL (
-                  SELECT vehicle_label FROM livre_driver_vehicles
+                  SELECT ARRAY_AGG(DISTINCT vehicle_label ORDER BY vehicle_label)
+                         FILTER (WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicle_labels
+                    FROM livre_driver_vehicles
                    WHERE driver_user_id = a.user_id
-                   ORDER BY updated_at DESC NULLS LAST LIMIT 1
               ) v ON TRUE{where}
              ORDER BY u.name NULLS LAST, a.user_id
              LIMIT %s OFFSET %s""",
@@ -79,10 +80,13 @@ def _local_driver_page(cur, page: int, size: int, q: str = ""):
     )
     items = []
     for row in cur.fetchall():
+        vehicles = row["vehicle_labels"] or []
         items.append({
             "id": row["id"], "driverUserId": row["id"], "driverName": row["name"] or row["username"],
             "email": row["email"], "operationalStatus": row["operational_status"],
-            "active": row["active"], "vehicle": {"plate": row["vehicle_label"]},
+            "active": row["active"], "vehicles": vehicles,
+            "vehicle": {"plate": ", ".join(vehicles) if vehicles else None},
+            "vehicleDescription": ", ".join(vehicles) if vehicles else None,
             "lastSee": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
             "source": "livre-cloud",
         })
