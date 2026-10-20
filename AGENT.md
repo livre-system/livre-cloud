@@ -516,3 +516,14 @@ Pendientes explícitos:
 - Regresiones agregadas en `tests/test_commercial_fare.py` cubren viajes completados y no completados, `original_fare`, fallback a `fare`, 85/15 y preservación de `final_fare`.
 - Validación local: `PYTHONPATH=. .venv/bin/pytest -q` → `59 passed`; `python -m compileall -q app` → OK; `git diff --check` → OK.
 - No se ejecutaron migraciones, escrituras productivas, despliegues ni operaciones contra MAGIIS. La validación autenticada de datos reales sigue pendiente.
+
+## Regla comercial de tarifa del conductor y snapshots (2026-10-20)
+
+- `service_type_id = "2"` identifica Livre Ahorro: el conductor recibe el 100% del importe bruto y la etiqueta debe indicar `0% comisión`.
+- Para otros servicios, el snapshot comercial vigente determina la tarifa: conductor 85% y comisión 15%; no volver a descontar si `final_fare` ya es neto.
+- El servicio (`service_type_id`) es autoritativo frente a `discount_percentage` o snapshots antiguos. No usar un porcentaje de snapshot obsoleto para etiquetar o recalcular Ahorro.
+- En viajes `completed` sin `final_fare`, conservar el importe histórico disponible en `fare`/`original_fare`; no aplicar un fallback comercial ni recalcular históricos.
+- El contrato backend/frontend debe conservar nombres compatibles (`service_type_id`, `driver_fare`, `commission_percentage`); toda corrección debe probar tanto el importe como la etiqueta visible.
+- Regresión obligatoria: reproducir un snapshot Ahorro obsoleto (por ejemplo, bruto `5054.00` y neto histórico `4295.90`) y verificar que la API y la tarjeta muestran el bruto y `0% comisión`.
+- Validación de producción: comprobar el asset JavaScript publicado y la respuesta autenticada de API cuando haya credenciales legítimas; no inventar viajes, credenciales ni datos. No declarar resuelto el bug sólo porque el bundle coincide con el commit.
+- Corrección implementada en `app/mobility/router.py`, `tests/test_commercial_fare.py`, `js/app.js` y `tests/status.test.js`; commits coordinados: `4b4b34f` (`livre-cloud`) y `23b434b` (`livre-conductor`).
