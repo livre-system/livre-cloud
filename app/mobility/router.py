@@ -567,7 +567,10 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                 AND t.status IN ('searching', 'assigned')
                 AND t.assigned_driver_user_id IS NULL
             )
-            OR t.assigned_driver_user_id = %s
+            OR (
+                t.assigned_driver_user_id = %s
+                AND t.status IN ('assigned', 'arriving', 'in_progress')
+            )
         )
         ORDER BY t.created_at DESC
         """,
