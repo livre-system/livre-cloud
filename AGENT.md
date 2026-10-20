@@ -4,12 +4,9 @@ Contexto vivo para trabajar en Livre Cloud con Hermes. Este archivo describe el 
 
 ## Regla de inicio
 
-- Al comenzar cada sesión nueva, leer una sola vez el contexto de todos los repositorios de Livre antes de trabajar:
-  - `livre-cloud/AGENT.md` (contexto central y backend);
-  - `livre-chatbot/AGENT.md`, si existe;
-  - `livre-conductor/AGENT.md`, si existe;
-  - `livre-pasajeros/AGENT.md`, si existe.
-- Si un repositorio no tiene `AGENT.md`, usar este archivo como contexto central y no inventar un estado local que no esté documentado.
+- Al comenzar cada sesión nueva, leer una sola vez este archivo como único contexto operativo válido para todos los repositorios de Livre.
+- No crear ni mantener `AGENT.md` en los repositorios frontend; si falta contexto local, usar este archivo y no inventar un estado que no esté documentado.
+- Todos los servicios y frontends de Livre se despliegan únicamente en Railway. Vercel ya no forma parte del stack y no debe usarse como destino ni referencia de disponibilidad salvo pedido explícito del usuario.
 - No leer `CONTEXT.md` ni `CONTEXT.MD`.
 - No volver a leer los archivos de contexto durante la misma sesión salvo pedido explícito o modificación explícita.
 - Después de leerlos, comprobar el estado real de cada repo (`git status`, rama y remoto) antes de editar o publicar.
