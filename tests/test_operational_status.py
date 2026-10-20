@@ -88,9 +88,9 @@ def test_driver_trips_returns_available_open_trips_and_own_assignments():
     assert result == []
     query, params = cur.calls[0]
     assert "active_driver.operational_status = 'available'" in query
-    assert "t.status IN ('searching', 'assigned')" in query
+    assert "t.status IN ('searching')" in query
     assert "t.assigned_driver_user_id IS NULL" in query
-    assert "OR t.assigned_driver_user_id = %s" in query
+    assert "t.assigned_driver_user_id = %s" in query
     assert "t.status IN ('assigned', 'arriving', 'in_progress')" in query
     assert params == ("driver-a", "driver-a")
 

@@ -564,7 +564,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                       AND (active_driver.active = TRUE
                            OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
                 )
-                AND t.status IN ('searching', 'assigned')
+                AND t.status IN ('searching')
                 AND t.assigned_driver_user_id IS NULL
             )
             OR (
