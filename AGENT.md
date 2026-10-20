@@ -469,7 +469,7 @@ Pendientes explícitos:
 - Tabla principal de estados: `livre_driver_accounts`, unida con `livre_users`. Sólo considera `active = TRUE`; el estado visible `available`, `unavailable` u `out_of_service` sale directamente de `operational_status`.
 - Tabla de ubicación: `livre_driver_accounts.current_latitude`, `current_longitude` y `location_updated_at`. `lastSee` es el ISO de `location_updated_at`; no significa que el conductor esté actualmente disponible por sí solo.
 - Tabla de viajes: `livi_trips`. Para cada conductor se toma el viaje no terminal más reciente (`status NOT IN ('completed','cancelled')`, ordenado por `updated_at DESC`, `id DESC`). El estado de viaje y `tracking_*` salen de esa fila local.
-- Tabla de vehículos: `livre_driver_vehicles`, agregada por `driver_user_id` con `ARRAY_AGG(DISTINCT vehicle_label)`. No se consulta MAGIIS.
+- Tabla de vehículos: `livre_driver_vehicles`, vinculada con `livre_crm_vehicles` mediante `vehicle_magiis_id = source_magiis_id`; la consulta es local y no llama al servicio MAGIIS.
 - Los indicadores de la tarjeta de Operaciones se calculan con `COUNT(*) FILTER` sobre el snapshot local: `totalDrivers`, `availableDrivers`, `unavailableDrivers`, `outOfServiceDrivers`, `driversInTravel` y `totalTrips`. `totalTrips` cuenta filas de `livi_trips` cuyo estado no es terminal; no es un contador de viajes del día ni una métrica de actividad reciente.
 - `realTrips` y `testTrips` dependen de `livi_trips.activity_type`; `clientsIndividualsAmount` depende de `livi_trips.passenger_type`; `totalKms` depende de `livi_trips.distance_km`. El código no convierte ni completa valores faltantes. Si las columnas están NULL, esos indicadores quedan en cero o `null`/guion, y no deben interpretarse como métricas confirmadas.
 - La tabla visible de conductores no representa una última sincronización: muestra la lectura actual de las columnas anteriores y los vínculos locales de vehículos. Las tablas de pasajeros, propietarios y vehículos históricos no alimentan estos contadores de Operaciones.
@@ -505,6 +505,16 @@ Pendientes explícitos:
 - Test agregado: `test_trip_status_semantics_does_not_promote_errors_to_open`, cubre 68 no clasificados, 17 `magiis_error`, 1 `cancel_error` y un estado futuro desconocido.
 - GPS: el código confirma inicio al abrir el panel, `watchPosition`/servicio nativo, POST al endpoint y persistencia local. No hay logs productivos suficientes para ubicar el corte entre dispositivo, permisos, envío, endpoint y persistencia. La comprobación faltante es una sesión autorizada con logs correlacionados de permisos/callback, POST (status sanitizado) y lectura posterior de `location_updated_at`; no se simularán coordenadas.
 - La validación autenticada read-only queda preparada en `/tmp/livre_prod_route_readonly.py` y requiere una sesión iniciada por el usuario; no se almacenan credenciales, cookies ni tokens.
+
+## Corrección de vínculo conductor-vehículo en Operaciones (2026-10-20)
+
+- La tarjeta mostraba al conductor y la patente, pero `associated_vehicle_model` y `associated_vehicle_color` quedaban siempre en `NULL`; por eso aparecía `Vehículo: No informado` aunque existiera un vínculo.
+- `_operational_snapshot()` ahora relaciona `livre_driver_vehicles.vehicle_magiis_id` con `livre_crm_vehicles.source_magiis_id` y devuelve la patente, el modelo y el color del vehículo local.
+- La patente mantiene fallback: `livre_crm_vehicles.plate` → `livre_driver_vehicles.vehicle_label` → `livi_trips.tracking_plate`. Modelo y color hacen fallback a `livi_trips.tracking_vehicle_model` y `livi_trips.tracking_vehicle_color`.
+- El runtime no necesita ejecutar el backfill de `livre_driver_vehicles.vehicle_id` para mostrar estos datos; el vínculo se resuelve por las claves históricas estables. No se modificaron filas productivas.
+- Regresión agregada en `tests/test_operational_status.py`: verifica que el snapshot consulte `livre_crm_vehicles` y use `model`/`color` del vehículo vinculado.
+- Validación: `PYTHONPATH=. .venv/bin/pytest -q` → `69 passed`; `python -m compileall -q app` → OK; `git diff --check` → OK.
+- Publicado en `main` con commit `7228f6e` (`Vincular vehiculo local con conductor en operaciones`). Railway production quedó `Online` y `/health` respondió HTTP 200.
 
 ## Corrección de historial, cierres y regla comercial (2026-10-19)
 
