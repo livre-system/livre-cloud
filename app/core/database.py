@@ -32,17 +32,30 @@ def _get_pool():
 
 @contextmanager
 def get_conn():
-    """Contexto que entrega una conexión del pool y hace commit/rollback automático."""
+    """Entrega una conexión y descarta las que PostgreSQL cerró."""
     pool = _get_pool()
     conn = pool.getconn()
+    discard = False
     try:
+        # SimpleConnectionPool puede conservar una conexión muerta después de
+        # un reinicio/corte de red del servidor. No la entregamos al caller.
+        if conn.closed:
+            discard = True
+            pool.putconn(conn, close=True)
+            conn = pool.getconn()
+            discard = False
         yield conn
         conn.commit()
     except Exception:
-        conn.rollback()
+        discard = True
+        try:
+            if not conn.closed:
+                conn.rollback()
+        except (psycopg2.Error, psycopg2.InterfaceError):
+            pass
         raise
     finally:
-        pool.putconn(conn)
+        pool.putconn(conn, close=discard or bool(conn.closed))
 
 
 @contextmanager
@@ -66,10 +79,14 @@ def get_cursor_dep():
             yield cur
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            if not conn.closed:
+                conn.rollback()
+        except (psycopg2.Error, psycopg2.InterfaceError):
+            pass
         raise
     finally:
-        pool.putconn(conn)
+        pool.putconn(conn, close=bool(conn.closed))
 
 
 
