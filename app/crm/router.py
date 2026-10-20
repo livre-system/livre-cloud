@@ -168,10 +168,14 @@ def _local_trip_page(
     if state.strip():
         requested = {value.strip() for value in state.split("-") if value.strip()}
         local_states = set()
-        if requested & {"SEARCHING_DRIVER", "SCHEDULED"}:
+        if requested & {"SEARCHING_DRIVER"}:
             local_states.add("pending")
-        if requested & {"WITH_DRIVER_ASSIGNED", "RESERVED", "GOING_TO_CLIENT", "GOING_TO_DESTINATION", "CLOSING_TRAVEL", "IN_CONFLICT"}:
+        if requested & {"SCHEDULED"}:
+            local_states.add("scheduled")
+        if requested & {"WITH_DRIVER_ASSIGNED", "RESERVED", "GOING_TO_CLIENT", "GOING_TO_DESTINATION", "CLOSING_TRAVEL"}:
             local_states.add("confirmed")
+        if requested & {"IN_CONFLICT"}:
+            local_states.add("conflict")
         if requested & {"CANCELED", "CANCELLED"}:
             local_states.add("cancelled")
         if requested & {"LOST"}:
