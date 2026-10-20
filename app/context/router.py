@@ -125,15 +125,80 @@ def _search_memory(user_id: str = None, query: str = "") -> str:
     return "\n\n".join(lines)
 
 
-def _is_latest_trip_query(query: str) -> bool:
+def _normalized_query(query: str) -> str:
     normalized = unicodedata.normalize("NFD", query or "")
     normalized = "".join(c for c in normalized if unicodedata.category(c) != "Mn")
-    normalized = re.sub(r"[^a-z0-9]+", " ", normalized.lower()).strip()
+    return re.sub(r"[^a-z0-9]+", " ", normalized.lower()).strip()
+
+
+def _is_latest_trip_query(query: str) -> bool:
+    normalized = _normalized_query(query)
     return (
         "ultimo viaje" in normalized
         or "viaje anterior" in normalized
         or "viaje mas reciente" in normalized
     )
+
+
+def _is_driver_query(query: str) -> bool:
+    normalized = _normalized_query(query)
+    return bool(re.search(r"\b(chofer|conductor|conductores|choferes)\b", normalized))
+
+
+def _get_local_driver_context(query: str) -> str:
+    """Busca conductores únicamente en la identidad y operación propias de Livre."""
+    normalized = _normalized_query(query)
+    terms = [term for term in normalized.split() if len(term) >= 3]
+    stopwords = {"necesitaria", "necesito", "informacion", "sobre", "datos", "chofer", "choferes", "conductor", "conductores", "del", "de", "un", "una", "por", "favor"}
+    terms = [term for term in terms if term not in stopwords]
+    try:
+        with get_cursor() as cur:
+            if terms:
+                pattern = "%" + "%".join(terms) + "%"
+                cur.execute(
+                    """
+                    SELECT a.user_id AS id, u.name, u.username, u.email,
+                           a.active, a.operational_status, a.location_updated_at,
+                           COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels
+                      FROM livre_driver_accounts a
+                      JOIN livre_users u ON u.id = a.user_id
+                      LEFT JOIN LATERAL (
+                          SELECT ARRAY_AGG(DISTINCT vehicle_label ORDER BY vehicle_label)
+                            FILTER (WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicle_labels
+                            FROM livre_driver_vehicles
+                           WHERE driver_user_id = a.user_id
+                      ) v ON TRUE
+                     WHERE a.active = TRUE
+                       AND (u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s)
+                     ORDER BY u.name NULLS LAST, a.user_id
+                     LIMIT 10
+                    """,
+                    [pattern, pattern, pattern],
+                )
+                rows = cur.fetchall()
+            else:
+                rows = []
+        if not rows:
+            return (
+                "Consulta de choferes: no se encontró un conductor coincidente en los registros operativos propios de Livre Cloud. "
+                "No consultes ni menciones proveedores históricos; pedí nombre completo, teléfono o ID de Livre si hace falta."
+            )
+        lines = ["Consulta de choferes: fuente autoritativa = registros operativos propios de Livre Cloud."]
+        for row in rows:
+            vehicles = ", ".join(row["vehicle_labels"] or []) or "sin vehículo informado"
+            lines.append(
+                f"Chofer: {row['name'] or row['username'] or 'sin nombre'}; "
+                f"ID Livre: {row['id']}; email: {row['email'] or 'no informado'}; "
+                f"estado operativo: {row['operational_status'] or 'no informado'}; "
+                f"vehículo: {vehicles}; última ubicación: {row['location_updated_at'] or 'no informada'}"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        _log.warning("No se pudo consultar choferes locales: %s", exc)
+        return (
+            "Consulta de choferes: la fuente local de Livre Cloud no está disponible en este momento. "
+            "No uses proveedores históricos ni inventes datos; informá que la consulta no pudo completarse."
+        )
 
 
 def _build_system_prompt(user_id: str = None, query: str = "") -> str:
@@ -144,28 +209,35 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
     style_context = compile_style_context(sources)
 
     latest_trip_query = _is_latest_trip_query(query)
+    driver_query = _is_driver_query(query)
     semantic_memory = ""
-    if query and query.strip() and not latest_trip_query:
+    driver_context = _get_local_driver_context(query) if driver_query else ""
+    if query and query.strip() and not latest_trip_query and not driver_query:
         semantic_memory = _search_memory(user_id, query)
     elif latest_trip_query:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta operacional de último viaje")
+    elif driver_query:
+        _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta operacional de chofer local")
     else:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: query vacío")
 
     # Para una consulta concreta, la memoria semántica ya es el contexto
     # relevante. No adjuntar toda la memoria histórica (puede superar 27 MB).
     static_memory = ""
-    if not semantic_memory and not latest_trip_query:
+    if not semantic_memory and not latest_trip_query and not driver_query:
         static_memory = _get_all_memory(user_id)
     _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
 
-    _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={len(static_memory) + len(semantic_memory)}")
+    _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={len(static_memory) + len(semantic_memory) + len(driver_context)}")
     print(
-        f">>> [MEMORY DEBUG] static={len(static_memory)}c semantic={len(semantic_memory)}c",
+        f">>> [MEMORY DEBUG] static={len(static_memory)}c semantic={len(semantic_memory)}c driver={len(driver_context)}c",
         flush=True,
     )
 
     parts = [f"Fecha y hora actual: {base_context['fecha_actual']}"]
+
+    if driver_context:
+        parts.append(driver_context)
 
     if static_memory:
         parts.append(f"Memoria del usuario:\n{static_memory}")
