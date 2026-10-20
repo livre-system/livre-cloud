@@ -11,6 +11,10 @@ from app.memory.service import (
     upload_file_as_memory,
     export_memory,
 )
+from app.memory.structured_ingestion import (
+    structured_knowledge_status,
+    sync_structured_knowledge,
+)
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/memory", tags=["memory"])  # v16
@@ -30,6 +34,21 @@ def _raise_memory_error(error: str):
 def memory_status(user: dict = Depends(require_auth)):
     result = check_memory_status(user["id"])
     return {"user_id": user["id"], **result}
+
+
+@router.get("/structured/status")
+def structured_status(user: dict = Depends(require_auth)):
+    """Estado del corpus empresarial común de LIVI IA."""
+    return structured_knowledge_status()
+
+
+@router.post("/structured/sync")
+def structured_sync(user: dict = Depends(require_auth)):
+    """Carga todas las tablas de negocio en chunks estructurados con embeddings."""
+    try:
+        return sync_structured_knowledge()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="No se pudo actualizar el corpus estructurado") from exc
 
 
 @router.get("")

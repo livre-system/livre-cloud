@@ -8,6 +8,7 @@ from app.compiler.base_compiler import compile_base_context
 from app.compiler.style_compiler import compile_style_context
 from app.memory.service import read_user_memory, save_message_to_memory
 from app.memory.repository import search_memory_by_embedding
+from app.memory.structured_ingestion import search_structured_knowledge
 from app.core.database import get_cursor
 from app.core.encryption import decrypt
 from app.chat.models import ChatRequest, SynthesizeRequest
@@ -51,11 +52,19 @@ def _get_all_memory(user_id: str, chat_id: str | None = None) -> str:
 
 
 def _search_memory(user_id: str, query: str, chat_id: str | None = None) -> str:
-    """Busca por embeddings. Si no encuentra nada, devuelve vacío."""
-    rows = search_memory_by_embedding(user_id, query, chat_id=chat_id)
-    if not rows:
-        return ""
+    """Combina corpus empresarial estructurado y memoria privada del chat."""
     lines = []
+    try:
+        for row in search_structured_knowledge(query, limit=12):
+            lines.append(
+                f"[Datos estructurados — {row['source_table']} — similitud {row['similarity']:.2f}]\n"
+                f"{row['content'][:6000]}"
+            )
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("No se pudo buscar corpus estructurado: %s", exc)
+
+    rows = search_memory_by_embedding(user_id, query, chat_id=chat_id)
     for r in rows:
         msg = r["data"].get("message", "")
         if not msg:
