@@ -557,3 +557,4 @@ Pendientes explícitos:
 - Validación local del cambio: `PYTHONPATH=. .venv/bin/pytest -q tests/test_commercial_fare.py` → `21 passed`; `npm test` del CRM → `11 passed`; compile/sintaxis y `git diff --check` OK.
 - El PDF ahora incluye recursos PDF válidos (fuente Helvetica, página, contenido, xref y trailer), escapa caracteres especiales y fue cubierto con lectura mediante `pypdf`.
 - La vista `Historial y cierre` mantiene el comportamiento actual y usa el acento rojo de Livre en tarjeta, encabezado, filtros y botón.
+- Se retiró del CRM la tarjeta/canal visual `Base / Handie` (incluido su CSS y polling de mensajes) de todos los items por ahora; no se eliminaron los endpoints ni la lógica del canal en Livre Cloud.
