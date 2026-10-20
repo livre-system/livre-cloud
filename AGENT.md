@@ -555,3 +555,15 @@ Pendientes explícitos:
 - El PDF ahora incluye recursos PDF válidos (fuente Helvetica, página, contenido, xref y trailer), escapa caracteres especiales y fue cubierto con lectura mediante `pypdf`.
 - La vista `Historial y cierre` mantiene el comportamiento actual y usa el acento rojo de Livre en tarjeta, encabezado, filtros y botón.
 - Se retiró del CRM la tarjeta/canal visual `Base / Handie` (incluido su CSS y polling de mensajes) de todos los items por ahora; no se eliminaron los endpoints ni la lógica del canal en Livre Cloud.
+
+## Gráficos globales de demanda y recuperación de login (2026-10-20)
+
+- La distribución de viajes del CRM usa los objetos visuales existentes del frontend, pero ahora representa el total de viajes (`livi_trips`) y no sólo los programados.
+- El gráfico horario agrupa por hora las últimas 24 horas para identificar cuándo se concentra la demanda.
+- El gráfico diario agrupa los últimos 15 días para identificar qué días concentran más pedidos.
+- El backend expone la distribución global desde `app/crm/router.py`; el frontend la renderiza desde `livre-chatbot/js/app.js` y su estructura existente en `index.html`.
+- El despliegue de `livre-cloud` falló al iniciar porque `app/migrations/20261020_trip_state_flow.sql` intentaba validar estados históricos no incluidos en la lista nueva. El síntoma visible era timeout en login de `livreuser` y `502 Application failed to respond`.
+- La migración quedó con `CHECK (...) NOT VALID`: conserva filas históricas con estados antiguos y valida los estados de las filas nuevas sin modificar datos productivos.
+- Corrección publicada en `livre-cloud` con commit `4d75bae` (`Allow legacy trip states during migration`). Railway production quedó `Online`.
+- Verificación posterior: `GET /health` respondió HTTP 200 con `{"status":"ok"}` y el endpoint de login respondió HTTP 401 ante credenciales inválidas; esto confirma que el servicio y la ruta de autenticación están operativos. No se almacenaron ni probaron credenciales reales.
+- Validaciones del cambio: `python -m compileall -q app` y `git diff --check` OK. La suite `pytest` no estaba instalada en el entorno usado para esta corrección.
