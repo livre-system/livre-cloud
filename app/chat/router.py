@@ -54,17 +54,18 @@ def _get_all_memory(user_id: str, chat_id: str | None = None) -> str:
 def _search_memory(user_id: str, query: str, chat_id: str | None = None) -> str:
     """Combina corpus empresarial estructurado y memoria privada del chat."""
     lines = []
+    max_chars = 24000
     try:
-        for row in search_structured_knowledge(query, limit=12):
+        for row in search_structured_knowledge(query, limit=8):
             lines.append(
                 f"[Datos estructurados — {row['source_table']} — similitud {row['similarity']:.2f}]\n"
-                f"{row['content'][:6000]}"
+                f"{row['content'][:2500]}"
             )
     except Exception as exc:
         import logging
         logging.getLogger(__name__).warning("No se pudo buscar corpus estructurado: %s", exc)
 
-    rows = search_memory_by_embedding(user_id, query, chat_id=chat_id)
+    rows = search_memory_by_embedding(user_id, query, chat_id=chat_id, limit=12)
     for r in rows:
         msg = r["data"].get("message", "")
         if not msg:
@@ -73,8 +74,11 @@ def _search_memory(user_id: str, query: str, chat_id: str | None = None) -> str:
             msg = decrypt(msg)
         except Exception:
             pass
-        lines.append(f"[{r['name']}]\n{msg.strip()[:500]}")
-    return "\n\n".join(lines)
+        lines.append(f"[{r['name']}]\n{msg.strip()[:1200]}")
+    result = "\n\n".join(lines)
+    if len(result) > max_chars:
+        result = result[:max_chars].rsplit("\n\n", 1)[0]
+    return result
 
 
 def _get_operational_context() -> str:
@@ -226,6 +230,8 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
 
         query = last_user_msg.content if last_user_msg else ""
         system_prompt = _build_system_prompt(user["id"], query, chat_id)
+        import logging
+        logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d messages=%d provider=%s", len(system_prompt), len(body.messages), body.provider)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider(body.provider)
 
@@ -277,6 +283,8 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 
         query = last_user_msg.content if last_user_msg else ""
         system_prompt = _build_system_prompt(user["id"], query, chat_id)
+        import logging
+        logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d messages=%d provider=%s", len(system_prompt), len(body.messages), body.provider)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider()
 
