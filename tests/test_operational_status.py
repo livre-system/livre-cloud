@@ -191,14 +191,19 @@ def test_snapshot_uses_the_persistent_driver_vehicle_association():
         "associated_vehicle_model": "FIAT CRONOS",
         "associated_vehicle_color": "ROJO",
     })
+    cur = FakeCursor([[row]])
 
-    snapshot = _operational_snapshot(FakeCursor([[row]]))
+    snapshot = _operational_snapshot(cur)
 
     assert snapshot[0]["vehicle"] == {
         "plate": "406 AG8008HE",
         "model": "FIAT CRONOS",
         "color": "ROJO",
     }
+    query, _ = cur.calls[0]
+    assert "livre_crm_vehicles" in query
+    assert "vehicle.source_magiis_id = dv.vehicle_magiis_id" in query
+    assert "vehicle.model AS vehicle_model" in query
 
 
 def test_snapshot_query_excludes_verified_non_map_ids_but_keeps_real_driver():

@@ -82,7 +82,7 @@ def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     return {"source": "livre-cloud", "items": items, "page": page, "size": size, "total": total}
 
 
-def _local_driver_page(cur, page: int, size: int, q: str = ""):
+def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = "", operability: str = ""):
     """Lista conductores desde la identidad y estado propios de Livre."""
     filters = ["a.active = TRUE"]
     params = []
@@ -90,6 +90,12 @@ def _local_driver_page(cur, page: int, size: int, q: str = ""):
         term = "%" + q.strip() + "%"
         filters.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR a.user_id::text ILIKE %s)")
         params.extend([term, term, term, term])
+    if vehicle.strip():
+        filters.append("EXISTS (SELECT 1 FROM livre_driver_vehicles dv WHERE dv.driver_user_id = a.user_id AND dv.vehicle_label ILIKE %s)")
+        params.append("%" + vehicle.strip() + "%")
+    if operability.strip():
+        filters.append("a.operational_status = %s")
+        params.append(operability.strip())
     where = " WHERE " + " AND ".join(filters)
     cur.execute(f"SELECT count(*) AS total FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id{where}", params)
     total = int(cur.fetchone()["total"])
@@ -289,9 +295,9 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
                COALESCE(a.current_latitude, active_trip.tracking_latitude) AS latitude,
                COALESCE(a.current_longitude, active_trip.tracking_longitude) AS longitude,
                COALESCE(a.location_updated_at, active_trip.tracking_location_updated_at) AS location_updated_at,
-               COALESCE(vehicle_link.vehicle_label, active_trip.tracking_plate) AS associated_vehicle_plate,
-               NULL::text AS associated_vehicle_model,
-               NULL::text AS associated_vehicle_color,
+               COALESCE(vehicle_link.vehicle_plate, vehicle_link.vehicle_label, active_trip.tracking_plate) AS associated_vehicle_plate,
+               COALESCE(vehicle_link.vehicle_model, active_trip.tracking_vehicle_model) AS associated_vehicle_model,
+               COALESCE(vehicle_link.vehicle_color, active_trip.tracking_vehicle_color) AS associated_vehicle_color,
                active_trip.id AS trip_id,
                active_trip.status AS trip_status,
                active_trip.tracking_driver_name,
@@ -301,10 +307,16 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
         FROM livre_driver_accounts a
         JOIN livre_users u ON u.id = a.user_id
         LEFT JOIN LATERAL (
-            SELECT vehicle_label
-              FROM livre_driver_vehicles
-             WHERE driver_user_id = a.user_id
-             ORDER BY updated_at DESC NULLS LAST
+            SELECT dv.vehicle_magiis_id,
+                   dv.vehicle_label,
+                   vehicle.plate AS vehicle_plate,
+                   vehicle.model AS vehicle_model,
+                   vehicle.color AS vehicle_color
+              FROM livre_driver_vehicles dv
+              LEFT JOIN livre_crm_vehicles vehicle
+                ON vehicle.source_magiis_id = dv.vehicle_magiis_id
+             WHERE dv.driver_user_id = a.user_id
+             ORDER BY dv.is_primary DESC, dv.updated_at DESC NULLS LAST
              LIMIT 1
         ) vehicle_link ON TRUE
         LEFT JOIN LATERAL (
@@ -557,7 +569,12 @@ def live_drivers(
     cur=Depends(get_cursor_dep),
 ):
     """Listado de conductores desde livre_driver_accounts, sin snapshot externo."""
-    return _local_driver_page(cur, page, size, driver_name or driver_code or phone or email or vehicle)
+    return _local_driver_page(
+        cur, page, size,
+        driver_name or driver_code or phone or email,
+        vehicle=vehicle,
+        operability=operability,
+    )
 
 
 @router.get("/drivers/{driver_user_id}/detail")
