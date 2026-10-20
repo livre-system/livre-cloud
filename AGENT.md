@@ -542,7 +542,9 @@ Pendientes explícitos:
 
 - Producción devolvía HTTP 500 al guardar y consultar cierres porque la tabla existente `livre_driver_shift_closures` no tenía las columnas financieras que el runtime ya utilizaba: `total_revenue`, `driver_revenue` y `commission`.
 - La migración original definía esas columnas para instalaciones nuevas, pero no reparaba tablas creadas con una versión anterior del esquema. Por eso el error real era `psycopg2.errors.UndefinedColumn: column "driver_revenue" ... does not exist`.
+- Después de reparar las columnas, el POST llegó a insertar correctamente, pero FastAPI devolvía HTTP 500 al validar la respuesta: la base productiva devuelve un UUID para `id` y `DriverShiftClosure` esperaba un entero.
 - Se agregó `app/migrations/20261020_driver_shift_closure_columns.sql`, una migración aditiva e idempotente con `ADD COLUMN IF NOT EXISTS`; no modifica filas existentes ni requiere backfill.
+- `DriverShiftClosure.id` y el parámetro `closure_id` del PDF ahora son `str`, compatibles con los UUID persistidos en producción.
 - La corrección cubre ambos endpoints que comparten la tabla: `POST /mobility/driver/shift-closures` y `GET /mobility/driver/shift-closures`.
-- Regresión agregada en `tests/test_commercial_fare.py` para verificar las tres columnas de la migración.
-- Pendiente de esta incidencia: desplegar la migración y confirmar en Railway que los endpoints autenticados de historial y cierre responden sin HTTP 500.
+- Regresiones agregadas en `tests/test_commercial_fare.py` para verificar la migración y aceptar el UUID real de producción.
+- Pendiente de esta incidencia: desplegar esta corrección y confirmar en Railway que el POST autenticado responde 201 sin HTTP 500; no crear otro cierre productivo para probarlo.

@@ -4,6 +4,7 @@ import unittest
 
 from app.integrations.historical_quote import apply_commercial_discount, commercial_fare, historical_options
 from app.mobility.router import _driver_fare, _history_response
+from app.mobility.schemas import DriverShiftClosure
 
 
 class HistoryCursor:
@@ -169,6 +170,19 @@ class CommercialFareTests(unittest.TestCase):
         self.assertEqual(result["total_revenue"], Decimal("6400.00"))
         self.assertEqual(result["driver_revenue"], Decimal("5920.00"))
         self.assertEqual(result["commission"], Decimal("480.00"))
+
+    def test_shift_closure_response_accepts_production_uuid_id(self):
+        closure = DriverShiftClosure.model_validate(
+            {
+                "id": "e8f536aa-538b-4c67-8e76-31dd0a0dc663",
+                "closure_date": "2026-10-20",
+                "trip_count": 1,
+                "total_revenue": 7684,
+                "driver_revenue": 7684,
+                "commission": 0,
+            }
+        )
+        self.assertEqual(closure.id, "e8f536aa-538b-4c67-8e76-31dd0a0dc663")
 
     def test_invalid_discount_is_rejected(self):
         with self.assertRaises(ValueError):

@@ -469,7 +469,7 @@ def create_driver_shift_closure(
 
 @router.get("/driver/shift-closures/{closure_id}/pdf")
 def driver_shift_closure_pdf(
-    closure_id: int, cur=Depends(get_cursor_dep), user: dict = Depends(require_driver),
+    closure_id: str, cur=Depends(get_cursor_dep), user: dict = Depends(require_driver),
 ):
     cur.execute(
         """SELECT id, closure_date, trip_count, total_revenue, driver_revenue, commission

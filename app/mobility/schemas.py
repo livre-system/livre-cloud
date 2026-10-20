@@ -119,7 +119,8 @@ class DriverShiftClosureCreate(BaseModel):
 
 
 class DriverShiftClosure(BaseModel):
-    id: int
+    # Production tables use UUID identifiers for persisted closures.
+    id: str
     closure_date: date
     trip_count: int
     total_revenue: float | None = None
