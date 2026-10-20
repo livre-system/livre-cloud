@@ -169,7 +169,9 @@ def _local_trip_page(
         requested = {value.strip() for value in state.split("-") if value.strip()}
         local_states = set()
         if requested & {"SEARCHING_DRIVER"}:
-            local_states.add("pending")
+            # Los pedidos nuevos y los liberados por un rechazo individual
+            # viven en searching; pending queda por compatibilidad histórica.
+            local_states.update({"searching", "pending"})
         if requested & {"SCHEDULED"}:
             local_states.add("scheduled")
         if requested & {"WITH_DRIVER_ASSIGNED", "RESERVED", "GOING_TO_CLIENT", "GOING_TO_DESTINATION", "CLOSING_TRAVEL"}:
@@ -210,7 +212,7 @@ def _local_trip_page(
     )
     status_totals = {row["status"]: int(row["total"]) for row in cur.fetchall()}
     totals = {
-        "toAsignQuantity": status_totals.get("pending", 0),
+        "toAsignQuantity": status_totals.get("searching", 0) + status_totals.get("pending", 0),
         "inProgressQuantity": status_totals.get("confirmed", 0),
         "scheduledQuantity": 0,
         "inConflictQuantity": status_totals.get("conflict", 0),
