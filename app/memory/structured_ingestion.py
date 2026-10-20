@@ -18,12 +18,13 @@ from typing import Any
 from psycopg2 import sql
 
 from app.core.database import get_cursor
-from app.memory.embeddings import get_embedding, get_query_embedding
+from app.memory.embeddings import get_embedding, get_embeddings, get_query_embedding
 from app.core.encryption import encrypt, decrypt
 
 log = logging.getLogger(__name__)
 
 MAX_CHARS = 6000
+EMBEDDING_BATCH_SIZE = 64
 # Tablas que contienen secretos, índices internos o conversaciones privadas.
 EXCLUDED_TABLES = {
     "credentials",
@@ -118,7 +119,24 @@ def _build_chunks(source_table: str, rows: list[dict[str, Any]]) -> list[tuple[i
     return chunks
 
 
-def _upsert_chunk(source_table: str, chunk_index: int, content: str, row_count: int) -> str:
+def _needs_embedding(source_table: str, chunk_index: int, content: str) -> bool:
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT content_hash FROM livi_knowledge_chunks WHERE source_table = %s AND chunk_index = %s",
+            [source_table, chunk_index],
+        )
+        row = cur.fetchone()
+    return not row or row["content_hash"] != content_hash
+
+
+def _upsert_chunk(
+    source_table: str,
+    chunk_index: int,
+    content: str,
+    row_count: int,
+    embedding: list[float] | None = None,
+) -> str:
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     with get_cursor() as cur:
         cur.execute(
@@ -137,7 +155,8 @@ def _upsert_chunk(source_table: str, chunk_index: int, content: str, row_count: 
             )
             return "unchanged"
 
-        embedding = get_embedding(content)
+        if embedding is None:
+            embedding = get_embedding(content)
         if not embedding:
             raise RuntimeError("No se pudo generar embedding para el corpus estructurado")
         encrypted_content = encrypt(content)
@@ -166,9 +185,24 @@ def sync_structured_knowledge() -> dict[str, Any]:
         source = _table_name(schema, table)
         rows = _read_table_rows(schema, table)
         chunks = _build_chunks(source, rows)
-        for index, content, row_count in chunks:
-            result = _upsert_chunk(source, index, content, row_count)
-            totals[result] += 1
+        for start in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
+            batch = chunks[start : start + EMBEDDING_BATCH_SIZE]
+            pending = [item for item in batch if _needs_embedding(source, item[0], item[1])]
+            embeddings = get_embeddings([item[1] for item in pending]) if pending else []
+            if pending and embeddings is None:
+                raise RuntimeError(f"No se pudo generar el lote de embeddings de {source}")
+            embedding_by_index = {
+                item[0]: vector for item, vector in zip(pending, embeddings or [])
+            }
+            for index, content, row_count in batch:
+                result = _upsert_chunk(
+                    source,
+                    index,
+                    content,
+                    row_count,
+                    embedding=embedding_by_index.get(index),
+                )
+                totals[result] += 1
         with get_cursor() as cur:
             cur.execute(
                 "DELETE FROM livi_knowledge_chunks WHERE source_table = %s AND chunk_index >= %s",

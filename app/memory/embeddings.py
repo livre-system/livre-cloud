@@ -25,6 +25,29 @@ def _get_client() -> OpenAI:
     return _client
 
 
+def get_embeddings(texts: list[str], input_type: str = "passage") -> list[list[float]] | None:
+    """Genera un vector por texto en una sola petición, conservando el orden."""
+    clean = [text[:8000] for text in texts if text and text.strip()]
+    if not OPENAI_API_KEY or not clean:
+        return None
+    client = _get_client()
+    for attempt in range(1, 4):
+        try:
+            res = client.embeddings.create(model=EMBEDDING_MODEL, input=clean)
+            data = sorted(res.data, key=lambda item: item.index)
+            values = [item.embedding for item in data]
+            if len(values) != len(clean):
+                raise RuntimeError("OpenAI devolvió una cantidad de embeddings inesperada")
+            log.info("Embeddings generados OK — count=%s, input_type=%s", len(values), input_type)
+            return values
+        except Exception as exc:
+            if attempt == 3:
+                log.error("Error generando lote de embeddings: %s", exc, exc_info=True)
+                return None
+            time.sleep(2 ** (attempt - 1))
+    return None
+
+
 def get_embedding(text: str, input_type: str = "passage") -> list[float] | None:
     """
     Genera un embedding con OpenAI text-embedding-3-small.
