@@ -547,4 +547,10 @@ Pendientes explícitos:
 - `DriverShiftClosure.id` y el parámetro `closure_id` del PDF ahora son `str`, compatibles con los UUID persistidos en producción.
 - La corrección cubre ambos endpoints que comparten la tabla: `POST /mobility/driver/shift-closures` y `GET /mobility/driver/shift-closures`.
 - Regresiones agregadas en `tests/test_commercial_fare.py` para verificar la migración y aceptar el UUID real de producción.
-- Pendiente de esta incidencia: desplegar esta corrección y confirmar en Railway que el POST autenticado responde 201 sin HTTP 500; no crear otro cierre productivo para probarlo.
+- Validado en producción: el POST autenticado responde correctamente sin HTTP 500; no se creó otro cierre productivo para probarlo.
+
+## PDF y presentación de Historial y cierre (2026-10-20)
+
+- El cierre se persiste en `livre_driver_shift_closures` dentro de Livre Cloud. Actualmente no se replica automáticamente en un módulo del CRM; para mostrarlo allí hay que definir un destino explícito, por ejemplo una entidad de cierres/liquidaciones del conductor.
+- El PDF ahora incluye recursos PDF válidos (fuente Helvetica, página, contenido, xref y trailer), escapa caracteres especiales y fue cubierto con lectura mediante `pypdf`.
+- La vista `Historial y cierre` mantiene el comportamiento actual y usa el acento rojo de Livre en tarjeta, encabezado, filtros y botón.

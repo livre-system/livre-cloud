@@ -467,6 +467,51 @@ def create_driver_shift_closure(
     return row
 
 
+def _pdf_text(value: object) -> bytes:
+    """Encode a short line using PDF's built-in WinAnsi font safely."""
+    text = str(value).encode("cp1252", errors="replace")
+    return b"(" + text.replace(b"\\", b"\\\\").replace(b"(", b"\\(").replace(b")", b"\\)") + b")"
+
+
+def _daily_closure_pdf(row: dict) -> bytes:
+    lines = [
+        "LIVRE - RESUMEN DIARIO",
+        f"Fecha: {row['closure_date']}",
+        f"Viajes: {row['trip_count']}",
+        f"Total facturado: {row['total_revenue']}",
+        f"Importe del conductor: {row['driver_revenue']}",
+        f"Comisiones: {row['commission']}",
+    ]
+    commands = [b"BT", b"/F1 16 Tf", b"50 740 Td"]
+    for index, line in enumerate(lines):
+        if index:
+            commands.append(b"0 -28 Td")
+        commands.extend([_pdf_text(line), b"Tj"])
+    commands.append(b"ET")
+    content = b" ".join(commands) + b"\n"
+    objects = [
+        b"<</Type /Catalog /Pages 2 0 R>>",
+        b"<</Type /Pages /Count 1 /Kids [3 0 R]>>",
+        b"<</Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R>>",
+        b"<</Length " + str(len(content)).encode() + b">>\nstream\n" + content + b"endstream",
+        b"<</Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding>>",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n%Livre\n")
+    offsets = [0]
+    for number, obj in enumerate(objects, start=1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{number} 0 obj\n".encode() + obj + b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n".encode())
+    pdf.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend(
+        f"trailer\n<</Size {len(objects) + 1} /Root 1 0 R>>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    return bytes(pdf)
+
+
 @router.get("/driver/shift-closures/{closure_id}/pdf")
 def driver_shift_closure_pdf(
     closure_id: str, cur=Depends(get_cursor_dep), user: dict = Depends(require_driver),
@@ -480,20 +525,7 @@ def driver_shift_closure_pdf(
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Cierre no encontrado")
-    text = (
-        f"Livre - Resumen diario\\nFecha: {row['closure_date']}\\n"
-        f"Viajes: {row['trip_count']}\\nTotal facturado: {row['total_revenue']}\\n"
-        f"Importe del conductor: {row['driver_revenue']}\\nComisiones: {row['commission']}\\n"
-    )
-    stream = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\\n", "\\n")
-    content = f"BT /F1 12 Tf 50 740 Td ({stream}) Tj ET".encode()
-    pdf = (
-        b"%PDF-1.4\\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\\n"
-        b"2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\\n"
-        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<<>> >>endobj\\n"
-        + f"4 0 obj<</Length {len(content)}>>stream\\n".encode()
-        + content + b"\\nendstream endobj\\ntrailer<</Root 1 0 R>>\\n%%EOF\\n"
-    )
+    pdf = _daily_closure_pdf(row)
     return Response(
         content=pdf,
         media_type="application/pdf",

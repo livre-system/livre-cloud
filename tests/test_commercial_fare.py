@@ -3,7 +3,7 @@ from decimal import Decimal
 import unittest
 
 from app.integrations.historical_quote import apply_commercial_discount, commercial_fare, historical_options
-from app.mobility.router import _driver_fare, _history_response
+from app.mobility.router import _daily_closure_pdf, _driver_fare, _history_response
 from app.mobility.schemas import DriverShiftClosure
 
 
@@ -183,6 +183,22 @@ class CommercialFareTests(unittest.TestCase):
             }
         )
         self.assertEqual(closure.id, "e8f536aa-538b-4c67-8e76-31dd0a0dc663")
+
+    def test_daily_closure_pdf_is_readable_and_contains_summary(self):
+        from io import BytesIO
+        from pypdf import PdfReader
+
+        pdf = _daily_closure_pdf({
+            "closure_date": "2026-10-20",
+            "trip_count": 1,
+            "total_revenue": Decimal("7684.00"),
+            "driver_revenue": Decimal("7684.00"),
+            "commission": Decimal("0.00"),
+        })
+        page = PdfReader(BytesIO(pdf)).pages[0]
+        text = page.extract_text()
+        self.assertIn("LIVRE - RESUMEN DIARIO", text)
+        self.assertIn("Total facturado: 7684.00", text)
 
     def test_invalid_discount_is_rejected(self):
         with self.assertRaises(ValueError):
