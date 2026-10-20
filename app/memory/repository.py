@@ -162,7 +162,7 @@ def search_memory_by_embedding(
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
                 WHERE md.user_id = %s
-                  AND md.key NOT LIKE 'chat_log%'
+                  AND md.key NOT LIKE 'chat_log%%'
                   AND mr.embedding IS NOT NULL
                   AND 1 - (mr.embedding <=> %s::vector) >= %s
                   {scope_sql}
