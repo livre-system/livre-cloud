@@ -154,6 +154,46 @@ def _local_vehicle_page(cur, page: int, size: int, q: str = ""):
     return {"source": "livre-cloud", "items": items, "page": page, "size": size, "total": total}
 
 
+def _trip_distribution(cur):
+    """Demanda global de viajes creados, sin filtrar por estado."""
+    cur.execute(
+        """
+        WITH hours AS (
+            SELECT generate_series(
+                date_trunc('hour', CURRENT_TIMESTAMP) - INTERVAL '23 hours',
+                date_trunc('hour', CURRENT_TIMESTAMP), INTERVAL '1 hour'
+            ) AS bucket
+        )
+        SELECT to_char(hours.bucket, 'YYYY-MM-DD HH24:00') AS label,
+               count(t.id)::int AS total
+          FROM hours
+          LEFT JOIN livi_trips t
+            ON t.created_at >= hours.bucket
+           AND t.created_at < hours.bucket + INTERVAL '1 hour'
+         GROUP BY hours.bucket
+         ORDER BY hours.bucket
+        """
+    )
+    hourly = [dict(row) for row in cur.fetchall()]
+    cur.execute(
+        """
+        WITH days AS (
+            SELECT generate_series(
+                CURRENT_DATE - INTERVAL '14 days', CURRENT_DATE, INTERVAL '1 day'
+            )::date AS bucket
+        )
+        SELECT to_char(days.bucket, 'YYYY-MM-DD') AS label,
+               count(t.id)::int AS total
+          FROM days
+          LEFT JOIN livi_trips t ON t.created_at::date = days.bucket
+         GROUP BY days.bucket
+         ORDER BY days.bucket
+        """
+    )
+    daily = [dict(row) for row in cur.fetchall()]
+    return {"hourly": hourly, "daily": daily, "scope": "all_trips", "basis": "created_at"}
+
+
 def _local_trip_page(
     cur, page: int, size: int, q: str = "", state: str = "",
     date_from: str = "", date_to: str = "",
@@ -233,7 +273,10 @@ def _local_trip_page(
         params + [size, (page - 1) * size],
     )
     items = [dict(row) for row in cur.fetchall()]
-    return {"source": "livre", "items": items, "page": page, "size": size, "total": total, "totals": totals}
+    return {
+        "source": "livre", "items": items, "page": page, "size": size,
+        "total": total, "totals": totals, "distribution": _trip_distribution(cur),
+    }
 
 
 @router.post("/trips/{trip_id}/tracking")
