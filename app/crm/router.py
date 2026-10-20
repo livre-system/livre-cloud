@@ -712,33 +712,89 @@ def live_travels(
     return _local_trip_page(cur, page, size, q, state, date_from, date_to)
 
 
+_PREMIUM_TRIPS_SQL = """
+    SELECT t.id AS trip_id,
+           COALESCE(t.original_fare, t.fare)::numeric(12,2) AS total,
+           COALESCE(t.tracking_plate, dv.vehicle_label) AS vehicle,
+           COALESCE(t.tracking_vehicle_model, v.model) AS vehicle_model,
+           NULLIF(trim(concat(o.first_name, ' ', o.last_name)), '') AS owner,
+           t.updated_at::date AS completed_at,
+           c.id AS commission_id,
+           c.settled_at
+      FROM livi_trips t
+      LEFT JOIN livre_driver_vehicles dv
+        ON dv.driver_user_id = t.assigned_driver_user_id
+       AND (t.tracking_plate IS NULL OR upper(dv.vehicle_label) = upper(t.tracking_plate))
+      LEFT JOIN livre_crm_vehicles v
+        ON upper(v.plate) = upper(COALESCE(t.tracking_plate, dv.vehicle_label))
+      LEFT JOIN livre_crm_vehicle_owners o ON o.id = v.owner_id
+      LEFT JOIN LATERAL (
+          SELECT id, settled_at
+            FROM livre_crm_commissions
+           WHERE trip_id = t.id
+           ORDER BY id
+           LIMIT 1
+      ) c ON TRUE
+     WHERE t.status = 'completed'
+       AND t.service_type_id = '1'
+"""
+
+
+def _agency_filters(date_from: str, date_to: str, owner_id: str):
+    filters, params = [], []
+    if date_from:
+        filters.append("completed_at >= %s"); params.append(date_from)
+    if date_to:
+        filters.append("completed_at <= %s"); params.append(date_to)
+    if owner_id:
+        filters.append("owner = %s"); params.append(owner_id)
+    return (" WHERE " + " AND ".join(filters)) if filters else "", params
+
+
 @router.get("/agency-commissions")
 def agency_commissions(
     date_from: str = Query(default="", max_length=10),
     date_to: str = Query(default="", max_length=10),
-    owner_id: str = Query(default="", max_length=30),
+    owner_id: str = Query(default="", max_length=120),
     page: int = Query(default=1, ge=1, le=10000),
     size: int = Query(default=20, ge=1, le=100),
     user: dict = Depends(require_auth),
     cur=Depends(get_cursor_dep),
 ):
-    """Liquidaciones almacenadas por Livre Cloud; no consulta proveedores."""
-    filters, params = [], []
-    if date_from:
-        filters.append("settled_at::date >= %s"); params.append(date_from)
-    if date_to:
-        filters.append("settled_at::date <= %s"); params.append(date_to)
-    if owner_id:
-        filters.append("owner = %s"); params.append(owner_id)
-    where = (" WHERE " + " AND ".join(filters)) if filters else ""
-    cur.execute(f"SELECT count(*) AS total, COALESCE(sum(total), 0) AS total_amount, COALESCE(sum(commission), 0) AS commission_amount FROM livre_crm_commissions{where}", params)
+    """Calcula la comisión real sobre viajes Premium completados."""
+    where, params = _agency_filters(date_from, date_to, owner_id)
+    cur.execute(f"SELECT count(*) AS total, count(DISTINCT vehicle) AS vehicles, COALESCE(sum(total), 0) AS total_amount FROM ({_PREMIUM_TRIPS_SQL}) premium{where}", params)
     totals = cur.fetchone()
-    cur.execute(f"SELECT id, trip_id AS travel_id, vehicle, vehicle_model, owner, total, commission, commission_percent, settled_at FROM livre_crm_commissions{where} ORDER BY settled_at DESC NULLS LAST, id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
+    cur.execute(
+        f"SELECT trip_id AS travel_id, vehicle, vehicle_model, owner, total, ROUND(total * 0.15, 2) AS commission, 15.00 AS commission_percent, completed_at, commission_id IS NOT NULL AS settled, settled_at FROM ({_PREMIUM_TRIPS_SQL}) premium{where} ORDER BY completed_at DESC, trip_id DESC LIMIT %s OFFSET %s",
+        params + [size, (page - 1) * size],
+    )
     items = [dict(row) for row in cur.fetchall()]
-    cur.execute("SELECT DISTINCT owner FROM livre_crm_commissions WHERE owner IS NOT NULL AND owner <> '' ORDER BY owner")
+    cur.execute(f"SELECT DISTINCT owner FROM ({_PREMIUM_TRIPS_SQL}) premium WHERE owner IS NOT NULL ORDER BY owner")
     owners = [{"id": row["owner"], "name": row["owner"]} for row in cur.fetchall()]
     total = int(totals["total"])
-    return {"source": "livre-cloud", "owners": owners, "items": items, "total": total, "page": page, "size": size, "totals": {"trips": total, "vehicles": len({item["vehicle"] for item in items if item["vehicle"]}), "total": float(totals["total_amount"]), "commission": float(totals["commission_amount"]), "commission_percent": None}, "warning": None if total else "No hay liquidaciones locales cargadas en Livre Cloud."}
+    total_amount = float(totals["total_amount"])
+    return {"source": "livre-cloud", "owners": owners, "items": items, "total": total, "page": page, "size": size,
+            "totals": {"trips": total, "vehicles": int(totals["vehicles"] or 0), "total": total_amount, "commission": round(total_amount * 0.15, 2), "commission_percent": 15.0},
+            "warning": None if total else "No hay viajes Premium completados para liquidar."}
+
+
+@router.post("/agency-commissions/settle")
+def settle_agency_commissions(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+    """Crea una liquidación idempotente por cada viaje Premium completado pendiente."""
+    cur.execute("SELECT pg_advisory_xact_lock(987654321)")
+    cur.execute(
+        f"""INSERT INTO livre_crm_commissions
+                (trip_id, vehicle, vehicle_model, owner, total, commission, commission_percent, settled_at, raw_payload)
+            SELECT p.trip_id, p.vehicle, p.vehicle_model, p.owner, p.total,
+                   ROUND(p.total * 0.15, 2), 15.00, NOW(),
+                   jsonb_build_object('source', 'completed_premium_trip', 'service_type_id', '1')
+              FROM ({_PREMIUM_TRIPS_SQL}) p
+             WHERE p.commission_id IS NULL
+               AND NOT EXISTS (SELECT 1 FROM livre_crm_commissions existing WHERE existing.trip_id = p.trip_id)"""
+    )
+    settled = cur.rowcount
+    return {"source": "livre-cloud", "settled_count": settled, "message": "Liquidación Premium actualizada."}
 
 
 @router.get("/driver-shift-closures")

@@ -2,7 +2,13 @@ from datetime import date
 from decimal import Decimal
 import unittest
 
-from app.integrations.historical_quote import apply_commercial_discount, commercial_fare, historical_options
+from app.integrations.historical_quote import (
+    agency_commission,
+    apply_commercial_discount,
+    commercial_fare,
+    historical_options,
+    is_settleable_premium_trip,
+)
 from app.mobility.router import _daily_closure_pdf, _driver_fare, _history_response
 from app.mobility.schemas import DriverShiftClosure
 
@@ -49,6 +55,15 @@ class CommercialFareTests(unittest.TestCase):
         self.assertEqual(result["discountPercentage"], 15.0)
         self.assertEqual(result["discountAmount"], 758.10)
         self.assertEqual(result["finalFare"], 4295.90)
+
+    def test_agency_commission_is_fifteen_percent_of_collected_premium(self):
+        self.assertEqual(agency_commission("3200.00"), Decimal("480.00"))
+
+    def test_only_completed_premium_trips_are_settleable(self):
+        self.assertTrue(is_settleable_premium_trip("completed", "1"))
+        self.assertFalse(is_settleable_premium_trip("completed", "2"))
+        self.assertFalse(is_settleable_premium_trip("assigned", "1"))
+        self.assertFalse(is_settleable_premium_trip("completed", None))
 
     def test_livre_ahorro_discount_is_idempotent(self):
         quote = apply_commercial_discount({"pricePointToPoint": 5054, "transportTypeId": "2"})

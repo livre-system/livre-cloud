@@ -11,6 +11,8 @@ DEFAULT_RATE_ID = 6243
 FARE_SOURCE_COMMERCIAL = "commercial"
 COMMERCIAL_DISCOUNT_PERCENTAGE = Decimal("15")
 AHORRO_SERVICE_TYPE_ID = "2"
+PREMIUM_SERVICE_TYPE_ID = "1"
+AGENCY_COMMISSION_PERCENTAGE = Decimal("15")
 SERVICE_NAMES = {
     # En la respuesta real de MAGIIS, el tipo 1 tiene la tarifa más alta
     # y el tipo 2 la más baja. La identidad del servicio debe viajar junto
@@ -22,6 +24,19 @@ SERVICE_NAMES = {
 
 def _money(value: Decimal) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def agency_commission(total: Decimal | int | str) -> Decimal:
+    """Calcula la comisión de agencia sobre el importe Premium cobrado."""
+    amount = Decimal(str(total)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if amount < 0:
+        raise ValueError("importe inválido")
+    return (amount * AGENCY_COMMISSION_PERCENTAGE / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def is_settleable_premium_trip(status: str | None, service_type_id: str | None) -> bool:
+    """Solo un viaje Premium completado entra en la liquidación de agencia."""
+    return str(status).casefold() == "completed" and str(service_type_id) == PREMIUM_SERVICE_TYPE_ID
 
 
 def commercial_fare(
