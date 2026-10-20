@@ -234,8 +234,12 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
         query = last_user_msg.content if last_user_msg else ""
         system_prompt = _build_system_prompt(user["id"], query, chat_id)
         import logging
-        logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d messages=%d provider=%s", len(system_prompt), len(body.messages), body.provider)
-        messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
+        chat_messages = [
+            {**m.model_dump(), "content": m.content[:4000]}
+            for m in body.messages[-20:]
+        ]
+        logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d message_chars=%d messages=%d provider=%s", len(system_prompt), sum(len(m["content"]) for m in chat_messages), len(chat_messages), body.provider)
+        messages = [{"role": "system", "content": system_prompt}] + chat_messages
         llm = get_llm_provider(body.provider)
 
         try:
@@ -287,8 +291,12 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
         query = last_user_msg.content if last_user_msg else ""
         system_prompt = _build_system_prompt(user["id"], query, chat_id)
         import logging
-        logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d messages=%d provider=%s", len(system_prompt), len(body.messages), body.provider)
-        messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
+        chat_messages = [
+            {**m.model_dump(), "content": m.content[:4000]}
+            for m in body.messages[-20:]
+        ]
+        logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d message_chars=%d messages=%d provider=%s", len(system_prompt), sum(len(m["content"]) for m in chat_messages), len(chat_messages), body.provider)
+        messages = [{"role": "system", "content": system_prompt}] + chat_messages
         llm = get_llm_provider()
 
         full_reply = []
