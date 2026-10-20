@@ -281,13 +281,30 @@ def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
             """
             SELECT * FROM livi_trips
             WHERE whatsapp_user = %s
-              AND status IN ('pending', 'searching', 'assigned', 'accepted', 'in_progress')
+              AND status IN ('pending', 'searching', 'scheduled', 'assigned', 'accepted',
+                             'arriving', 'in_progress', 'conflict')
             ORDER BY created_at DESC
             LIMIT 1;
             """,
             [whatsapp_user],
         )
         return cur.fetchone()
+
+
+def _trip_status_message(trip: dict) -> str:
+    messages = {
+        "pending": "El viaje fue recibido y está por entrar en asignación.",
+        "searching": "Estamos buscando un vehículo disponible para tu viaje.",
+        "scheduled": "Tu viaje quedó programado.",
+        "assigned": "Tu viaje fue tomado por un conductor.",
+        "arriving": "Tu conductor está en camino.",
+        "in_progress": "Tu viaje está en curso.",
+        "conflict": "Tuvimos un inconveniente con tu viaje y lo estamos resolviendo.",
+        "lost": "No encontramos un vehículo disponible para realizar tu viaje.",
+        "cancelled": "Tu viaje fue cancelado.",
+        "completed": "Tu viaje finalizó. Gracias por viajar con Livre.",
+    }
+    return messages.get(str(trip.get("status")), "Estamos actualizando tu viaje.")
 
 
 def _run_local_quote(origen: str, destino: str) -> dict:
@@ -421,6 +438,7 @@ async def elevenlabs_trip_status(request: Request):
         return {
             "result": result,
             "status": trip.get("status"),
+            "status_message": _trip_status_message(trip),
             "tracking_url": tracking_url,
             "location": {"latitude": latitude, "longitude": longitude} if location_url else None,
             "location_url": location_url,
@@ -441,6 +459,7 @@ async def elevenlabs_trip_status(request: Request):
     return {
         "result": result,
         "status": trip.get("status"),
+        "status_message": _trip_status_message(trip),
         "driver": driver or None,
         "vehicle": vehicle or None,
         "plate": plate or None,

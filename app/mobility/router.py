@@ -570,6 +570,24 @@ def update_driver_operational_status(
 @router.get("/driver/trips", response_model=list[DriverTrip])
 def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)):
     """Lists open trips available to this conductor and trips already assigned to them."""
+    # Un viaje que agotó la ventana de búsqueda pasa a Perdidas sólo cuando
+    # tampoco existe ningún conductor disponible en toda la flota.
+    timeout_minutes = max(1, int(os.getenv("TRIP_SEARCH_TIMEOUT_MINUTES", "10")))
+    cur.execute(
+        """
+        UPDATE livi_trips
+           SET status = 'lost', updated_at = NOW()
+         WHERE status IN ('pending', 'searching')
+           AND assigned_driver_user_id IS NULL
+           AND created_at < NOW() - (%s || ' minutes')::interval
+           AND NOT EXISTS (
+               SELECT 1 FROM livre_driver_accounts
+                WHERE operational_status = 'available'
+                  AND (active = TRUE OR location_updated_at >= NOW() - INTERVAL '2 minutes')
+           )
+        """,
+        (str(timeout_minutes),),
+    )
     cur.execute(
         """
         SELECT t.id, t.origen, t.destino, t.status, t.created_at,
@@ -836,18 +854,21 @@ def driver_update_status(
             raise HTTPException(status_code=409, detail="El viaje ya fue tomado por otro conductor")
         trip = _driver_trip_or_404(cur, trip_id, user)
     previous_status = trip["status"]
+    if payload.status == "conflict" and not payload.reason:
+        raise HTTPException(status_code=422, detail="Indicá el motivo del conflicto")
     if previous_status != "assigned" or payload.status != "arriving":
         cur.execute(
             """
-            UPDATE livi_trips SET status = %s, updated_at = NOW()
+            UPDATE livi_trips
+               SET status = %s, conflict_reason = %s, updated_at = NOW()
             WHERE id = %s AND assigned_driver_user_id = %s
             """,
-            (payload.status, trip_id, user["id"]),
+            (payload.status, payload.reason, trip_id, user["id"]),
         )
     elif trip["status"] == "assigned":
         cur.execute(
             """
-            UPDATE livi_trips SET status = 'arriving', updated_at = NOW()
+            UPDATE livi_trips SET status = 'arriving', conflict_reason = NULL, updated_at = NOW()
             WHERE id = %s AND assigned_driver_user_id = %s
             """,
             (trip_id, user["id"]),

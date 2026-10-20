@@ -8,9 +8,12 @@ from pydantic import BaseModel, Field
 TripStatus = Literal[
     "pending",
     "searching",
+    "scheduled",
     "assigned",
     "arriving",
     "in_progress",
+    "conflict",
+    "lost",
     "completed",
     "cancelled",
 ]
@@ -26,6 +29,7 @@ class LocationUpdate(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: TripStatus
+    reason: str | None = Field(default=None, max_length=500)
 
 
 class DriverOperationalStatusUpdate(BaseModel):
