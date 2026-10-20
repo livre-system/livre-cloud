@@ -73,12 +73,13 @@ def _search_memory(user_id: str = None, query: str = "") -> str:
     try:
         rows = []
         for target_user in target_users:
-            rows.extend(search_memory_by_embedding(target_user, query, limit=50, min_similarity=0.30))
+            # Recuperar poco: esta ruta es la que realmente atiende /chat/stream.
+            rows.extend(search_memory_by_embedding(target_user, query, limit=8, min_similarity=0.30))
         rows.sort(
             key=lambda row: float(row["similarity"] if hasattr(row, "keys") else row[2]),
             reverse=True,
         )
-        rows = rows[:50]
+        rows = rows[:8]
     except Exception as e:
         _log.error(f"[MEMORY DEBUG] search_memory_by_embedding ERROR: {e}", exc_info=True)
         return ""
@@ -110,12 +111,15 @@ def _search_memory(user_id: str = None, query: str = "") -> str:
             msg = decrypt(msg)
         except Exception:
             pass
-        _log.info(
-            f"[MEMORY DEBUG] result_{i} document_name={name!r} "
-            f"similarity={float(similarity):.4f} "
-            f"content={msg[:120]!r}"
-        )
-        lines.append(f"[{name}]\n{msg.strip()}")
+        msg = msg.strip()[:2500]
+        candidate = f"[{name}]\n{msg}"
+        current_chars = sum(len(line) for line in lines)
+        if current_chars + len(candidate) > 12000:
+            remaining = max(0, 12000 - current_chars)
+            if remaining > 100:
+                lines.append(candidate[:remaining])
+            break
+        lines.append(candidate)
 
     _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={sum(len(l) for l in lines)}")
     return "\n\n".join(lines)
@@ -196,6 +200,24 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
 
     parts.append(f"Estilo:\n{style_context['sources']['style']}")
     return "\n\n".join(parts)
+
+
+def _bounded_chat_messages(messages) -> list:
+    """Evita reenviar historial gigante aunque el cliente mande datos viejos."""
+    selected = list(messages or [])[-20:]
+    bounded = []
+    total = 0
+    for message in reversed(selected):
+        content = str(message.content or "")[:4000]
+        if total + len(content) > 24000:
+            content = content[:max(0, 24000 - total)]
+        if not content and total >= 24000:
+            break
+        bounded.append({"role": message.role, "content": content})
+        total += len(content)
+        if total >= 24000:
+            break
+    return list(reversed(bounded))
 
 
 def _is_quota_error(e: Exception) -> bool:
@@ -284,6 +306,7 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
             new = repo.create_chat(user["id"])
             chat_id = new["chat_id"]
 
+        bounded_messages = _bounded_chat_messages(body.messages)
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
             repo.save_message(chat_id, "user", last_user_msg.content)
@@ -296,7 +319,7 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
 
         query = last_user_msg.content if last_user_msg else ""
         system_prompt = _build_system_prompt(user_id=user["id"], query=query)
-        messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
+        messages = [{"role": "system", "content": system_prompt}] + bounded_messages
         llm = get_llm_provider(body.provider)
 
         try:
@@ -333,6 +356,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
             new = repo.create_chat(user["id"])
             chat_id = new["chat_id"]
 
+        bounded_messages = _bounded_chat_messages(body.messages)
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
             repo.save_message(chat_id, "user", last_user_msg.content)
@@ -345,7 +369,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
 
         query = last_user_msg.content if last_user_msg else ""
         system_prompt = _build_system_prompt(user_id=user["id"], query=query)
-        messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
+        messages = [{"role": "system", "content": system_prompt}] + bounded_messages
         llm = get_llm_provider()
 
         full_reply = []
