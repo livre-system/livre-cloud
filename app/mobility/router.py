@@ -106,7 +106,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
 
     tracking_token = secrets.token_urlsafe(32)
-    financials = commercial_fare(payload.fare)
+    financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     conversation_id = f"web_{uuid.uuid4()}"
     cur.execute(
         """
@@ -294,8 +294,10 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
 
 
 def _driver_fare(trip) -> float | None:
-    """Calcula una sola vez el ingreso del conductor desde la tarifa bruta."""
-    gross = trip.get("original_fare") or trip.get("fare")
+    """Lee el snapshot comercial sin recalcular viajes históricos completados."""
+    if trip.get("final_fare") is not None:
+        return float(trip["final_fare"])
+    gross = trip.get("original_fare") if trip.get("original_fare") is not None else trip.get("fare")
     if gross is None:
         return None
     if trip.get("status") == "completed":
@@ -365,10 +367,6 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
                t.fare AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare,
-               CASE WHEN t.status = 'completed'
-                    THEN COALESCE(t.original_fare, t.fare)
-                    ELSE ROUND(COALESCE(t.original_fare, t.fare) * 0.85, 2)
-               END AS driver_fare,
                CASE WHEN t.final_fare IS NOT NULL THEN 'commercial' ELSE t.fare_source END AS fare_source
         FROM livi_trips t
         WHERE t.assigned_driver_user_id = %s
@@ -380,11 +378,16 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
         (user_id, start, end),
     )
     items = cur.fetchall()
-    total_revenue = sum((row["fare"] for row in items if row["fare"] is not None), Decimal("0"))
-    driver_values = [row["driver_fare"] for row in items]
+    gross_values = [
+        row["original_fare"] if row["original_fare"] is not None else row["fare"]
+        for row in items
+    ]
+    total_revenue = sum((value for value in gross_values if value is not None), Decimal("0"))
+    driver_values = [_driver_fare(row) for row in items]
+    driver_values_decimal = [Decimal(str(value)) for value in driver_values if value is not None]
     driver_revenue = (
-        sum(driver_values, Decimal("0"))
-        if items and all(value is not None for value in driver_values)
+        sum(driver_values_decimal, Decimal("0"))
+        if items and len(driver_values_decimal) == len(items)
         else None
     )
     commission = total_revenue - driver_revenue if driver_revenue is not None else None
@@ -397,7 +400,7 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
             {
                 "id": row["id"], "origin": row["origen"], "destination": row["destino"],
                 "status": row["status"], "completed_at": row["completed_at"],
-                "fare": row["fare"], "driver_fare": row["driver_fare"],
+                "fare": row["fare"], "driver_fare": _driver_fare(row),
                 "original_fare": row["original_fare"],
                 "discount_percentage": row["discount_percentage"],
                 "discount_amount": row["discount_amount"],

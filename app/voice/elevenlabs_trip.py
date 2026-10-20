@@ -227,7 +227,7 @@ def _save_trip(
     """Inserta el viaje con la distribución comercial canónica de Livre."""
     if original_fare is not None or fare is not None:
         official_fare = original_fare if original_fare is not None else Decimal(str(fare))
-        financials = commercial_fare(official_fare)
+        financials = commercial_fare(official_fare, service_type_id=service_type_id)
         fare = financials["original_fare"]
         original_fare = financials["original_fare"]
         discount_percentage = financials["discount_percentage"]

@@ -10,6 +10,7 @@ from typing import Any
 DEFAULT_RATE_ID = 6243
 FARE_SOURCE_COMMERCIAL = "commercial"
 COMMERCIAL_DISCOUNT_PERCENTAGE = Decimal("15")
+AHORRO_SERVICE_TYPE_ID = "2"
 SERVICE_NAMES = {
     # En la respuesta real de MAGIIS, el tipo 1 tiene la tarifa más alta
     # y el tipo 2 la más baja. La identidad del servicio debe viajar junto
@@ -23,10 +24,15 @@ def _money(value: Decimal) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
-def commercial_fare(original_fare: Decimal | int | str, discount_percentage: Decimal = Decimal("15")) -> dict[str, Decimal]:
+def commercial_fare(
+    original_fare: Decimal | int | str,
+    discount_percentage: Decimal = COMMERCIAL_DISCOUNT_PERCENTAGE,
+    service_type_id: str | None = None,
+) -> dict[str, Decimal]:
     """Calcula el descuento comercial una sola vez, con precisión de centavos."""
     original = Decimal(str(original_fare)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    percentage = Decimal(str(discount_percentage)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    percentage = Decimal("0") if str(service_type_id) == AHORRO_SERVICE_TYPE_ID else Decimal(str(discount_percentage))
+    percentage = percentage.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if original < 0 or percentage < 0 or percentage > 100:
         raise ValueError("importe o porcentaje de descuento inválido")
     discount = (original * percentage / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -40,7 +46,10 @@ def commercial_fare(original_fare: Decimal | int | str, discount_percentage: Dec
 
 def apply_commercial_discount(quote: dict[str, Any]) -> dict[str, Any]:
     """Anexa la distribución comercial sin cambiar el precio cobrado."""
-    fare = commercial_fare(quote["pricePointToPoint"], COMMERCIAL_DISCOUNT_PERCENTAGE)
+    fare = commercial_fare(
+        quote["pricePointToPoint"],
+        service_type_id=str(quote.get("transportTypeId")) if quote.get("transportTypeId") is not None else None,
+    )
     return {
         **quote,
         "price": quote.get("price", quote["pricePointToPoint"]),
