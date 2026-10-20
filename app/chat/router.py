@@ -116,10 +116,10 @@ def _build_system_prompt(user_id: str, query: str = "", chat_id: str | None = No
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    memory_text = _get_all_memory(user_id, chat_id)
     semantic_text = _search_memory(user_id, query, chat_id) if query else ""
-    if semantic_text:
-        memory_text = semantic_text
+    # Una consulta concreta debe usar sólo los resultados relevantes. Mandar
+    # toda la memoria histórica puede generar prompts de decenas de MB.
+    memory_text = semantic_text or _get_all_memory(user_id, chat_id)
 
     operational_text = _get_operational_context()
     print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)

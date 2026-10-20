@@ -139,9 +139,6 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    static_memory = _get_all_memory(user_id)
-    _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
-
     latest_trip_query = _is_latest_trip_query(query)
     semantic_memory = ""
     if query and query.strip() and not latest_trip_query:
@@ -150,6 +147,13 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta operacional de último viaje")
     else:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: query vacío")
+
+    # Para una consulta concreta, la memoria semántica ya es el contexto
+    # relevante. No adjuntar toda la memoria histórica (puede superar 27 MB).
+    static_memory = ""
+    if not semantic_memory and not latest_trip_query:
+        static_memory = _get_all_memory(user_id)
+    _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
 
     _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={len(static_memory) + len(semantic_memory)}")
     print(
