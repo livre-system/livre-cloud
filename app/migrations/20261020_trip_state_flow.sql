@@ -15,7 +15,7 @@ ALTER TABLE livi_trips
             'pending', 'searching', 'scheduled', 'assigned', 'arriving',
             'in_progress', 'conflict', 'lost', 'completed', 'cancelled'
         )
-    );
+    ) NOT VALID;
 
 CREATE INDEX IF NOT EXISTS idx_livi_trips_open_state
     ON livi_trips (status, created_at);
