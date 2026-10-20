@@ -174,6 +174,17 @@ class CommercialFareTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             commercial_fare(100, Decimal("101"))
 
+    def test_shift_closure_column_migration_repairs_legacy_table_shape(self):
+        with open(
+            "app/migrations/20261020_driver_shift_closure_columns.sql",
+            encoding="utf-8",
+        ) as migration_file:
+            migration = migration_file.read()
+        self.assertIn("ALTER TABLE livre_driver_shift_closures", migration)
+        self.assertIn("ADD COLUMN IF NOT EXISTS total_revenue", migration)
+        self.assertIn("ADD COLUMN IF NOT EXISTS driver_revenue", migration)
+        self.assertIn("ADD COLUMN IF NOT EXISTS commission", migration)
+
 
 if __name__ == "__main__":
     unittest.main()

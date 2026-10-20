@@ -537,3 +537,12 @@ Pendientes explícitos:
 - Regresión obligatoria: reproducir un snapshot Ahorro obsoleto (por ejemplo, bruto `5054.00` y neto histórico `4295.90`) y verificar que la API y la tarjeta muestran el bruto y `0% comisión`.
 - Validación de producción: comprobar el asset JavaScript publicado y la respuesta autenticada de API cuando haya credenciales legítimas; no inventar viajes, credenciales ni datos. No declarar resuelto el bug sólo porque el bundle coincide con el commit.
 - Corrección implementada en `app/mobility/router.py`, `tests/test_commercial_fare.py`, `js/app.js` y `tests/status.test.js`; commits coordinados: `4b4b34f` (`livre-cloud`) y `23b434b` (`livre-conductor`).
+
+## Corrección de persistencia de cierres de turno (2026-10-20)
+
+- Producción devolvía HTTP 500 al guardar y consultar cierres porque la tabla existente `livre_driver_shift_closures` no tenía las columnas financieras que el runtime ya utilizaba: `total_revenue`, `driver_revenue` y `commission`.
+- La migración original definía esas columnas para instalaciones nuevas, pero no reparaba tablas creadas con una versión anterior del esquema. Por eso el error real era `psycopg2.errors.UndefinedColumn: column "driver_revenue" ... does not exist`.
+- Se agregó `app/migrations/20261020_driver_shift_closure_columns.sql`, una migración aditiva e idempotente con `ADD COLUMN IF NOT EXISTS`; no modifica filas existentes ni requiere backfill.
+- La corrección cubre ambos endpoints que comparten la tabla: `POST /mobility/driver/shift-closures` y `GET /mobility/driver/shift-closures`.
+- Regresión agregada en `tests/test_commercial_fare.py` para verificar las tres columnas de la migración.
+- Pendiente de esta incidencia: desplegar la migración y confirmar en Railway que los endpoints autenticados de historial y cierre responden sin HTTP 500.
