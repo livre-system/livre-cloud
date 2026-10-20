@@ -19,7 +19,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 
-def _get_all_memory(user_id: str, chat_id: str | None = None) -> str:
+def _get_all_memory(user_id: str, chat_id: str | None = None, max_chars: int = 12000) -> str:
     """Trae toda la memoria del usuario desencriptada."""
     try:
         with get_cursor() as cur:
@@ -44,7 +44,10 @@ def _get_all_memory(user_id: str, chat_id: str | None = None) -> str:
             except Exception:
                 pass
             lines.append(f"[{r['name']}]\n{msg.strip()}")
-        return "\n\n".join(lines)
+        result = "\n\n".join(lines)
+        if len(result) > max_chars:
+            result = result[:max_chars].rsplit("\n\n", 1)[0]
+        return result
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"_get_all_memory error: {e}")
@@ -54,7 +57,7 @@ def _get_all_memory(user_id: str, chat_id: str | None = None) -> str:
 def _search_memory(user_id: str, query: str, chat_id: str | None = None) -> str:
     """Combina corpus empresarial estructurado y memoria privada del chat."""
     lines = []
-    max_chars = 24000
+    max_chars = 12000
     try:
         for row in search_structured_knowledge(query, limit=8):
             lines.append(
