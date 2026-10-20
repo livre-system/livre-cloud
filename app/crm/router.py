@@ -692,6 +692,56 @@ def agency_commissions(
     return {"source": "livre-cloud", "owners": owners, "items": items, "total": total, "page": page, "size": size, "totals": {"trips": total, "vehicles": len({item["vehicle"] for item in items if item["vehicle"]}), "total": float(totals["total_amount"]), "commission": float(totals["commission_amount"]), "commission_percent": None}, "warning": None if total else "No hay liquidaciones locales cargadas en Livre Cloud."}
 
 
+@router.get("/driver-shift-closures")
+def driver_shift_closures(
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    driver_id: str = Query(default="", max_length=80),
+    page: int = Query(default=1, ge=1, le=10000),
+    size: int = Query(default=50, ge=1, le=100),
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Cierres de turno registrados por los conductores en Livre Cloud."""
+    if date_from and date_to and date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to no puede ser anterior a date_from")
+    filters, params = [], []
+    if date_from:
+        filters.append("c.closure_date >= %s"); params.append(date_from)
+    if date_to:
+        filters.append("c.closure_date <= %s"); params.append(date_to)
+    if driver_id.strip():
+        try:
+            params.append(uuid.UUID(driver_id.strip()))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="driver_id inválido") from exc
+        params[-1] = str(params[-1])
+        filters.append("c.driver_user_id = %s")
+    where = " WHERE " + " AND ".join(filters) if filters else ""
+    cur.execute(f"SELECT count(*) AS total FROM livre_driver_shift_closures c{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(
+        f"""SELECT c.id, c.closure_date, c.trip_count, c.total_revenue,
+                   c.driver_revenue, c.commission, c.created_at,
+                   c.driver_user_id, COALESCE(u.name, u.username, c.driver_user_id::text) AS driver_name,
+                   COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels
+              FROM livre_driver_shift_closures c
+              LEFT JOIN livre_users u ON u.id = c.driver_user_id
+              LEFT JOIN LATERAL (
+                  SELECT ARRAY_AGG(DISTINCT dv.vehicle_label ORDER BY dv.vehicle_label)
+                    FILTER (WHERE NULLIF(trim(dv.vehicle_label), '') IS NOT NULL) AS vehicle_labels
+                    FROM livre_driver_vehicles dv
+                   WHERE dv.driver_user_id = c.driver_user_id
+              ) v ON TRUE
+              {where}
+             ORDER BY c.closure_date DESC, c.created_at DESC, c.id DESC
+             LIMIT %s OFFSET %s""",
+        params + [size, (page - 1) * size],
+    )
+    items = [dict(row) for row in cur.fetchall()]
+    return {"source": "livre-cloud", "items": items, "total": total, "page": page, "size": size}
+
+
 @router.get("/conversations")
 def conversations(
     q: str = Query(default="", max_length=120),

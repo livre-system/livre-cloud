@@ -552,5 +552,8 @@ Pendientes explícitos:
 ## PDF y presentación de Historial y cierre (2026-10-20)
 
 - El cierre se persiste en `livre_driver_shift_closures` dentro de Livre Cloud. Actualmente no se replica automáticamente en un módulo del CRM; para mostrarlo allí hay que definir un destino explícito, por ejemplo una entidad de cierres/liquidaciones del conductor.
+- El CRM ahora expone `/crm/driver-shift-closures` como consulta autenticada de solo lectura y muestra esos registros en `Historial y cierres`, con filtros por fecha y branding Livre.
+- La pantalla toma los importes persistidos (`total_revenue`, `driver_revenue`, `commission`) sin recalcularlos ni crear cierres nuevos.
+- Validación local del cambio: `PYTHONPATH=. .venv/bin/pytest -q tests/test_commercial_fare.py` → `21 passed`; `npm test` del CRM → `11 passed`; compile/sintaxis y `git diff --check` OK.
 - El PDF ahora incluye recursos PDF válidos (fuente Helvetica, página, contenido, xref y trailer), escapa caracteres especiales y fue cubierto con lectura mediante `pypdf`.
 - La vista `Historial y cierre` mantiene el comportamiento actual y usa el acento rojo de Livre en tarjeta, encabezado, filtros y botón.
