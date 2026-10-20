@@ -92,12 +92,26 @@ class CommercialFareTests(unittest.TestCase):
         }
         self.assertEqual(_driver_fare(trip), 3200.0)
 
+    def test_driver_gets_gross_for_new_ahorro_trip_without_snapshot(self):
+        trip = {
+            "status": "assigned", "service_type_id": "2",
+            "original_fare": Decimal("3200.00"), "final_fare": None,
+        }
+        self.assertEqual(_driver_fare(trip), 3200.0)
+
+    def test_driver_gets_85_percent_for_new_non_ahorro_trip_without_snapshot(self):
+        trip = {
+            "status": "assigned", "service_type_id": "1",
+            "original_fare": Decimal("3200.00"), "final_fare": None,
+        }
+        self.assertEqual(_driver_fare(trip), 2720.0)
+
     def test_completed_legacy_trip_without_snapshot_keeps_historical_amount(self):
         trip = {
             "status": "completed", "original_fare": Decimal("3200.00"),
             "fare": Decimal("2720.00"), "final_fare": None,
         }
-        self.assertEqual(_driver_fare(trip), 3200.0)
+        self.assertEqual(_driver_fare(trip), 2720.0)
 
     def test_new_trip_with_snapshot_keeps_persisted_driver_amount(self):
         trip = {
@@ -110,6 +124,7 @@ class CommercialFareTests(unittest.TestCase):
         row = {
             "id": 1, "origen": "A", "destino": "B", "status": "completed",
             "completed_at": None, "fare": Decimal("3200.00"),
+            "service_type_id": "1",
             "original_fare": Decimal("3200.00"), "discount_percentage": None,
             "discount_amount": None, "final_fare": Decimal("2720.00"), "fare_source": "commercial",
         }
@@ -126,12 +141,14 @@ class CommercialFareTests(unittest.TestCase):
             {
                 "id": 2, "origen": "A", "destino": "B", "status": "completed",
                 "completed_at": None, "fare": Decimal("100.00"),
+                "service_type_id": "1",
                 "original_fare": Decimal("3200.00"), "discount_percentage": None,
                 "discount_amount": None, "final_fare": Decimal("2720.00"), "fare_source": "commercial",
             },
             {
                 "id": 3, "origen": "A", "destino": "B", "status": "completed",
                 "completed_at": None, "fare": Decimal("3200.00"),
+                "service_type_id": "1",
                 "original_fare": None, "discount_percentage": None,
                 "discount_amount": None, "final_fare": None, "fare_source": None,
             },

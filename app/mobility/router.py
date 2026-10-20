@@ -297,10 +297,14 @@ def _driver_fare(trip) -> float | None:
     """Lee el snapshot comercial sin recalcular viajes históricos completados."""
     if trip.get("final_fare") is not None:
         return float(trip["final_fare"])
+    if trip.get("status") == "completed":
+        # En históricos legados, fare es el importe que ya se mostraba.
+        historical_fare = trip.get("fare") if trip.get("fare") is not None else trip.get("original_fare")
+        return float(historical_fare) if historical_fare is not None else None
     gross = trip.get("original_fare") if trip.get("original_fare") is not None else trip.get("fare")
     if gross is None:
         return None
-    if trip.get("status") == "completed":
+    if str(trip.get("service_type_id")) == "2":
         return float(gross)
     return float(
         (Decimal(str(gross)) * Decimal("0.85")).quantize(
@@ -365,6 +369,7 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
         SELECT t.id, t.origen, t.destino, t.status,
                COALESCE(t.updated_at, t.created_at) AS completed_at,
                t.fare AS fare,
+               t.service_type_id,
                t.original_fare, t.discount_percentage, t.discount_amount,
                t.final_fare,
                CASE WHEN t.final_fare IS NOT NULL THEN 'commercial' ELSE t.fare_source END AS fare_source
@@ -401,6 +406,7 @@ def _history_response(cur, user_id: str, date_from: date, date_to: date) -> dict
                 "id": row["id"], "origin": row["origen"], "destination": row["destino"],
                 "status": row["status"], "completed_at": row["completed_at"],
                 "fare": row["fare"], "driver_fare": _driver_fare(row),
+                "service_type_id": row["service_type_id"],
                 "original_fare": row["original_fare"],
                 "discount_percentage": row["discount_percentage"],
                 "discount_amount": row["discount_amount"],

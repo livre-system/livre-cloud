@@ -96,6 +96,7 @@ class DriverHistoryItem(BaseModel):
     destination: str
     status: str
     completed_at: datetime | None = None
+    service_type_id: int | None = None
     fare: float | None = None
     driver_fare: float | None = None
     original_fare: float | None = None
