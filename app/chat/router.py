@@ -297,7 +297,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
         ]
         logging.getLogger(__name__).info("[CHAT DEBUG] prompt_chars=%d message_chars=%d messages=%d provider=%s", len(system_prompt), sum(len(m["content"]) for m in chat_messages), len(chat_messages), body.provider)
         messages = [{"role": "system", "content": system_prompt}] + chat_messages
-        llm = get_llm_provider()
+        llm = get_llm_provider(body.provider)
 
         full_reply = []
 
