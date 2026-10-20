@@ -18,7 +18,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 
-def _get_all_memory(user_id: str) -> str:
+def _get_all_memory(user_id: str, chat_id: str | None = None) -> str:
     """Trae toda la memoria del usuario desencriptada."""
     try:
         with get_cursor() as cur:
@@ -27,8 +27,9 @@ def _get_all_memory(user_id: str) -> str:
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
                 WHERE md.user_id = %s AND md.key NOT LIKE 'chat_log%'
+                  AND (md.chat_id IS NULL OR md.chat_id = %s)
                 ORDER BY mr.created_at ASC
-            """, [user_id])
+            """, [user_id, chat_id])
             rows = cur.fetchall()
         if not rows:
             return ""
@@ -49,9 +50,9 @@ def _get_all_memory(user_id: str) -> str:
         return ""
 
 
-def _search_memory(user_id: str, query: str) -> str:
+def _search_memory(user_id: str, query: str, chat_id: str | None = None) -> str:
     """Busca por embeddings. Si no encuentra nada, devuelve vacío."""
-    rows = search_memory_by_embedding(user_id, query)
+    rows = search_memory_by_embedding(user_id, query, chat_id=chat_id)
     if not rows:
         return ""
     lines = []
@@ -67,17 +68,56 @@ def _search_memory(user_id: str, query: str) -> str:
     return "\n\n".join(lines)
 
 
-def _build_system_prompt(user_id: str, query: str = "") -> str:
+def _get_operational_context() -> str:
+    """Resumen acotado de la operación viva para consultas de LIVI."""
+    try:
+        with get_cursor() as cur:
+            cur.execute("""
+                SELECT status, count(*) AS total
+                FROM livi_trips
+                GROUP BY status
+                ORDER BY status
+            """)
+            totals = ", ".join(f"{r['status'] or 'sin_estado'}={r['total']}" for r in cur.fetchall())
+            cur.execute("""
+                SELECT id, origen, destino, status, tracking_driver_name,
+                       tracking_plate, created_at, updated_at
+                FROM livi_trips
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT 12
+            """)
+            recent = cur.fetchall()
+        lines = [f"Estados de viajes: {totals or 'sin datos'}"]
+        for row in recent:
+            lines.append(
+                f"Viaje {row['id']}: {row['status'] or 'sin estado'}; "
+                f"origen={row['origen'] or '—'}; destino={row['destino'] or '—'}; "
+                f"chofer={row['tracking_driver_name'] or '—'}; patente={row['tracking_plate'] or '—'}; "
+                f"actualizado={row['updated_at'] or row['created_at']}"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning("No se pudo cargar contexto operacional: %s", exc)
+        return ""
+
+
+def _build_system_prompt(user_id: str, query: str = "", chat_id: str | None = None) -> str:
     sources = get_livre_sources()
     base_context = compile_base_context(sources)
     style_context = compile_style_context(sources)
 
-    memory_text = _get_all_memory(user_id)
+    memory_text = _get_all_memory(user_id, chat_id)
+    semantic_text = _search_memory(user_id, query, chat_id) if query else ""
+    if semantic_text:
+        memory_text = semantic_text
 
+    operational_text = _get_operational_context()
     print(f">>> SYSTEM PROMPT MEMORY: {len(memory_text)} chars", flush=True)
     return (
         f"Fecha y hora actual: {base_context['fecha_actual']}\n\n"
-        + (f"Contexto operativo:\n{memory_text}\n\n" if memory_text else "")
+        + (f"Datos operativos actuales:\n{operational_text}\n\n" if operational_text else "")
+        + (f"Contexto operativo relevante:\n{memory_text}\n\n" if memory_text else "")
         + f"Estilo:\n{style_context['sources']['style']}\n\n"
         + "Regla de preservación de transcripciones de LIVI:\n"
         + "Conservá cada transcripción del usuario literalmente, sin corregir, resumir ni reformular sus palabras. "
@@ -167,7 +207,7 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
             repo.save_message(chat_id, "user", last_user_msg.content)
-            save_message_to_memory(user["id"], "user", last_user_msg.content)
+            save_message_to_memory(user["id"], "user", last_user_msg.content, chat_id)
 
             # Auto-título con las primeras palabras del primer mensaje
             chat = repo.get_chat(chat_id, user["id"])
@@ -176,7 +216,7 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
                 repo.update_chat_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        system_prompt = _build_system_prompt(user["id"], query)
+        system_prompt = _build_system_prompt(user["id"], query, chat_id)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider(body.provider)
 
@@ -194,7 +234,7 @@ def chat(body: ChatRequest, user: dict = Depends(require_auth)):
 
         # Guardar respuesta del asistente
         repo.save_message(chat_id, "assistant", reply)
-        save_message_to_memory(user["id"], "assistant", reply)
+        save_message_to_memory(user["id"], "assistant", reply, chat_id)
 
         return {"reply": reply, "chat_id": chat_id}
 
@@ -219,7 +259,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
         last_user_msg = body.messages[-1] if body.messages else None
         if last_user_msg and last_user_msg.role == "user":
             repo.save_message(chat_id, "user", last_user_msg.content)
-            save_message_to_memory(user["id"], "user", last_user_msg.content)
+            save_message_to_memory(user["id"], "user", last_user_msg.content, chat_id)
 
             chat = repo.get_chat(chat_id, user["id"])
             if chat and chat["title"] == "Nueva conversación":
@@ -227,7 +267,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
                 repo.update_chat_title(chat_id, user["id"], auto_title)
 
         query = last_user_msg.content if last_user_msg else ""
-        system_prompt = _build_system_prompt(user["id"], query)
+        system_prompt = _build_system_prompt(user["id"], query, chat_id)
         messages = [{"role": "system", "content": system_prompt}] + [m.model_dump() for m in body.messages]
         llm = get_llm_provider()
 
@@ -259,7 +299,7 @@ def chat_stream(body: ChatRequest, user: dict = Depends(require_auth)):
                 if full_reply:
                     complete = "".join(full_reply)
                     repo.save_message(chat_id, "assistant", complete)
-                    save_message_to_memory(user["id"], "assistant", complete)
+                    save_message_to_memory(user["id"], "assistant", complete, chat_id)
                 yield f"data: [CHAT_ID] {chat_id}\n\n"
                 yield "data: [DONE]\n\n"
 
@@ -340,7 +380,7 @@ async def voice_chat(
         history = repo.get_messages(chat_id, user["id"])
 
         # 5. Generar respuesta con el proveedor normal (Gemini/Grok)
-        system_prompt = _build_system_prompt(user["id"], transcript)
+        system_prompt = _build_system_prompt(user["id"], transcript, chat_id)
         llm = get_llm_provider()
         messages = [{"role": "system", "content": system_prompt}]
         messages += [{"role": m["role"], "content": m["content"]} for m in history]
@@ -348,7 +388,7 @@ async def voice_chat(
 
         # 6. Guardar respuesta
         repo.save_message(chat_id, "assistant", reply)
-        save_message_to_memory(user["id"], "assistant", reply)
+        save_message_to_memory(user["id"], "assistant", reply, chat_id)
 
         # 6. Devolver solo texto (el navegador reproduce el audio)
         from fastapi.responses import JSONResponse

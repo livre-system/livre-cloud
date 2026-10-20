@@ -94,7 +94,9 @@ def rename_user_document(user_id: str, key: str, new_name: str) -> bool:
 #     adicional en la respuesta al usuario.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def save_message_to_memory(user_id: str, role: str, content: str) -> None:
+def save_message_to_memory(
+    user_id: str, role: str, content: str, chat_id: str | None = None
+) -> None:
     """
     Guarda el mensaje inmediatamente y dispara la generación del embedding
     en background sin bloquear la respuesta del chatbot.
@@ -104,11 +106,13 @@ def save_message_to_memory(user_id: str, role: str, content: str) -> None:
     if not user_exists(user_id):
         create_user(user_id)
 
+    document_key = f"chat_log_{chat_id}" if chat_id else "chat_log"
     document_id, _ = get_or_create_document(
         user_id,
-        "chat_log",
+        document_key,
         "Chat log",
         "Historial automático de conversaciones",
+        chat_id=chat_id,
     )
 
     # Paso 1: persistir el mensaje de inmediato (sin embedding).
@@ -119,7 +123,9 @@ def save_message_to_memory(user_id: str, role: str, content: str) -> None:
     _schedule_embedding_background(row_id, content)
 
 
-async def save_message_to_memory_async(user_id: str, role: str, content: str) -> None:
+async def save_message_to_memory_async(
+    user_id: str, role: str, content: str, chat_id: str | None = None
+) -> None:
     """
     Versión async de save_message_to_memory.
     Usar desde endpoints o funciones async de FastAPI.
@@ -127,11 +133,13 @@ async def save_message_to_memory_async(user_id: str, role: str, content: str) ->
     if not user_exists(user_id):
         create_user(user_id)
 
+    document_key = f"chat_log_{chat_id}" if chat_id else "chat_log"
     document_id, _ = get_or_create_document(
         user_id,
-        "chat_log",
+        document_key,
         "Chat log",
         "Historial automático de conversaciones",
+        chat_id=chat_id,
     )
 
     # Paso 1: persistir el mensaje de inmediato (sin embedding).

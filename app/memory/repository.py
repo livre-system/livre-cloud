@@ -131,23 +131,29 @@ def search_memory_by_embedding(
     query: str,
     limit: int = 20,
     min_similarity: float = 0.50,
+    chat_id: str | None = None,
 ) -> list[dict]:
     """
     Busca en memoria usando similitud coseno de embeddings.
 
     - Usa get_query_embedding (función semántica correcta para búsqueda).
     - Aplica threshold min_similarity para descartar resultados irrelevantes.
-    - Busca en TODOS los documentos del usuario (chat_log incluido),
-      no filtra por key — Livre no tiene el prefijo memoria_livre_ de Hash.
+    - Busca en documentos cargados por la empresa y excluye transcripciones
+      de chats: el historial privado se envía solo con el chat seleccionado.
     - Ordena por distancia coseno ascendente (más similar primero).
     """
     query_embedding = get_query_embedding(query)
     if not query_embedding:
         return []
     try:
+        scope_sql = "AND md.chat_id IS NULL"
+        scope_params: list[str] = []
+        if chat_id:
+            scope_sql = "AND (md.chat_id IS NULL OR md.chat_id = %s)"
+            scope_params = [chat_id]
         with get_cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
                     md.name,
                     md.key,
@@ -156,8 +162,10 @@ def search_memory_by_embedding(
                 FROM memory_rows mr
                 JOIN memory_documents md ON md.id = mr.document_id
                 WHERE md.user_id = %s
+                  AND md.key NOT LIKE 'chat_log%'
                   AND mr.embedding IS NOT NULL
                   AND 1 - (mr.embedding <=> %s::vector) >= %s
+                  {scope_sql}
                 ORDER BY mr.embedding <=> %s::vector
                 LIMIT %s
                 """,
@@ -166,6 +174,7 @@ def search_memory_by_embedding(
                     user_id,
                     str(query_embedding),
                     min_similarity,
+                    *scope_params,
                     str(query_embedding),
                     limit,
                 ),
