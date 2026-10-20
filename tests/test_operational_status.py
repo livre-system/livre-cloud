@@ -134,7 +134,7 @@ def test_driver_trip_serializes_commercial_fare_fields():
         "service_type_id": 2,
         "service_type_name": "Ahorro",
         "fare": 5054.00,
-        "driver_fare": 4295.90,
+        "driver_fare": 5054.00,
         "original_fare": 5054.00,
         "discount_percentage": 15.00,
         "discount_amount": 758.10,

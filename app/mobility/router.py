@@ -294,18 +294,24 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
 
 
 def _driver_fare(trip) -> float | None:
-    """Lee el snapshot comercial sin recalcular viajes históricos completados."""
-    if trip.get("final_fare") is not None:
-        return float(trip["final_fare"])
-    if trip.get("status") == "completed":
-        # En históricos legados, fare es el importe que ya se mostraba.
+    """Returns the driver's amount using service type as the commercial authority.
+
+    A persisted commercial snapshot is trusted for ordinary services. Ahorro is
+    deliberately authoritative over stale snapshots because its contract is
+    always 0% commission. Completed legacy trips without a snapshot keep fare
+    unchanged and are never recalculated.
+    """
+    if trip.get("status") == "completed" and trip.get("final_fare") is None:
         historical_fare = trip.get("fare") if trip.get("fare") is not None else trip.get("original_fare")
         return float(historical_fare) if historical_fare is not None else None
+
     gross = trip.get("original_fare") if trip.get("original_fare") is not None else trip.get("fare")
     if gross is None:
         return None
     if str(trip.get("service_type_id")) == "2":
         return float(gross)
+    if trip.get("final_fare") is not None:
+        return float(trip["final_fare"])
     return float(
         (Decimal(str(gross)) * Decimal("0.85")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP

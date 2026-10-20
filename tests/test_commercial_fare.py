@@ -89,8 +89,19 @@ class CommercialFareTests(unittest.TestCase):
         trip = {
             "status": "assigned", "original_fare": Decimal("3200.00"),
             "final_fare": Decimal("3200.00"), "discount_percentage": Decimal("0.00"),
+            "service_type_id": "2",
         }
         self.assertEqual(_driver_fare(trip), 3200.0)
+
+    def test_driver_ignores_stale_fifteen_percent_snapshot_for_ahorro(self):
+        # This is the production failure shape: Ahorro was paired with an old
+        # 15% snapshot, making the card show 85% of the customer's fare.
+        trip = {
+            "status": "assigned", "service_type_id": "2",
+            "original_fare": Decimal("5054.00"), "final_fare": Decimal("4295.90"),
+            "discount_percentage": Decimal("15.00"),
+        }
+        self.assertEqual(_driver_fare(trip), 5054.0)
 
     def test_driver_gets_gross_for_new_ahorro_trip_without_snapshot(self):
         trip = {
