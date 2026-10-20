@@ -52,3 +52,5 @@ def test_save_trip_binds_all_insert_columns(monkeypatch):
     assert isinstance(cursor.params[5], str)
     assert cursor.params[-4] == "real"
     assert cursor.params[-3] == "panel"
+    assert "'searching'" in cursor.query
+    assert "'assigned', %s, %s" not in cursor.query

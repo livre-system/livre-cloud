@@ -244,7 +244,7 @@ def _save_trip(
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  activity_type, source, status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'assigned', %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', %s, %s)
             RETURNING id;
             """,
             (
@@ -281,7 +281,7 @@ def _get_latest_active_trip(whatsapp_user: str) -> dict | None:
             """
             SELECT * FROM livi_trips
             WHERE whatsapp_user = %s
-              AND status IN ('pending', 'assigned', 'accepted', 'in_progress')
+              AND status IN ('pending', 'searching', 'assigned', 'accepted', 'in_progress')
             ORDER BY created_at DESC
             LIMIT 1;
             """,
@@ -706,7 +706,7 @@ async def elevenlabs_trip(request: Request):
         log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Error interno de base de datos")
 
-    _response = f"Viaje registrado en Livre y asignado a un conductor. Origen: {origen} → Destino: {destino}."
+    _response = f"Viaje registrado en Livre y buscando conductor. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")
     log.info(f"[ELEVEN TRIP] END trip_id={trip_id} conversation_id={conversation_id!r}")
 
