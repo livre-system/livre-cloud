@@ -567,3 +567,14 @@ Pendientes explícitos:
 - Corrección publicada en `livre-cloud` con commit `4d75bae` (`Allow legacy trip states during migration`). Railway production quedó `Online`.
 - Verificación posterior: `GET /health` respondió HTTP 200 con `{"status":"ok"}` y el endpoint de login respondió HTTP 401 ante credenciales inválidas; esto confirma que el servicio y la ruta de autenticación están operativos. No se almacenaron ni probaron credenciales reales.
 - Validaciones del cambio: `python -m compileall -q app` y `git diff --check` OK. La suite `pytest` no estaba instalada en el entorno usado para esta corrección.
+
+## Corrección del Histórico de viajes del CRM (2026-10-21)
+
+- `livre-chatbot` consumía `GET /crm/travel-history`, pero la tabla filtraba columnas antiguas `Col1`…`Col15`; el contrato actual de Livre Cloud devuelve campos propios como `id`, `created_at`, `whatsapp_user`, `tracking_driver_name`, `tracking_plate`, `tracking_vehicle_model`, `origen`, `destino`, `status` y `updated_at`.
+- El frontend fue alineado con ese contrato, manteniendo el historial como lectura de datos propios de Livre Cloud y sin llamadas a MAGIIS.
+- Los importes ausentes del resumen ahora se muestran como `—`, no como `ARS 0,00`, para evitar interpretar un dato faltante como importe cero.
+- Se agregó `hideTravelHistory()` al cambiar a LIVI IA, CRM, mapa u otra salida del flujo, evitando que la vista quede superpuesta o bloquee la navegación.
+- Regresiones agregadas en `livre-chatbot/tests/crm-local-data.test.js` para validar campos reales del endpoint y la salida correcta de la vista.
+- Validación local: `node --check js/app.js`, `node --test tests/*.test.js` → `19 passed, 0 failed`, y `git diff --check` OK.
+- Publicado en `livre-chatbot` con commit `edc165d` (`Fix travel history rendering and navigation`) y push a `main`.
+- En la última comprobación Railway tenía un deploy nuevo de `livre-chatbot` en estado `BUILDING`, mientras producción aún servía el deploy anterior; verificar el asset JavaScript por HTTPS antes de declarar la corrección disponible.
