@@ -221,6 +221,7 @@ def get_local_data_context(query: str) -> str:
                     return "\n".join(parts)
 
             return "Consulta operativa: no se encontró un registro coincidente en las entidades propias de Livre Cloud. No inventes datos y pedí un nombre, teléfono, ID, patente o fecha más precisa."
-    except Exception:
+    except Exception as exc:
+        print(f"[LOCAL_DATA_ERROR] {type(exc).__name__}: {exc}", flush=True)
         logger.exception("local data query failed")
         return "Consulta operativa: la fuente local de Livre Cloud no está disponible en este momento. No inventes datos ni uses proveedores históricos."
