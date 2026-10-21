@@ -19,6 +19,9 @@ _STOPWORDS = {
     "consulta", "consultar", "buscar", "busco", "dame", "decime", "quiero",
     "toda", "todas", "base", "datos", "los", "las", "del", "de", "un", "una",
     "por", "favor", "que", "hay", "con", "para", "en", "el", "la", "y", "completa", "completo", "completos", "completas", "toda", "todo",
+    "chofer", "choferes", "conductor", "conductores", "pasajero", "pasajeros", "cliente", "clientes",
+    "vehiculo", "vehiculos", "auto", "autos", "viaje", "viajes", "propietario", "dueno", "duenos",
+    "comision", "comisiones", "tarifa", "tarifas", "cotizacion", "cotizaciones", "base", "registros",
 }
 
 
