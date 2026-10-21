@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import date, timedelta
 
 from app.core.database import get_cursor
 
@@ -23,6 +24,8 @@ _STOPWORDS = {
     "vehiculo", "vehiculos", "auto", "autos", "viaje", "viajes", "propietario", "dueno", "duenos",
     "comision", "comisiones", "tarifa", "tarifas", "cotizacion", "cotizaciones", "base", "registros",
     "enlistame", "listame", "listar", "lista", "listarme", "mostrame", "mostrar", "ultimo", "ultimos", "ultima", "ultimas",
+    "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "setiembre", "octubre", "noviembre", "diciembre",
+    "cuanto", "cuantos", "recaudo", "ingreso", "ingresos", "facturo", "facturacion",
 }
 
 
@@ -53,6 +56,23 @@ def _terms(query: str) -> list[str]:
         t for t in normalize_query(query).split()
         if len(t) >= 3 and not t.isdigit() and t not in _STOPWORDS
     ]
+
+
+def _date_filter(normalized: str) -> tuple[str, list[date]]:
+    months = {
+        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+        "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+        "noviembre": 11, "diciembre": 12,
+    }
+    match = re.search(r"\b(\d{1,2})\s+(?:de\s+)?(" + "|".join(months) + r")(?:\s+de\s+(\d{4}))?\b", normalized)
+    if not match:
+        return "", []
+    day, month_name, year = int(match.group(1)), match.group(2), int(match.group(3) or 2026)
+    try:
+        start = date(year, months[month_name], day)
+    except ValueError:
+        return "", []
+    return "AND t.created_at >= %s AND t.created_at < %s", [start, start + timedelta(days=1)]
 
 
 def _table_set(cur) -> set[str]:
@@ -131,15 +151,29 @@ def get_local_data_context(query: str) -> str:
                         ]))
                     return "\n".join(parts)
 
+            if {"livre_driver_accounts", "livre_users"} <= available and "livi_trips" in available and re.search(r"\b(recaudo|ingreso|ingresos|facturo|facturacion)\b", normalized):
+                condition, params = _condition(("u.name", "u.username", "u.email", "t.assigned_driver_user_id", "t.tracking_driver_name"), terms)
+                date_sql, date_params = _date_filter(normalized)
+                cur.execute(f"""SELECT COUNT(*) AS total_viajes,
+                    COALESCE(SUM(COALESCE(t.final_fare, t.fare, t.original_fare)), 0) AS total_recaudado
+                    FROM livi_trips t
+                    LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
+                    LEFT JOIN livre_users u ON u.id = a.user_id
+                    WHERE {condition} {date_sql}""", [*params, *date_params])
+                row = cur.fetchone()
+                parts.append(f"Recaudación de viajes: cantidad={_fmt(row['total_viajes'])}; total={_fmt(row['total_recaudado'])}.")
+                return "\n".join(parts)
+
             if {"livre_driver_accounts", "livre_users"} <= available and re.search(r"\b(viaje|viajes)\b", normalized) and "livi_trips" in available:
                 condition, params = _condition(("u.name", "u.username", "u.email", "t.assigned_driver_user_id", "t.tracking_driver_name"), terms)
+                date_sql, date_params = _date_filter(normalized)
                 cur.execute(f"""SELECT t.id, t.origen, t.destino, t.status, t.tracking_driver_name,
                     t.tracking_plate, t.created_at, t.updated_at
                     FROM livi_trips t
                     LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
                     LEFT JOIN livre_users u ON u.id = a.user_id
-                    WHERE {condition}
-                    ORDER BY t.created_at DESC NULLS LAST, t.id DESC LIMIT %s""", [*params, 50])
+                    WHERE {condition} {date_sql}
+                    ORDER BY t.created_at DESC NULLS LAST, t.id DESC LIMIT %s""", [*params, *date_params, 50])
                 rows = cur.fetchall()
                 if rows:
                     for row in rows:
