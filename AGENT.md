@@ -578,3 +578,15 @@ Pendientes explícitos:
 - Validación local: `node --check js/app.js`, `node --test tests/*.test.js` → `19 passed, 0 failed`, y `git diff --check` OK.
 - Publicado en `livre-chatbot` con commit `edc165d` (`Fix travel history rendering and navigation`) y push a `main`.
 - En la última comprobación Railway tenía un deploy nuevo de `livre-chatbot` en estado `BUILDING`, mientras producción aún servía el deploy anterior; verificar el asset JavaScript por HTTPS antes de declarar la corrección disponible.
+
+## Cambios previos del CRM, conversaciones y layout (2026-10-21)
+
+- `livre-chatbot` incorporó el selector de conversaciones privadas de LIVI y la navegación lateral para cambiar entre conversaciones sin perder respuestas transmitidas (`9de74ae`, `a441b25`, `b3b8cd7`, `53f3bbd`, `901daf4`, `c1e69e8`).
+- Se corrigió la visibilidad del workspace al cambiar de panel y se eliminó el bloqueo de layout provocado por `#chat-workspace[hidden]` con `display: flex`; la regla vigente debe conservar `display: none !important` (`74f6696`, `987c29e`).
+- Se eliminó del HTML y del JavaScript el botón flotante independiente de LIVI (`#livi-floating`) para evitar una segunda entrada de chat y superposiciones en móvil/dark mode (`94cf91e`). Las reglas CSS históricas que aún contengan `.livi-floating` no prueban que el componente siga montado; verificar siempre markup y listeners activos.
+- La vista de conversaciones se restauró después de la corrección de layout: el historial debe ser visible al entrar a LIVI IA y no quedar oculto permanentemente (`9e2833c`).
+- La lista de conversaciones, burbujas y botones fueron alineados visualmente con la navegación existente, manteniendo soporte para modo claro, modo oscuro y viewport móvil. No declarar el cambio disponible sólo por el commit: comprobar el DOM y el asset publicado.
+- El Histórico de viajes fue corregido en `edc165d`: usa los campos reales de `GET /crm/travel-history`, oculta correctamente la vista al salir hacia chat/CRM/mapa y muestra `—` cuando faltan importes. La regresión local dejó 19 tests aprobados.
+- Los cambios de layout y conversaciones se validaron localmente con `node --check js/app.js`, `node --test tests/*.test.js` y `git diff --check`; no se crearon viajes ni se alteraron datos productivos.
+- Railway muestra el servicio `livre-chatbot` con deploy `SUCCESS`, pero la verificación HTTPS posterior todavía devolvió el bundle anterior (`Col1` y sin `hideTravelHistory`). Esto significa que el deploy activo no contiene aún `edc165d`, aunque GitHub `main` sí está actualizado. No informar que el Histórico está corregido en producción hasta que el asset HTTPS contenga `['id', 'ID viaje']` y `function hideTravelHistory()`.
+- `livre-chatbot` conserva cambios locales no versionados en `.env.local` y `.gitignore`; no incluirlos en commits ni exponer valores.
