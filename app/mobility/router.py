@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth, require_driver
-from app.integrations.google_maps import GeocodingError, route_geometry
+from app.integrations.google_maps import GeocodingError, geocode_address, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
 from app.mobility.schemas import (
     DriverTrip,
@@ -661,25 +661,24 @@ def driver_trip_route(
         origin = {"latitude": row["origen_latitude"], "longitude": row["origen_longitude"]}
         destination = {"latitude": row["destino_latitude"], "longitude": row["destino_longitude"]}
 
-    if any(value is None for point in (origin, destination) for value in point.values()):
-        if phase in ("pickup", "trip"):
-            cur.execute(
-                """SELECT longitude, latitude
-                   FROM livre_trip_location_history
-                   WHERE trip_id = %s AND driver_user_id = %s
-                   ORDER BY recorded_at ASC""",
-                (trip_id, user["id"]),
-            )
-            history = cur.fetchall()
-            if len(history) >= 2:
-                return {
-                    "trip_id": trip_id,
-                    "phase": phase,
-                    "coordinates": [[row["longitude"], row["latitude"]] for row in history],
-                    "distance_meters": 0,
-                    "duration_seconds": 0,
-                }
-        raise HTTPException(status_code=409, detail="El viaje todavía no tiene coordenadas suficientes para trazar la ruta")
+    # El CRM puede resolver la ruta desde las direcciones aunque el viaje
+    # todavía no tenga las coordenadas persistidas. Repetimos ese contrato
+    # aquí; nunca inventamos una posición ni hacemos geocoding en el cliente.
+    address_fallbacks = {
+        "pickup": (None, trip["origen"]),
+        "trip": (trip["origen"], trip["destino"]),
+    }[phase]
+    points = [origin, destination]
+    for index, point in enumerate(points):
+        if any(value is None for value in point.values()):
+            address = address_fallbacks[index]
+            if not address:
+                raise HTTPException(status_code=409, detail="El viaje todavía no tiene coordenadas suficientes para trazar la ruta")
+            try:
+                points[index] = geocode_address(address)
+            except GeocodingError as exc:
+                raise HTTPException(status_code=409, detail="No se pudo ubicar una dirección del viaje para trazar la ruta") from exc
+    origin, destination = points
     try:
         route = route_geometry(origin, destination)
     except GeocodingError as exc:
