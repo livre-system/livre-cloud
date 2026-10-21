@@ -99,6 +99,43 @@ def route_distance_km(origin: dict, destination: dict) -> float:
         raise GeocodingError(f"no se pudo calcular la distancia: {exc}") from exc
 
 
+def route_geometry(origin: dict, destination: dict) -> dict:
+    """Devuelve la geometría vial GeoJSON y sus métricas desde OSRM.
+
+    Se llama únicamente con coordenadas ya verificadas por Livre Cloud; el
+    navegador nunca contacta directamente al proveedor de mapas.
+    """
+    try:
+        import httpx
+
+        coordinates = (
+            f"{origin['longitude']},{origin['latitude']};"
+            f"{destination['longitude']},{destination['latitude']}"
+        )
+        response = httpx.get(
+            f"{OSRM_ROUTE_URL}/{coordinates}",
+            params={"overview": "full", "geometries": "geojson", "steps": "false"},
+            headers={"User-Agent": "LivreCloud/1.0"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+        route = (data.get("routes") or [{}])[0]
+        geometry = route.get("geometry") or {}
+        coordinates_out = geometry.get("coordinates") or []
+        if data.get("code") != "Ok" or len(coordinates_out) < 2:
+            raise GeocodingError("la ruta no contiene una geometría válida")
+        return {
+            "coordinates": coordinates_out,
+            "distance_km": float(route["distance"]) / 1000,
+            "duration_min": float(route["duration"]) / 60,
+        }
+    except GeocodingError:
+        raise
+    except Exception as exc:
+        raise GeocodingError(f"no se pudo obtener la geometría vial: {exc}") from exc
+
+
 def _osrm_route_distance_km(origin: dict, destination: dict) -> float:
     """Fallback de distancia vial basado en las coordenadas ya verificadas."""
     try:

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth, require_driver
+from app.integrations.google_maps import GeocodingError, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
 from app.mobility.schemas import (
     DriverTrip,
@@ -627,6 +628,46 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
         (user["id"], user["id"]),
     )
     return [_driver_trip(row) for row in cur.fetchall()]
+
+
+@router.get("/driver/trips/{trip_id}/route")
+def driver_trip_route(
+    trip_id: int,
+    phase: str = Query("pickup", pattern="^(pickup|trip)$"),
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    """Calcula la ruta vial del conductor sin exponer el proveedor al cliente."""
+    trip = _driver_trip_or_404(cur, trip_id, user)
+    cur.execute(
+        """
+        SELECT t.origen_latitude, t.origen_longitude,
+               t.destino_latitude, t.destino_longitude,
+               a.current_latitude, a.current_longitude
+        FROM livi_trips t
+        JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
+        WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
+        """,
+        (trip_id, user["id"]),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Viaje no asignado a este conductor")
+
+    if phase == "pickup":
+        origin = {"latitude": row["current_latitude"], "longitude": row["current_longitude"]}
+        destination = {"latitude": row["origen_latitude"], "longitude": row["origen_longitude"]}
+    else:
+        origin = {"latitude": row["origen_latitude"], "longitude": row["origen_longitude"]}
+        destination = {"latitude": row["destino_latitude"], "longitude": row["destino_longitude"]}
+
+    if any(value is None for point in (origin, destination) for value in point.values()):
+        raise HTTPException(status_code=409, detail="El viaje todavía no tiene coordenadas suficientes para trazar la ruta")
+    try:
+        route = route_geometry(origin, destination)
+    except GeocodingError as exc:
+        raise HTTPException(status_code=502, detail="No se pudo calcular la ruta vial") from exc
+    return {"trip_id": trip_id, "phase": phase, **route}
 
 
 @router.get("/driver/trips/{trip_id}/messages")
