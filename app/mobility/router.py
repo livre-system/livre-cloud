@@ -662,6 +662,23 @@ def driver_trip_route(
         destination = {"latitude": row["destino_latitude"], "longitude": row["destino_longitude"]}
 
     if any(value is None for point in (origin, destination) for value in point.values()):
+        if phase == "trip":
+            cur.execute(
+                """SELECT longitude, latitude
+                   FROM livre_trip_location_history
+                   WHERE trip_id = %s AND driver_user_id = %s
+                   ORDER BY recorded_at ASC""",
+                (trip_id, user["id"]),
+            )
+            history = cur.fetchall()
+            if len(history) >= 2:
+                return {
+                    "trip_id": trip_id,
+                    "phase": phase,
+                    "coordinates": [[row["longitude"], row["latitude"]] for row in history],
+                    "distance_meters": 0,
+                    "duration_seconds": 0,
+                }
         raise HTTPException(status_code=409, detail="El viaje todavía no tiene coordenadas suficientes para trazar la ruta")
     try:
         route = route_geometry(origin, destination)
