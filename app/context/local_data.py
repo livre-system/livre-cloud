@@ -1,11 +1,15 @@
 """Consultas de solo lectura sobre las entidades propias de Livre Cloud."""
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from datetime import date, timedelta
 
 from app.core.database import get_cursor
+
+
+logger = logging.getLogger(__name__)
 
 
 _TABLES = {
@@ -218,4 +222,5 @@ def get_local_data_context(query: str) -> str:
 
             return "Consulta operativa: no se encontró un registro coincidente en las entidades propias de Livre Cloud. No inventes datos y pedí un nombre, teléfono, ID, patente o fecha más precisa."
     except Exception:
+        logger.exception("local data query failed")
         return "Consulta operativa: la fuente local de Livre Cloud no está disponible en este momento. No inventes datos ni uses proveedores históricos."
