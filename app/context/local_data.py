@@ -25,7 +25,7 @@ _STOPWORDS = {
     "comision", "comisiones", "tarifa", "tarifas", "cotizacion", "cotizaciones", "base", "registros",
     "enlistame", "listame", "listar", "lista", "listarme", "mostrame", "mostrar", "ultimo", "ultimos", "ultima", "ultimas",
     "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "setiembre", "octubre", "noviembre", "diciembre",
-    "cuanto", "cuantos", "recaudo", "ingreso", "ingresos", "facturo", "facturacion",
+    "cuanto", "cuantos", "recaudo", "ingreso", "ingresos", "facturo", "facturacion", "sus", "hizo", "hicieron",
 }
 
 
