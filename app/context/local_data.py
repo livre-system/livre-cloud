@@ -22,6 +22,7 @@ _STOPWORDS = {
     "chofer", "choferes", "conductor", "conductores", "pasajero", "pasajeros", "cliente", "clientes",
     "vehiculo", "vehiculos", "auto", "autos", "viaje", "viajes", "propietario", "dueno", "duenos",
     "comision", "comisiones", "tarifa", "tarifas", "cotizacion", "cotizaciones", "base", "registros",
+    "enlistame", "listame", "listar", "lista", "listarme", "mostrame", "mostrar", "ultimo", "ultimos", "ultima", "ultimas",
 }
 
 
@@ -127,6 +128,25 @@ def get_local_data_context(query: str) -> str:
                             f"nombre={_fmt(row['name'] or row['username'])}", f"ID Livre={_fmt(row['id'])}",
                             f"email={_fmt(row['email'])}", f"activo={_fmt(row['active'])}",
                             f"estado={_fmt(row['operational_status'])}",
+                        ]))
+                    return "\n".join(parts)
+
+            if {"livre_driver_accounts", "livre_users"} <= available and re.search(r"\b(viaje|viajes)\b", normalized) and "livi_trips" in available:
+                condition, params = _condition(("u.name", "u.username", "u.email", "t.assigned_driver_user_id", "t.tracking_driver_name"), terms)
+                cur.execute(f"""SELECT t.id, t.origen, t.destino, t.status, t.tracking_driver_name,
+                    t.tracking_plate, t.created_at, t.updated_at
+                    FROM livi_trips t
+                    LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
+                    LEFT JOIN livre_users u ON u.id = a.user_id
+                    WHERE {condition}
+                    ORDER BY t.created_at DESC NULLS LAST, t.id DESC LIMIT %s""", [*params, 50])
+                rows = cur.fetchall()
+                if rows:
+                    for row in rows:
+                        parts.append("Viaje: " + "; ".join([
+                            f"ID={_fmt(row['id'])}", f"origen={_fmt(row['origen'])}", f"destino={_fmt(row['destino'])}",
+                            f"estado={_fmt(row['status'])}", f"chofer={_fmt(row['tracking_driver_name'])}",
+                            f"patente={_fmt(row['tracking_plate'])}", f"creado={_fmt(row['created_at'])}",
                         ]))
                     return "\n".join(parts)
 
