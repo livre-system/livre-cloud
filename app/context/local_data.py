@@ -48,7 +48,10 @@ def is_local_data_query(query: str) -> bool:
 
 
 def _terms(query: str) -> list[str]:
-    return [t for t in normalize_query(query).split() if len(t) >= 3 and t not in _STOPWORDS]
+    return [
+        t for t in normalize_query(query).split()
+        if len(t) >= 3 and not t.isdigit() and t not in _STOPWORDS
+    ]
 
 
 def _table_set(cur) -> set[str]:
