@@ -914,6 +914,12 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
+    if payload.status in ("cancelled", "conflict", "lost"):
+        # Un viaje que no termina correctamente no deja historial GPS persistido.
+        cur.execute(
+            "DELETE FROM livre_trip_location_history WHERE trip_id = %s",
+            (trip_id,),
+        )
     if previous_status == "assigned" and payload.status == "arriving":
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
         arriving_trip = cur.fetchone()
@@ -1015,5 +1021,19 @@ def driver_update_location(
         WHERE id = %s
         """,
         (payload.latitude, payload.longitude, trip_id),
+    )
+    # No se persisten consultas ni viajes rechazados. El historial empieza
+    # cuando el viaje ya fue aceptado por el conductor.
+    cur.execute(
+        """
+        INSERT INTO livre_trip_location_history
+            (trip_id, driver_user_id, latitude, longitude)
+        SELECT id, assigned_driver_user_id, %s, %s
+        FROM livi_trips
+        WHERE id = %s
+          AND assigned_driver_user_id = %s
+          AND status IN ('arriving', 'in_progress')
+        """,
+        (payload.latitude, payload.longitude, trip_id, user["id"]),
     )
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user))

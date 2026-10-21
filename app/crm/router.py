@@ -27,6 +27,14 @@ _RESOURCES = {
 # "Perez Ezequiel" and "IBAÑEZ PUCHULO CARLOS MARTIN" are real drivers.
 _HIDDEN_GPS_DRIVER_USER_IDS = ()
 
+
+def _require_livreuser(cur, user: dict) -> None:
+    """The first CRM administrator is the only route-history viewer for now."""
+    cur.execute("SELECT username FROM livre_users WHERE id = %s", (user.get("id"),))
+    row = cur.fetchone()
+    if not row or row["username"] != "livreuser":
+        raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
+
 # Estados operativos explícitos. Los estados de error son históricos/terminales:
 # no deben aparecer como "en viaje" por el solo hecho de no ser completed.
 _OPEN_TRIP_STATUSES = frozenset({
@@ -887,6 +895,46 @@ def travel_history(
     return result
 
 
+@router.get("/travel-history/{travel_id}/route")
+def travel_route(
+    travel_id: int,
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Returns the persisted route only for completed trips and livreuser."""
+    _require_livreuser(cur, user)
+    cur.execute(
+        """
+        SELECT id, origen, destino, status, assigned_driver_user_id
+        FROM livi_trips
+        WHERE id = %s AND status = 'completed'
+        """,
+        (travel_id,),
+    )
+    trip = cur.fetchone()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Recorrido no disponible: el viaje no está terminado")
+    cur.execute(
+        """
+        SELECT latitude, longitude, recorded_at
+        FROM livre_trip_location_history
+        WHERE trip_id = %s
+        ORDER BY recorded_at ASC, id ASC
+        """,
+        (travel_id,),
+    )
+    points = [dict(row) for row in cur.fetchall()]
+    return {
+        "source": "livre-cloud",
+        "trip_id": trip["id"],
+        "origin": trip["origen"],
+        "destination": trip["destino"],
+        "status": trip["status"],
+        "points": points,
+        "total": len(points),
+    }
+
+
 @router.get("/passengers")
 def live_passengers(
     page: int = Query(default=1, ge=1, le=10000),
@@ -924,6 +972,10 @@ def cancel_live_travel(
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Viaje no encontrado o ya finalizado")
+    cur.execute(
+        "DELETE FROM livre_trip_location_history WHERE trip_id = %s",
+        (travel_id,),
+    )
     return {"travel_id": travel_id, "status": "cancelled", "message": "Viaje cancelado correctamente.", "source": "livre-cloud"}
 
 
