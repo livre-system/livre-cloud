@@ -687,6 +687,35 @@ def driver_trip_route(
     return {"trip_id": trip_id, "phase": phase, **route}
 
 
+@router.get("/driver/trips/{trip_id}/trace")
+def driver_trip_trace(
+    trip_id: int,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    """Devuelve únicamente el historial GPS del viaje del conductor."""
+    _driver_trip_or_404(cur, trip_id, user)
+    cur.execute(
+        """SELECT latitude, longitude, recorded_at
+           FROM livre_trip_location_history
+           WHERE trip_id = %s AND driver_user_id = %s
+             AND latitude IS NOT NULL AND longitude IS NOT NULL
+           ORDER BY recorded_at ASC""",
+        (trip_id, user["id"]),
+    )
+    return {
+        "trip_id": trip_id,
+        "points": [
+            {
+                "latitude": float(row["latitude"]),
+                "longitude": float(row["longitude"]),
+                "recorded_at": row["recorded_at"].isoformat() if row["recorded_at"] else None,
+            }
+            for row in cur.fetchall()
+        ],
+    }
+
+
 @router.get("/driver/trips/{trip_id}/messages")
 def driver_trip_messages(
     trip_id: int,
