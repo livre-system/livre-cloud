@@ -125,7 +125,6 @@ def get_local_data_context(query: str) -> str:
         with get_cursor() as cur:
             available = _table_set(cur)
             trip_columns = _column_set(cur, "livi_trips") if "livi_trips" in available else set()
-            print(f"[LOCAL_DATA_TRACE] query={normalized!r} terms={terms!r} tables={sorted(available)!r}", flush=True)
             parts = ["FUENTE OPERATIVA AUTORITATIVA: registros propios de Livre Cloud."]
 
             if not terms and ("base" in normalized or "registros" in normalized or "datos" in normalized):
@@ -150,7 +149,7 @@ def get_local_data_context(query: str) -> str:
                         ]))
                     return "\n".join(parts)
 
-            if {"livre_driver_accounts", "livre_users"} <= available and len(terms) == 2:
+            if {"livre_driver_accounts", "livre_users"} <= available and len(terms) == 2 and not re.search(r"\b(recaudo|recaudacion|ingreso|ingresos|facturo|facturacion)\b", normalized):
                 condition, params = _condition(("u.name", "u.username", "u.email", "a.user_id"), terms)
                 cur.execute(f"""SELECT a.user_id AS id, u.name, u.username, u.email,
                     a.active, a.operational_status, a.location_updated_at
@@ -223,6 +222,5 @@ def get_local_data_context(query: str) -> str:
 
             return "Consulta operativa: no se encontró un registro coincidente en las entidades propias de Livre Cloud. No inventes datos y pedí un nombre, teléfono, ID, patente o fecha más precisa."
     except Exception as exc:
-        print(f"[LOCAL_DATA_ERROR] {type(exc).__name__}: {exc}", flush=True)
-        logger.exception("local data query failed")
+        logger.exception("local data query failed: %s", type(exc).__name__)
         return "Consulta operativa: la fuente local de Livre Cloud no está disponible en este momento. No inventes datos ni uses proveedores históricos."
