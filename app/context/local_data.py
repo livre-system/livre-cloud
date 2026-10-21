@@ -125,6 +125,7 @@ def get_local_data_context(query: str) -> str:
         with get_cursor() as cur:
             available = _table_set(cur)
             trip_columns = _column_set(cur, "livi_trips") if "livi_trips" in available else set()
+            print(f"[LOCAL_DATA_TRACE] query={normalized!r} terms={terms!r} tables={sorted(available)!r}", flush=True)
             parts = ["FUENTE OPERATIVA AUTORITATIVA: registros propios de Livre Cloud."]
 
             if not terms and ("base" in normalized or "registros" in normalized or "datos" in normalized):
