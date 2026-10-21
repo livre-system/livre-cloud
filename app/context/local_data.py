@@ -152,7 +152,7 @@ def get_local_data_context(query: str) -> str:
                     return "\n".join(parts)
 
             if {"livre_driver_accounts", "livre_users"} <= available and "livi_trips" in available and re.search(r"\b(recaudo|ingreso|ingresos|facturo|facturacion)\b", normalized):
-                condition, params = _condition(("u.name", "u.username", "u.email", "t.assigned_driver_user_id", "t.tracking_driver_name"), terms)
+                condition, params = _condition(("u.name", "u.username", "u.email", "CAST(t.assigned_driver_user_id AS TEXT)", "t.tracking_driver_name"), terms)
                 date_sql, date_params = _date_filter(normalized)
                 cur.execute(f"""SELECT COUNT(*) AS total_viajes,
                     COALESCE(SUM(COALESCE(t.final_fare, t.fare, t.original_fare)), 0) AS total_recaudado
@@ -165,7 +165,7 @@ def get_local_data_context(query: str) -> str:
                 return "\n".join(parts)
 
             if {"livre_driver_accounts", "livre_users"} <= available and re.search(r"\b(viaje|viajes)\b", normalized) and "livi_trips" in available:
-                condition, params = _condition(("u.name", "u.username", "u.email", "t.assigned_driver_user_id", "t.tracking_driver_name"), terms)
+                condition, params = _condition(("u.name", "u.username", "u.email", "CAST(t.assigned_driver_user_id AS TEXT)", "t.tracking_driver_name"), terms)
                 date_sql, date_params = _date_filter(normalized)
                 cur.execute(f"""SELECT t.id, t.origen, t.destino, t.status, t.tracking_driver_name,
                     t.tracking_plate, t.created_at, t.updated_at
