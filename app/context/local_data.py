@@ -177,7 +177,12 @@ def get_local_data_context(query: str) -> str:
                     LEFT JOIN livre_users u ON u.id = a.user_id
                     WHERE {condition} {date_sql}""", [*params, *date_params])
                 row = cur.fetchone()
-                parts.append(f"Recaudación de viajes: cantidad={_fmt(row['total_viajes'])}; total={_fmt(row['total_recaudado'])}.")
+                parts.append(
+                    f"RESULTADO OBLIGATORIO DE RECAUDACIÓN PARA {', '.join(terms) or 'el chofer'}: "
+                    f"viajes contabilizados={_fmt(row['total_viajes'])}; "
+                    f"total recaudado={_fmt(row['total_recaudado'])}. "
+                    "Usá exactamente estos valores en la respuesta; si son cero, informá cero y no digas que faltan datos."
+                )
                 return "\n".join(parts)
 
             if {"livre_driver_accounts", "livre_users"} <= available and re.search(r"\b(viaje|viajes)\b", normalized) and "livi_trips" in available:
