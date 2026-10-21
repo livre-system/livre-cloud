@@ -11,6 +11,7 @@ from app.memory.repository import search_memory_by_embedding
 from app.core.config import MEMORY_USER_ID
 from app.core.database import get_cursor
 from app.core.encryption import decrypt
+from app.context.local_data import get_local_data_context, is_local_data_query
 from app.chat.models import ChatRequest, SynthesizeRequest
 import app.chat.repository as repo
 import re
@@ -215,35 +216,35 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
     style_context = compile_style_context(sources)
 
     latest_trip_query = _is_latest_trip_query(query)
-    driver_query = _is_driver_query(query)
+    local_data_query = is_local_data_query(query)
     semantic_memory = ""
-    driver_context = _get_local_driver_context(query) if driver_query else ""
-    if query and query.strip() and not latest_trip_query and not driver_query:
+    local_data_context = get_local_data_context(query) if local_data_query else ""
+    if query and query.strip() and not latest_trip_query and not local_data_query:
         semantic_memory = _search_memory(user_id, query)
     elif latest_trip_query:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta operacional de último viaje")
-    elif driver_query:
-        _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta operacional de chofer local")
+    elif local_data_query:
+        _log.info("[MEMORY DEBUG] SEARCH SKIPPED: consulta de datos locales de Livre")
     else:
         _log.info("[MEMORY DEBUG] SEARCH SKIPPED: query vacío")
 
     # Para una consulta concreta, la memoria semántica ya es el contexto
     # relevante. No adjuntar toda la memoria histórica (puede superar 27 MB).
     static_memory = ""
-    if not semantic_memory and not latest_trip_query and not driver_query:
+    if not semantic_memory and not latest_trip_query and not local_data_query:
         static_memory = _get_all_memory(user_id)
     _log.info(f"[MEMORY DEBUG] static_memory_chars={len(static_memory)}")
 
-    _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={len(static_memory) + len(semantic_memory) + len(driver_context)}")
+    _log.info(f"[MEMORY DEBUG] FINAL MEMORY CHARS={len(static_memory) + len(semantic_memory) + len(local_data_context)}")
     print(
-        f">>> [MEMORY DEBUG] static={len(static_memory)}c semantic={len(semantic_memory)}c driver={len(driver_context)}c",
+        f">>> [MEMORY DEBUG] static={len(static_memory)}c semantic={len(semantic_memory)}c local_data={len(local_data_context)}c",
         flush=True,
     )
 
     parts = [f"Fecha y hora actual: {base_context['fecha_actual']}"]
 
-    if driver_context:
-        parts.append(driver_context)
+    if local_data_context:
+        parts.append(local_data_context)
 
     if static_memory:
         parts.append(f"Memoria del usuario:\n{static_memory}")
@@ -270,7 +271,7 @@ def _build_system_prompt(user_id: str = None, query: str = "") -> str:
             "Informa que no hay viajes asociados y no inventes ni uses viajes de otros usuarios."
         )
 
-    if not static_memory and not semantic_memory and not latest_trip_query:
+    if not static_memory and not semantic_memory and not local_data_context and not latest_trip_query:
         parts.append(
             "IMPORTANTE: No tienes información personal del usuario en memoria. "
             "No inventes datos. Responde solo con lo que sabes."
