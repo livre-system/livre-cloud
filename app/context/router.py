@@ -154,9 +154,15 @@ def _get_local_driver_context(query: str) -> str:
     try:
         with get_cursor() as cur:
             if terms:
-                pattern = "%" + "%".join(terms) + "%"
+                conditions = []
+                params = []
+                for term in terms:
+                    pattern = f"%{term}%"
+                    conditions.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s)")
+                    params.extend([pattern, pattern, pattern])
+                driver_filter = " AND ".join(conditions)
                 cur.execute(
-                    """
+                    f"""
                     SELECT a.user_id AS id, u.name, u.username, u.email,
                            a.active, a.operational_status, a.location_updated_at,
                            COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels
@@ -169,11 +175,11 @@ def _get_local_driver_context(query: str) -> str:
                            WHERE driver_user_id = a.user_id
                       ) v ON TRUE
                      WHERE a.active = TRUE
-                       AND (u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s)
+                       AND {driver_filter}
                      ORDER BY u.name NULLS LAST, a.user_id
                      LIMIT 10
                     """,
-                    [pattern, pattern, pattern],
+                    params,
                 )
                 rows = cur.fetchall()
             else:
