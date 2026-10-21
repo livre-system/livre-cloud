@@ -662,7 +662,7 @@ def driver_trip_route(
         destination = {"latitude": row["destino_latitude"], "longitude": row["destino_longitude"]}
 
     if any(value is None for point in (origin, destination) for value in point.values()):
-        if phase == "trip":
+        if phase in ("pickup", "trip"):
             cur.execute(
                 """SELECT longitude, latitude
                    FROM livre_trip_location_history
