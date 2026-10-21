@@ -84,6 +84,15 @@ def _table_set(cur) -> set[str]:
     return {row["table_name"] for row in cur.fetchall()}
 
 
+def _column_set(cur, table: str) -> set[str]:
+    cur.execute(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = 'public' AND table_name = %s""",
+        (table,),
+    )
+    return {row["column_name"] for row in cur.fetchall()}
+
+
 def _condition(columns: tuple[str, ...], terms: list[str]) -> tuple[str, list[str]]:
     if not terms:
         return "TRUE", []
@@ -111,6 +120,7 @@ def get_local_data_context(query: str) -> str:
     try:
         with get_cursor() as cur:
             available = _table_set(cur)
+            trip_columns = _column_set(cur, "livi_trips") if "livi_trips" in available else set()
             parts = ["FUENTE OPERATIVA AUTORITATIVA: registros propios de Livre Cloud."]
 
             if not terms and ("base" in normalized or "registros" in normalized or "datos" in normalized):
@@ -151,11 +161,13 @@ def get_local_data_context(query: str) -> str:
                         ]))
                     return "\n".join(parts)
 
-            if {"livre_driver_accounts", "livre_users"} <= available and "livi_trips" in available and re.search(r"\b(recaudo|ingreso|ingresos|facturo|facturacion)\b", normalized):
+            if {"livre_driver_accounts", "livre_users"} <= available and "livi_trips" in available and re.search(r"\b(recaudo|recaudacion|ingreso|ingresos|facturo|facturacion)\b", normalized):
                 condition, params = _condition(("u.name", "u.username", "u.email", "CAST(t.assigned_driver_user_id AS TEXT)", "t.tracking_driver_name"), terms)
                 date_sql, date_params = _date_filter(normalized)
+                fare_columns = [column for column in ("final_fare", "fare", "original_fare") if column in trip_columns]
+                fare_expression = "COALESCE(" + ", ".join(f"t.{column}" for column in fare_columns) + ", 0)" if fare_columns else "0"
                 cur.execute(f"""SELECT COUNT(*) AS total_viajes,
-                    COALESCE(SUM(COALESCE(t.final_fare, t.fare, t.original_fare)), 0) AS total_recaudado
+                    COALESCE(SUM({fare_expression}), 0) AS total_recaudado
                     FROM livi_trips t
                     LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
                     LEFT JOIN livre_users u ON u.id = a.user_id
