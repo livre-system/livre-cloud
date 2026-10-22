@@ -72,7 +72,7 @@ def test_location_history_insert_is_gated_to_accepted_trip_states(monkeypatch):
         user=user(),
     )
     history_call = next(call for call in cur.calls if "livre_trip_location_history" in call[0])
-    assert "status IN ('arriving', 'in_progress')" in history_call[0]
+    assert "status IN ('accepted', 'arriving', 'started', 'in_progress')" in history_call[0]
     assert history_call[1] == (-38.7, -62.2, 42, "driver-a")
 
 
@@ -90,4 +90,4 @@ def test_location_history_is_not_recorded_for_unaccepted_trip(monkeypatch):
         user=user(),
     )
     history_call = next(call for call in cur.calls if "livre_trip_location_history" in call[0])
-    assert "status IN ('arriving', 'in_progress')" in history_call[0]
+    assert "status IN ('accepted', 'arriving', 'started', 'in_progress')" in history_call[0]

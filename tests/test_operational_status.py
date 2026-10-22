@@ -3,6 +3,7 @@ from app.crm.router import (
     _local_trip_page,
     _operational_snapshot,
     _trip_status_semantics,
+    assign_trip_to_driver,
     operational,
     update_operational_driver_status,
 )
@@ -104,13 +105,40 @@ def test_driver_trips_returns_available_open_trips_and_own_assignments():
     result = driver_trips(cur=cur, user={"id": "driver-a"})
 
     assert result == []
-    query, params = cur.calls[0]
+    query, params = next(
+        call for call in cur.calls if "t.status IN ('searching')" in call[0]
+    )
     assert "active_driver.operational_status = 'available'" in query
-    assert "t.status IN ('searching')" in query
     assert "t.assigned_driver_user_id IS NULL" in query
     assert "t.assigned_driver_user_id = %s" in query
     assert "t.status IN ('assigned', 'arriving', 'in_progress')" in query
     assert params == ("driver-a", "driver-a")
+
+
+def test_crm_assignment_is_atomic_and_requires_available_driver():
+    cur = FakeCursor([{
+        "id": 77,
+        "origen": "Bahía Blanca",
+        "destino": "Ingeniero White",
+        "status": "assigned",
+        "assigned_driver_user_id": 12,
+        "tracking_driver_name": "Driver 12",
+        "created_at": None,
+        "updated_at": None,
+    }])
+
+    result = assign_trip_to_driver(
+        77,
+        {"driver_user_id": 12},
+        user={"id": "livreuser"},
+        cur=cur,
+    )
+
+    assert result["status"] == "assigned"
+    query, params = cur.calls[0]
+    assert "t.assigned_driver_user_id IS NULL" in query
+    assert "a.operational_status = 'available'" in query
+    assert params == (12, 77, 12)
 
 
 def test_driver_trip_serializes_commercial_fare_fields():

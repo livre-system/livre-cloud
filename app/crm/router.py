@@ -261,18 +261,33 @@ def _local_trip_page(
         summary_params.append(date_to)
     summary_where = " WHERE " + " AND ".join(summary_filters) if summary_filters else ""
     cur.execute(
-        f"SELECT status, count(*) AS total FROM livi_trips{summary_where} GROUP BY status",
+        f"""SELECT status,
+                   (assigned_driver_user_id IS NULL) AS unassigned,
+                   count(*) AS total
+              FROM livi_trips{summary_where}
+             GROUP BY status, (assigned_driver_user_id IS NULL)""",
         summary_params,
     )
-    status_totals = {row["status"]: int(row["total"]) for row in cur.fetchall()}
+    status_totals = {}
+    for row in cur.fetchall():
+        status_totals[(row["status"], bool(row.get("unassigned", True)))] = int(row["total"])
+
+    def total_for(*statuses, unassigned=None):
+        return sum(
+            total for (status, row_unassigned), total in status_totals.items()
+            if status in statuses and (unassigned is None or row_unassigned == unassigned)
+        )
+
     totals = {
-        "toAsignQuantity": status_totals.get("assigned", 0) + status_totals.get("searching", 0) + status_totals.get("pending", 0),
-        "inProgressQuantity": status_totals.get("confirmed", 0),
-        "scheduledQuantity": 0,
-        "inConflictQuantity": status_totals.get("conflict", 0),
-        "lostQuantity": status_totals.get("lost", 0),
-        "cancelledQuantity": status_totals.get("cancelled", 0),
-        "doneQuantity": status_totals.get("done", 0),
+        # Asignar muestra únicamente pedidos sin conductor; esto mantiene el
+        # contador alineado con la consulta que alimenta la tabla.
+        "toAsignQuantity": total_for("assigned", "searching", "pending", unassigned=True),
+        "inProgressQuantity": total_for("confirmed", "assigned", "arriving", "in_progress", unassigned=False),
+        "scheduledQuantity": total_for("scheduled"),
+        "inConflictQuantity": total_for("conflict"),
+        "lostQuantity": total_for("lost"),
+        "cancelledQuantity": total_for("cancelled"),
+        "doneQuantity": total_for("done", "completed"),
     }
     where = " WHERE " + " AND ".join(filters) if filters else ""
     cur.execute(f"SELECT count(*) AS total FROM livi_trips{where}", params)
@@ -291,6 +306,50 @@ def _local_trip_page(
         "source": "livre", "items": items, "page": page, "size": size,
         "total": total, "totals": totals, "distribution": _trip_distribution(cur),
     }
+
+
+@router.post("/trips/{trip_id}/assign")
+def assign_trip_to_driver(
+    trip_id: int,
+    payload: dict = Body(...),
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+):
+    """Asigna atómicamente un pedido abierto a un conductor disponible."""
+    try:
+        driver_user_id = int(payload.get("driver_user_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="driver_user_id inválido")
+
+    cur.execute(
+        """UPDATE livi_trips t
+              SET assigned_driver_user_id = %s,
+                  tracking_driver_name = u.name,
+                  status = 'assigned',
+                  updated_at = NOW()
+             FROM livre_users u
+             JOIN livre_driver_accounts a ON a.user_id = u.id
+            WHERE t.id = %s
+              AND t.status IN ('searching', 'pending', 'assigned')
+              AND t.assigned_driver_user_id IS NULL
+              AND a.user_id = %s
+              AND a.active = TRUE
+              AND a.operational_status = 'available'
+            RETURNING t.id, t.origen, t.destino, t.status,
+                      t.assigned_driver_user_id, t.tracking_driver_name,
+                      t.created_at, t.updated_at""",
+        (driver_user_id, trip_id, driver_user_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.execute("SELECT id, status, assigned_driver_user_id FROM livi_trips WHERE id = %s", (trip_id,))
+        trip = cur.fetchone()
+        if not trip:
+            raise HTTPException(status_code=404, detail="Viaje no encontrado")
+        if trip["assigned_driver_user_id"] is not None or trip["status"] not in {"searching", "pending", "assigned"}:
+            raise HTTPException(status_code=409, detail="El viaje ya fue asignado o no está disponible")
+        raise HTTPException(status_code=409, detail="El conductor no está disponible")
+    return {**dict(row), "source": "livre-cloud"}
 
 
 @router.post("/trips/{trip_id}/tracking")
