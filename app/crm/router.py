@@ -238,11 +238,15 @@ def _local_trip_page(
             placeholders = ", ".join(["%s"] * len(local_states))
             filters.append(f"(status IN ({placeholders}) AND (status <> 'assigned' OR assigned_driver_user_id IS NULL))")
             params.extend(sorted(local_states))
+    # The panel sends the operator's local calendar date.  Convert the
+    # timestamptz before comparing so late-night requests in Argentina are
+    # not pushed into the next UTC date and hidden from "Asignar".
+    local_created_at = "created_at AT TIME ZONE 'America/Argentina/Buenos_Aires'"
     if date_from:
-        filters.append("created_at >= %s::date")
+        filters.append(f"{local_created_at} >= %s::date")
         params.append(date_from)
     if date_to:
-        filters.append("created_at < (%s::date + INTERVAL '1 day')")
+        filters.append(f"{local_created_at} < (%s::date + INTERVAL '1 day')")
         params.append(date_to)
     summary_filters = []
     summary_params = []
@@ -250,10 +254,10 @@ def _local_trip_page(
         summary_filters.append("(origen ILIKE %s OR destino ILIKE %s OR whatsapp_user ILIKE %s)")
         summary_params.extend(["%" + q.strip() + "%"] * 3)
     if date_from:
-        summary_filters.append("created_at >= %s::date")
+        summary_filters.append(f"{local_created_at} >= %s::date")
         summary_params.append(date_from)
     if date_to:
-        summary_filters.append("created_at < (%s::date + INTERVAL '1 day')")
+        summary_filters.append(f"{local_created_at} < (%s::date + INTERVAL '1 day')")
         summary_params.append(date_to)
     summary_where = " WHERE " + " AND ".join(summary_filters) if summary_filters else ""
     cur.execute(

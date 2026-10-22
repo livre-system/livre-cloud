@@ -1,5 +1,6 @@
 from app.crm.router import (
     _HIDDEN_GPS_DRIVER_USER_IDS,
+    _local_trip_page,
     _operational_snapshot,
     _trip_status_semantics,
     operational,
@@ -25,6 +26,23 @@ def test_trip_status_semantics_does_not_promote_errors_to_open():
     assert semantics["unknown"] == 3
     assert semantics["by_status"]["magiis_error"] == 17
     assert "magiis_error" in semantics["terminal_statuses"]
+
+
+def test_live_travels_uses_argentina_calendar_for_today_filter():
+    cur = FakeCursor([
+        [{"status": "searching", "total": 1}],
+        {"total": 1},
+        [{"id": 42, "status": "searching"}],
+        [],
+        [],
+    ])
+
+    result = _local_trip_page(cur, 1, 20, state="SEARCHING_DRIVER", date_from="2026-10-22", date_to="2026-10-22")
+
+    assert result["total"] == 1
+    assert "created_at AT TIME ZONE 'America/Argentina/Buenos_Aires'" in cur.calls[0][0]
+    assert "created_at AT TIME ZONE 'America/Argentina/Buenos_Aires'" in cur.calls[1][0]
+    assert "created_at AT TIME ZONE 'America/Argentina/Buenos_Aires'" in cur.calls[2][0]
 
 
 class FakeCursor:
