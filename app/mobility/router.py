@@ -116,7 +116,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
              assigned_driver_user_id, tracking_driver_name, service_type_id,
              fare, original_fare, discount_percentage, discount_amount, final_fare, fare_source,
              activity_type, source, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
         (
