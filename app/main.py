@@ -4,8 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
-from app.core.config import AUTO_MIGRATE, SESSION_SECRET
-from app.core.database import init_db, run_migrations
+from app.core.config import AUTO_MIGRATE, SESSION_SECRET, validate_runtime_config
+from app.core.database import get_cursor, init_db, run_migrations
 from app.chat.repository import ensure_tables
 from app.auth.router import router as auth_router
 from app.context.router import router as context_router
@@ -24,6 +24,7 @@ from app.crm.router import router as crm_router
 from app.mobility.router import router as mobility_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_runtime_config()
     init_db()
     if AUTO_MIGRATE:
         run_migrations()
@@ -81,3 +82,19 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def readiness():
+    """Indica si la app puede atender tráfico dependiente de PostgreSQL."""
+    from fastapi import HTTPException
+
+    try:
+        with get_cursor() as cur:
+            cur.execute("SELECT 1 AS ok, to_regclass('public.schema_migrations') AS migrations")
+            row = cur.fetchone()
+            if not row or row["ok"] != 1 or row["migrations"] is None:
+                raise RuntimeError("schema_migrations no está disponible")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Base de datos o migraciones no disponibles") from exc
+    return {"status": "ready", "database": "ok", "migrations": "ok"}

@@ -25,8 +25,17 @@ BASE_URL = os.getenv("BASE_URL")
 # Outbox: opcional hasta configurar un consumidor autorizado.
 OUTBOX_WEBHOOK_URL = os.getenv("OUTBOX_WEBHOOK_URL")
 
-# En producción puede desactivarse para aplicar migraciones como job previo.
-AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "true").lower() in {"1", "true", "yes"}
+# Las migraciones se ejecutan como job controlado; el arranque automático es opt-in.
+AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "false").lower() in {"1", "true", "yes"}
+
+
+def validate_runtime_config() -> None:
+    """Falla temprano cuando el proceso se intenta arrancar sin secretos críticos."""
+    environment = os.getenv("ENVIRONMENT", os.getenv("APP_ENV", "development")).lower()
+    required = {"JWT_SECRET": JWT_SECRET, "SESSION_SECRET": SESSION_SECRET, "DATABASE_URL": DATABASE_URL}
+    missing = [name for name, value in required.items() if not value]
+    if missing and environment in {"production", "prod", "staging"}:
+        raise RuntimeError("Configuración incompleta: faltan " + ", ".join(missing))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Memoria global de Livre Cloud

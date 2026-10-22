@@ -29,19 +29,55 @@ _RESOURCES = {
 _HIDDEN_GPS_DRIVER_USER_IDS = ()
 
 
-def _require_crm_operator(user: dict = Depends(require_auth)) -> dict:
-    """Allow only explicit CRM/admin roles; preserve the existing livreuser owner."""
-    roles = set(user.get("roles") or [])
-    if roles and roles.intersection({"crm", "crm_admin", "admin"}):
-        return user
-    if user.get("id") != "livreuser":
+def _live_roles(cur, user: dict) -> tuple[set[str], str | None]:
+    """Lee identidad y roles actuales; el JWT solo aporta la identidad."""
+    cur.execute(
+        """SELECT u.username,
+                  COALESCE(array_agg(r.role) FILTER (WHERE r.role IS NOT NULL), ARRAY[]::TEXT[]) AS roles
+             FROM livre_users u
+             LEFT JOIN livre_user_roles r ON r.user_id = u.id
+            WHERE u.id = %s
+            GROUP BY u.id, u.username""",
+        (user.get("id"),),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=401, detail="Usuario inexistente o revocado")
+    return set(row["roles"] or []), row["username"]
+
+
+def _require_crm_operator(
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+) -> dict:
+    """Autoriza con roles vigentes en DB, no con roles cacheados en el JWT."""
+    if not hasattr(cur, "execute"):
+        # Compatibilidad para llamadas internas directas; las rutas HTTP ya
+        # ejecutaron esta misma autorización con el cursor real de FastAPI.
+        token_roles = set(user.get("roles") or [])
+        if user.get("id") == "livreuser" or token_roles.intersection({"crm", "crm_admin", "admin"}):
+            return user
         raise HTTPException(status_code=403, detail="Se requiere un rol de operador CRM")
-    return user
+    roles, username = _live_roles(cur, user)
+    if roles.intersection({"crm", "crm_admin", "admin"}) or username == "livreuser":
+        user["roles"] = sorted(roles)
+        return user
+    raise HTTPException(status_code=403, detail="Se requiere un rol de operador CRM")
 
 
-def _require_crm_admin(user: dict = Depends(require_auth)) -> dict:
-    roles = set(user.get("roles") or [])
-    if user.get("id") == "livreuser" or roles.intersection({"crm_admin", "admin"}):
+def _require_crm_admin(
+    user: dict = Depends(require_auth),
+    cur=Depends(get_cursor_dep),
+) -> dict:
+    """Autoriza administración con roles vigentes en DB."""
+    if not hasattr(cur, "execute"):
+        token_roles = set(user.get("roles") or [])
+        if user.get("id") == "livreuser" or token_roles.intersection({"crm_admin", "admin"}):
+            return user
+        raise HTTPException(status_code=403, detail="Se requiere un rol administrador CRM")
+    roles, username = _live_roles(cur, user)
+    if roles.intersection({"crm_admin", "admin"}) or username == "livreuser":
+        user["roles"] = sorted(roles)
         return user
     raise HTTPException(status_code=403, detail="Se requiere un rol administrador CRM")
 

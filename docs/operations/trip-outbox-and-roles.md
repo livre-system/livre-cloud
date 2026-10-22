@@ -24,6 +24,8 @@ Validación previa a Railway:
 Migraciones y operación:
 
 - Para producción, configurar `AUTO_MIGRATE=false` en el servicio web y ejecutar antes `python scripts/run_migrations.py` como job controlado.
+- `GET /health` solo confirma que el proceso está vivo. `GET /ready` confirma conexión a PostgreSQL y existencia de `schema_migrations`; devuelve 503 si la app no está lista para tráfico.
+- `JWT_SECRET`, `SESSION_SECRET` y `DATABASE_URL` son obligatorios en `production`, `prod` y `staging`; el arranque falla temprano si falta alguno.
 - El runner toma un advisory lock, guarda SHA-256 por migración y aborta si una migración aplicada fue modificada. El backfill de instalaciones anteriores requiere `ALLOW_LEGACY_MIGRATION_CHECKSUM_BACKFILL=true` durante esa operación explícita y controlada.
 - Los cambios de roles quedan registrados en `livre_user_role_audit` con operador, usuario afectado y roles anteriores/nuevos.
 - `GET /crm/operational/metrics` requiere autenticación CRM y expone viajes por estado, outbox pendiente/fallido/enviado y viajes con GPS atrasado.

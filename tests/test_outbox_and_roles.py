@@ -26,7 +26,18 @@ def test_role_changes_have_an_audit_trail():
     assert "previous_roles" in source
 
 
-def test_auth_issues_explicit_crm_roles_from_database():
-    source = Path("app/auth/router.py").read_text()
-    assert "FROM livre_user_roles" in source
-    assert "crm_admin" not in source  # roles are data, not hard-coded grants
+def test_crm_authorization_reads_current_roles_from_database():
+    source = Path("app/crm/router.py").read_text()
+    assert "def _live_roles" in source
+    assert "FROM livre_users u" in source
+    assert "LEFT JOIN livre_user_roles" in source
+    assert "el JWT solo aporta la identidad" in source
+
+
+def test_runtime_defaults_are_safe_and_readiness_is_separate():
+    config = Path("app/core/config.py").read_text()
+    main = Path("app/main.py").read_text()
+    assert 'os.getenv("AUTO_MIGRATE", "false")' in config
+    assert "validate_runtime_config()" in main
+    assert '@app.get("/ready")' in main
+    assert "schema_migrations" in main
