@@ -10,10 +10,11 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth, require_driver
+from app.core.rate_limit import client_key, gps_limiter, trip_action_limiter
 from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
@@ -97,8 +98,9 @@ def _public_trip(trip) -> PublicTrip:
 
 
 @router.post("/requests", response_model=TripRequestResponse, status_code=201)
-def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
+def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_dep)):
     """Creates and internally assigns a passenger request to Livre's driver pool."""
+    trip_action_limiter.check(client_key(request, "trip-request"))
     origin = payload.origin.strip()
     destination = payload.destination.strip()
     if origin.casefold() == destination.casefold():
@@ -160,10 +162,12 @@ def get_trip(trip_id: int, cur=Depends(get_cursor_dep), user: dict = Depends(req
 def update_trip_status(
     trip_id: int,
     payload: StatusUpdate,
+    request: Request,
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_driver),
 ):
     """Actualiza el estado desde el circuito autenticado de conductor/operación."""
+    trip_action_limiter.check(client_key(request, "trip-status"))
     trip = _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
         """
@@ -190,10 +194,12 @@ def update_trip_status(
 def update_trip_location(
     trip_id: int,
     payload: LocationUpdate,
+    request: Request,
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_driver),
 ):
     """Guarda la última ubicación del conductor sin llamar al proveedor externo."""
+    gps_limiter.check(client_key(request, f"gps:{user.get('id', 'unknown')}"))
     _trip_or_404(cur, trip_id)
     cur.execute(
         """

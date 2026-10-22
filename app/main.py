@@ -4,7 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
-from app.core.config import SESSION_SECRET
+from app.core.config import AUTO_MIGRATE, SESSION_SECRET
 from app.core.database import init_db, run_migrations
 from app.chat.repository import ensure_tables
 from app.auth.router import router as auth_router
@@ -25,7 +25,8 @@ from app.mobility.router import router as mobility_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    run_migrations()
+    if AUTO_MIGRATE:
+        run_migrations()
     ensure_tables()
     await patch_agent_voice()
     yield

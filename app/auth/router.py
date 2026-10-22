@@ -1,9 +1,10 @@
 import uuid
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from app.core.database import get_cursor
 from app.core.jwt import create_token, require_auth
+from app.core.rate_limit import client_key, driver_login_limiter, login_limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -92,8 +93,9 @@ def register_driver(body: DriverRegisterBody):
 
 
 @router.post("/driver/login")
-def login_driver(body: LoginBody):
+def login_driver(body: LoginBody, request: Request):
     """Autentica una cuenta de conductor y vincula la sesión al dispositivo."""
+    driver_login_limiter.check(client_key(request, "driver-login"))
     device_id = (body.device_id or "").strip()
     if not device_id:
         raise HTTPException(status_code=400, detail="Falta la identidad del dispositivo")
@@ -126,8 +128,9 @@ def login_driver(body: LoginBody):
 
 
 @router.post("/login")
-def login(body: LoginBody):
+def login(body: LoginBody, request: Request):
     """Autentica con username + password y devuelve el JWT."""
+    login_limiter.check(client_key(request, "login"))
     with get_cursor() as cur:
         cur.execute(
             "SELECT id, name, username, password_hash FROM livre_users WHERE username = %s",

@@ -5,6 +5,9 @@ Un solo pool de conexiones, reutilizado en toda la app.
 """
 
 from contextlib import contextmanager
+import hashlib
+import logging
+import os
 import threading
 import psycopg2
 from psycopg2 import pool as pg_pool
@@ -113,44 +116,40 @@ def _assert_driver_device_sessions_schema(cur) -> None:
 
 
 def run_migrations():
-    """Ejecuta scripts .sql en app/migrations/ que no se hayan aplicado aún."""
-    import os
-    import logging
+    """Aplica migraciones ordenadas y verifica checksum de las ya aplicadas."""
     log = logging.getLogger(__name__)
-    
+    migrations_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "migrations")
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Lock para evitar concurrencia entre instancias
             cur.execute("SELECT pg_advisory_xact_lock(123456789);")
-            
-            # Crear tabla de control
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version TEXT PRIMARY KEY,
-                    applied_at TIMESTAMPTZ DEFAULT NOW()
+                    applied_at TIMESTAMPTZ DEFAULT NOW(),
+                    checksum TEXT
                 );
             """)
-            
-            # Obtener archivos
-            migrations_dir = "/app/app/migrations" # Ruta en contenedor
-            # Si estamos en dev (local), corregimos la ruta
-            if not os.path.exists(migrations_dir):
-                migrations_dir = "/home/calambre/Documentos/Clientes/Livre/livre-cloud/app/migrations"
-                
-            files = sorted([f for f in os.listdir(migrations_dir) if f.endswith(".sql")])
-            
-            for f in files:
-                cur.execute("SELECT 1 FROM schema_migrations WHERE version = %s", [f])
-                if cur.fetchone():
+            # Compatibilidad con instalaciones creadas antes de los checksums.
+            cur.execute("ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT")
+            files = sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
+            for filename in files:
+                path = os.path.join(migrations_dir, filename)
+                content = open(path, "rb").read()
+                checksum = hashlib.sha256(content).hexdigest()
+                cur.execute("SELECT checksum FROM schema_migrations WHERE version = %s", (filename,))
+                applied = cur.fetchone()
+                if applied:
+                    stored = applied["checksum"] if hasattr(applied, "keys") else applied[0]
+                    if stored and stored != checksum:
+                        raise RuntimeError(f"[MIGRATIONS] Checksum cambiado: {filename}")
+                    if not stored:
+                        log.warning("[MIGRATIONS] Backfill de checksum legado: %s", filename)
+                        cur.execute("UPDATE schema_migrations SET checksum = %s WHERE version = %s", (checksum, filename))
                     continue
-                
-                log.info(f"[MIGRATIONS] Aplicando {f}")
-                with open(os.path.join(migrations_dir, f), 'r') as sql_file:
-                    cur.execute(sql_file.read())
-                
-                cur.execute("INSERT INTO schema_migrations (version) VALUES (%s)", [f])
-                log.info(f"[MIGRATIONS] Aplicado {f} exitosamente")
-
+                log.info("[MIGRATIONS] Aplicando %s", filename)
+                cur.execute(content.decode("utf-8"))
+                cur.execute("INSERT INTO schema_migrations (version, checksum) VALUES (%s, %s)", (filename, checksum))
+                log.info("[MIGRATIONS] Aplicado %s exitosamente", filename)
             _assert_driver_device_sessions_schema(cur)
 
 

@@ -33,10 +33,17 @@ def _require_crm_operator(user: dict = Depends(require_auth)) -> dict:
     """Allow only explicit CRM/admin roles; preserve the existing livreuser owner."""
     roles = set(user.get("roles") or [])
     if roles and roles.intersection({"crm", "crm_admin", "admin"}):
-        return
+        return user
     if user.get("id") != "livreuser":
         raise HTTPException(status_code=403, detail="Se requiere un rol de operador CRM")
     return user
+
+
+def _require_crm_admin(user: dict = Depends(require_auth)) -> dict:
+    roles = set(user.get("roles") or [])
+    if user.get("id") == "livreuser" or roles.intersection({"crm_admin", "admin"}):
+        return user
+    raise HTTPException(status_code=403, detail="Se requiere un rol administrador CRM")
 
 
 def _require_livreuser(cur, user: dict) -> None:
@@ -73,6 +80,53 @@ def outbox_status(
         ],
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+_ALLOWED_CRM_ROLES = {"crm", "crm_admin"}
+
+
+@router.get("/users/{user_id}/roles")
+def list_user_roles(user_id: str, user: dict = Depends(_require_crm_admin), cur=Depends(get_cursor_dep)):
+    cur.execute("SELECT id, username, name FROM livre_users WHERE id = %s", (user_id,))
+    target = cur.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    cur.execute("SELECT role, created_at FROM livre_user_roles WHERE user_id = %s ORDER BY role", (user_id,))
+    return {"user": dict(target), "roles": [dict(row) for row in cur.fetchall()]}
+
+
+@router.put("/users/{user_id}/roles")
+def set_user_roles(user_id: str, payload: dict = Body(...), user: dict = Depends(_require_crm_admin), cur=Depends(get_cursor_dep)):
+    requested = payload.get("roles")
+    if not isinstance(requested, list) or not set(requested).issubset(_ALLOWED_CRM_ROLES):
+        raise HTTPException(status_code=422, detail="roles debe ser una lista de crm o crm_admin")
+    if user_id == user.get("id") and "crm_admin" not in requested and user.get("id") != "livreuser":
+        raise HTTPException(status_code=409, detail="No podés quitarte tu último rol administrador")
+    cur.execute("SELECT id FROM livre_users WHERE id = %s", (user_id,))
+    if not cur.fetchone():
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    cur.execute("DELETE FROM livre_user_roles WHERE user_id = %s", (user_id,))
+    for role in sorted(set(requested)):
+        cur.execute("INSERT INTO livre_user_roles (user_id, role) VALUES (%s, %s)", (user_id, role))
+    cur.execute("SELECT role, created_at FROM livre_user_roles WHERE user_id = %s ORDER BY role", (user_id,))
+    return {"user_id": user_id, "roles": [dict(row) for row in cur.fetchall()]}
+
+
+@router.get("/operational/metrics")
+def operational_metrics(user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
+    cur.execute("SELECT status, count(*) AS total FROM livi_trips GROUP BY status ORDER BY status")
+    trips = {row["status"]: int(row["total"]) for row in cur.fetchall()}
+    cur.execute("""SELECT count(*) FILTER (WHERE status IN ('pending','processing')) AS pending,
+                         count(*) FILTER (WHERE status = 'failed') AS failed,
+                         count(*) FILTER (WHERE status = 'sent') AS sent
+                    FROM livre_trip_event_outbox""")
+    outbox = dict(cur.fetchone())
+    cur.execute("""SELECT count(*) AS total FROM livi_trips
+                    WHERE assigned_driver_user_id IS NOT NULL
+                      AND (tracking_location_updated_at IS NULL OR tracking_location_updated_at < NOW() - INTERVAL '2 minutes')
+                      AND status IN ('assigned','arriving','in_progress')""")
+    stale_gps = int(cur.fetchone()["total"])
+    return {"trips_by_status": trips, "outbox": {key: int(value or 0) for key, value in outbox.items()}, "stale_gps_trips": stale_gps, "generated_at": datetime.now(timezone.utc).isoformat()}
 
 # Estados operativos explícitos. Los estados de error son históricos/terminales:
 # no deben aparecer como "en viaje" por el solo hecho de no ser completed.

@@ -25,6 +25,9 @@ BASE_URL = os.getenv("BASE_URL")
 # Outbox: opcional hasta configurar un consumidor autorizado.
 OUTBOX_WEBHOOK_URL = os.getenv("OUTBOX_WEBHOOK_URL")
 
+# En producción puede desactivarse para aplicar migraciones como job previo.
+AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "true").lower() in {"1", "true", "yes"}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Memoria global de Livre Cloud
 # Toda la memoria operativa de LIVI se almacena bajo este user_id único.
