@@ -17,6 +17,15 @@ def test_roles_and_outbox_migration_is_additive_and_idempotent():
     assert "CREATE INDEX IF NOT EXISTS idx_livre_trip_outbox_processing" in sql
 
 
+def test_role_changes_have_an_audit_trail():
+    sql = Path("app/migrations/20261024_migration_checksums.sql").read_text()
+    source = Path("app/crm/router.py").read_text()
+    assert "CREATE TABLE IF NOT EXISTS livre_user_role_audit" in sql
+    assert "idx_livre_user_role_audit_target_time" in sql
+    assert "INSERT INTO livre_user_role_audit" in source
+    assert "previous_roles" in source
+
+
 def test_auth_issues_explicit_crm_roles_from_database():
     source = Path("app/auth/router.py").read_text()
     assert "FROM livre_user_roles" in source

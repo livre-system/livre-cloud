@@ -105,9 +105,18 @@ def set_user_roles(user_id: str, payload: dict = Body(...), user: dict = Depends
     cur.execute("SELECT id FROM livre_users WHERE id = %s", (user_id,))
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    cur.execute("SELECT role FROM livre_user_roles WHERE user_id = %s ORDER BY role", (user_id,))
+    previous_roles = [row["role"] for row in cur.fetchall()]
+    normalized_roles = sorted(set(requested))
     cur.execute("DELETE FROM livre_user_roles WHERE user_id = %s", (user_id,))
-    for role in sorted(set(requested)):
+    for role in normalized_roles:
         cur.execute("INSERT INTO livre_user_roles (user_id, role) VALUES (%s, %s)", (user_id, role))
+    cur.execute(
+        """INSERT INTO livre_user_role_audit
+                   (actor_user_id, target_user_id, previous_roles, new_roles)
+             VALUES (%s, %s, %s::jsonb, %s::jsonb)""",
+        (user.get("id"), user_id, json.dumps(previous_roles), json.dumps(normalized_roles)),
+    )
     cur.execute("SELECT role, created_at FROM livre_user_roles WHERE user_id = %s ORDER BY role", (user_id,))
     return {"user_id": user_id, "roles": [dict(row) for row in cur.fetchall()]}
 

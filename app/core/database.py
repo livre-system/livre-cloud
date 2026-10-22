@@ -143,6 +143,12 @@ def run_migrations():
                     if stored and stored != checksum:
                         raise RuntimeError(f"[MIGRATIONS] Checksum cambiado: {filename}")
                     if not stored:
+                        if os.getenv("ALLOW_LEGACY_MIGRATION_CHECKSUM_BACKFILL", "false").lower() not in {"1", "true", "yes"}:
+                            raise RuntimeError(
+                                f"[MIGRATIONS] Falta checksum legado: {filename}. "
+                                "Revisá la migración y repetí con "
+                                "ALLOW_LEGACY_MIGRATION_CHECKSUM_BACKFILL=true."
+                            )
                         log.warning("[MIGRATIONS] Backfill de checksum legado: %s", filename)
                         cur.execute("UPDATE schema_migrations SET checksum = %s WHERE version = %s", (checksum, filename))
                     continue
