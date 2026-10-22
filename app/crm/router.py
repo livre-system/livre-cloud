@@ -46,6 +46,34 @@ def _require_livreuser(cur, user: dict) -> None:
     if not row or row["username"] != "livreuser":
         raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
 
+
+@router.get("/operational/outbox")
+def outbox_status(
+    user: dict = Depends(_require_crm_operator),
+    cur=Depends(get_cursor_dep),
+):
+    """Estado agregado del outbox, sin exponer payloads ni errores sensibles."""
+    cur.execute(
+        """SELECT status, count(*) AS total,
+                  min(created_at) AS oldest_created_at
+             FROM livre_trip_event_outbox
+            GROUP BY status
+            ORDER BY status"""
+    )
+    rows = cur.fetchall()
+    return {
+        "statuses": [
+            {
+                "status": row["status"],
+                "total": int(row["total"]),
+                "oldest_created_at": row["oldest_created_at"].isoformat()
+                if row["oldest_created_at"] else None,
+            }
+            for row in rows
+        ],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
 # Estados operativos explícitos. Los estados de error son históricos/terminales:
 # no deben aparecer como "en viaje" por el solo hecho de no ser completed.
 _OPEN_TRIP_STATUSES = frozenset({

@@ -28,10 +28,16 @@ class DriverRegisterBody(RegisterBody):
 
 def _roles_for_user(cur, user_id: str) -> list[str]:
     cur.execute(
-        "SELECT EXISTS (SELECT 1 FROM livre_driver_accounts WHERE user_id = %s AND active = TRUE) AS is_driver",
-        [user_id],
+        """SELECT role FROM livre_user_roles WHERE user_id = %s
+           UNION ALL
+           SELECT 'driver' FROM livre_driver_accounts
+            WHERE user_id = %s AND active = TRUE""",
+        [user_id, user_id],
     )
-    return ["driver"] if cur.fetchone()["is_driver"] else ["passenger"]
+    roles = [row["role"] for row in cur.fetchall()]
+    if roles:
+        return sorted(set(roles))
+    return ["passenger"]
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────

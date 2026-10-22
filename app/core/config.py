@@ -22,6 +22,9 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 BASE_URL = os.getenv("BASE_URL")
 
+# Outbox: opcional hasta configurar un consumidor autorizado.
+OUTBOX_WEBHOOK_URL = os.getenv("OUTBOX_WEBHOOK_URL")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Memoria global de Livre Cloud
 # Toda la memoria operativa de LIVI se almacena bajo este user_id único.
