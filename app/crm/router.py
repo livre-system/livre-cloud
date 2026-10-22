@@ -219,7 +219,9 @@ def _local_trip_page(
         if requested & {"SEARCHING_DRIVER"}:
             # Los pedidos nuevos y los liberados por un rechazo individual
             # viven en searching; pending queda por compatibilidad histórica.
-            local_states.update({"searching", "pending"})
+            # Algunos pedidos históricos del canal ElevenLabs/WhatsApp se
+            # crean como assigned mientras siguen sin chofer asignado.
+            local_states.update({"assigned", "searching", "pending"})
         if requested & {"SCHEDULED"}:
             local_states.add("scheduled")
         if requested & {"WITH_DRIVER_ASSIGNED", "RESERVED", "GOING_TO_CLIENT", "GOING_TO_DESTINATION", "CLOSING_TRAVEL"}:
@@ -234,7 +236,7 @@ def _local_trip_page(
             local_states.add("done")
         if local_states:
             placeholders = ", ".join(["%s"] * len(local_states))
-            filters.append(f"status IN ({placeholders})")
+            filters.append(f"(status IN ({placeholders}) AND (status <> 'assigned' OR assigned_driver_user_id IS NULL))")
             params.extend(sorted(local_states))
     if date_from:
         filters.append("created_at >= %s::date")
@@ -260,7 +262,7 @@ def _local_trip_page(
     )
     status_totals = {row["status"]: int(row["total"]) for row in cur.fetchall()}
     totals = {
-        "toAsignQuantity": status_totals.get("searching", 0) + status_totals.get("pending", 0),
+        "toAsignQuantity": status_totals.get("assigned", 0) + status_totals.get("searching", 0) + status_totals.get("pending", 0),
         "inProgressQuantity": status_totals.get("confirmed", 0),
         "scheduledQuantity": 0,
         "inConflictQuantity": status_totals.get("conflict", 0),
