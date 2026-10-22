@@ -137,7 +137,7 @@ def request_trip(payload: TripRequest, cur=Depends(get_cursor_dep)):
         ),
     )
     trip = cur.fetchone()
-    passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros.vercel.app")
+    passenger_url = os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros-production.up.railway.app")
     tracking_url = f"{passenger_url.rstrip('/')}?token={quote(tracking_token)}"
     return TripRequestResponse(
         trip_id=trip["id"],
