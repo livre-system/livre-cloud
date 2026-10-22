@@ -10,6 +10,7 @@ import bcrypt
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth
+from app.core.operational_events import record_trip_event
 from app.mobility.schemas import DriverOperationalStatusResponse, DriverOperationalStatusUpdate
 
 router = APIRouter(prefix="/crm", tags=["crm"])
@@ -26,6 +27,16 @@ _RESOURCES = {
 # Keep this list keyed by verified production user_id, not display names:
 # "Perez Ezequiel" and "IBAÑEZ PUCHULO CARLOS MARTIN" are real drivers.
 _HIDDEN_GPS_DRIVER_USER_IDS = ()
+
+
+def _require_crm_operator(user: dict = Depends(require_auth)) -> dict:
+    """Allow only explicit CRM/admin roles; preserve the existing livreuser owner."""
+    roles = set(user.get("roles") or [])
+    if roles and roles.intersection({"crm", "crm_admin", "admin"}):
+        return
+    if user.get("id") != "livreuser":
+        raise HTTPException(status_code=403, detail="Se requiere un rol de operador CRM")
+    return user
 
 
 def _require_livreuser(cur, user: dict) -> None:
@@ -312,35 +323,44 @@ def _local_trip_page(
 def assign_trip_to_driver(
     trip_id: int,
     payload: dict = Body(...),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Asigna atómicamente un pedido abierto a un conductor disponible."""
+    _require_crm_operator(user)
     try:
         driver_user_id = int(payload.get("driver_user_id"))
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="driver_user_id inválido")
 
     cur.execute(
-        """UPDATE livi_trips t
-              SET assigned_driver_user_id = %s,
-                  tracking_driver_name = u.name,
-                  status = 'assigned',
-                  updated_at = NOW()
-             FROM livre_users u
-             JOIN livre_driver_accounts a ON a.user_id = u.id
-            WHERE t.id = %s
-              AND t.status IN ('searching', 'pending', 'assigned')
-              AND t.assigned_driver_user_id IS NULL
-              AND a.user_id = %s
-              AND a.active = TRUE
-              AND a.operational_status = 'available'
-            RETURNING t.id, t.origen, t.destino, t.status,
-                      t.assigned_driver_user_id, t.tracking_driver_name,
-                      t.created_at, t.updated_at""",
-        (driver_user_id, trip_id, driver_user_id),
+        """WITH current AS (
+                 SELECT id, status AS previous_status
+                   FROM livi_trips
+                  WHERE id = %s
+                  FOR UPDATE
+             )
+             UPDATE livi_trips t
+                SET assigned_driver_user_id = %s,
+                    tracking_driver_name = u.name,
+                    status = 'assigned',
+                    updated_at = NOW()
+               FROM current
+               JOIN livre_users u ON TRUE
+               JOIN livre_driver_accounts a ON a.user_id = u.id
+              WHERE t.id = current.id
+                AND t.status IN ('searching', 'pending', 'assigned')
+                AND t.assigned_driver_user_id IS NULL
+                AND a.user_id = %s
+                AND a.active = TRUE
+                AND a.operational_status = 'available'
+              RETURNING t.id, t.origen, t.destino, t.status,
+                        t.assigned_driver_user_id, t.tracking_driver_name,
+                        t.created_at, t.updated_at, current.previous_status""",
+        (trip_id, driver_user_id, driver_user_id),
     )
     row = cur.fetchone()
+    previous_status = row.get("previous_status") if row else None
     if not row:
         cur.execute("SELECT id, status, assigned_driver_user_id FROM livi_trips WHERE id = %s", (trip_id,))
         trip = cur.fetchone()
@@ -349,6 +369,11 @@ def assign_trip_to_driver(
         if trip["assigned_driver_user_id"] is not None or trip["status"] not in {"searching", "pending", "assigned"}:
             raise HTTPException(status_code=409, detail="El viaje ya fue asignado o no está disponible")
         raise HTTPException(status_code=409, detail="El conductor no está disponible")
+    record_trip_event(
+        cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="crm",
+        event_type="trip_assigned", previous_status=previous_status, new_status="assigned",
+        metadata={"driver_user_id": driver_user_id},
+    )
     return {**dict(row), "source": "livre-cloud"}
 
 
@@ -357,7 +382,7 @@ def update_trip_tracking(
     trip_id: int,
     payload: dict = Body(...),
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
 ):
     """Actualiza desde el CRM la ubicación y los datos públicos del chofer."""
     def text(key: str, max_length: int = 120) -> str | None:
@@ -568,7 +593,7 @@ def _operational_schema(cur) -> dict:
 
 
 @router.get("/operational")
-def operational(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     """Returns one consistent, auditable Livre operational snapshot."""
     drivers = _operational_snapshot(cur, user.get("id"))
     schema = _operational_schema(cur)
@@ -687,7 +712,7 @@ def live_drivers(
     vehicle: str = Query(default="", max_length=120),
     vehicle_type: str = Query(default="", max_length=120),
     operability: str = Query(default="", max_length=120),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Listado de conductores desde livre_driver_accounts, sin snapshot externo."""
@@ -700,7 +725,7 @@ def live_drivers(
 
 
 @router.get("/drivers/{driver_user_id}/detail")
-def live_driver_detail(driver_user_id: str, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def live_driver_detail(driver_user_id: str, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     """Detalle del conductor según el registro propio de Livre."""
     cur.execute(
         """SELECT a.user_id, a.operational_status, a.active, u.name, u.username, u.email
@@ -713,7 +738,7 @@ def live_driver_detail(driver_user_id: str, user: dict = Depends(require_auth), 
     return {**dict(row), "source": "livre-cloud"}
 
 @router.get("/operational/driver/{driver_user_id}")
-def operational_driver(driver_user_id: str, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def operational_driver(driver_user_id: str, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     items = _operational_snapshot(cur, user.get("id"))
     return next((item for item in items if item["driverUserId"] == str(driver_user_id)), None) or (_raise_driver_not_found())
 
@@ -726,7 +751,7 @@ def _raise_driver_not_found():
 def update_operational_driver_status(
     driver_user_id: int,
     payload: DriverOperationalStatusUpdate,
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     cur.execute(
@@ -743,7 +768,7 @@ def update_operational_driver_status(
 
 
 @router.post("/sync")
-def sync_crm(user: dict = Depends(require_auth)):
+def sync_crm(user: dict = Depends(_require_crm_operator)):
     raise HTTPException(
         status_code=410,
         detail="La sincronización MAGIIS fue retirada: Livre Cloud es la fuente operativa.",
@@ -751,7 +776,7 @@ def sync_crm(user: dict = Depends(require_auth)):
 
 
 @router.get("/summary")
-def summary(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def summary(user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     cur.execute(
         """
         SELECT
@@ -778,7 +803,7 @@ def live_travels(
     date_from: str = Query(default="", max_length=10),
     date_to: str = Query(default="", max_length=10),
     vip: bool = Query(default=False),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Viajes creados en Livre y pendientes/asignados desde el CRM."""
@@ -831,7 +856,7 @@ def agency_commissions(
     owner_id: str = Query(default="", max_length=120),
     page: int = Query(default=1, ge=1, le=10000),
     size: int = Query(default=20, ge=1, le=100),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Calcula la comisión real sobre viajes Premium completados."""
@@ -853,7 +878,7 @@ def agency_commissions(
 
 
 @router.post("/agency-commissions/settle")
-def settle_agency_commissions(user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def settle_agency_commissions(user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     """Crea una liquidación idempotente por cada viaje Premium completado pendiente."""
     cur.execute("SELECT pg_advisory_xact_lock(987654321)")
     cur.execute(
@@ -877,7 +902,7 @@ def driver_shift_closures(
     driver_id: str = Query(default="", max_length=80),
     page: int = Query(default=1, ge=1, le=10000),
     size: int = Query(default=50, ge=1, le=100),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Cierres de turno registrados por los conductores en Livre Cloud."""
@@ -925,7 +950,7 @@ def conversations(
     q: str = Query(default="", max_length=120),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Conversaciones/transcripciones locales de Livre, sin fuente externa."""
@@ -950,7 +975,7 @@ def travel_history(
     state: str = Query(default="", max_length=120),
     date_from: str = Query(default="", max_length=10),
     date_to: str = Query(default="", max_length=10),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Histórico de viajes de livi_trips; no agrega reportes externos."""
@@ -963,7 +988,7 @@ def travel_history(
 @router.get("/travel-history/{travel_id}/route")
 def travel_route(
     travel_id: int,
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Returns the persisted route only for completed trips and livreuser."""
@@ -1005,7 +1030,7 @@ def live_passengers(
     page: int = Query(default=1, ge=1, le=10000),
     size: int = Query(default=20, ge=1, le=100),
     q: str = Query(default="", max_length=120),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Clientes almacenados en la base local."""
@@ -1013,7 +1038,7 @@ def live_passengers(
 
 
 @router.get("/passengers/{passenger_id}")
-def live_passenger(passenger_id: int, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def live_passenger(passenger_id: int, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     cur.execute("SELECT id, first_name, last_name, email, phone, country, raw_payload FROM livre_crm_passengers WHERE id = %s", (passenger_id,))
     row = cur.fetchone()
     if not row:
@@ -1025,7 +1050,7 @@ def live_passenger(passenger_id: int, user: dict = Depends(require_auth), cur=De
 def cancel_live_travel(
     travel_id: int,
     reason: str = Query(default="Cancelación solicitada desde Gestión de Viajes", max_length=250),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     """Cancela el registro local de Livre, sin proveedor externo."""
@@ -1045,7 +1070,7 @@ def cancel_live_travel(
 
 
 @router.get("/vehicles/live")
-def live_vehicles(page: int = Query(default=1, ge=1), size: int = Query(default=20, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def live_vehicles(page: int = Query(default=1, ge=1), size: int = Query(default=20, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     filters, params = [], []
     if q.strip():
         filters.append("(plate ILIKE %s OR brand ILIKE %s OR model ILIKE %s)")
@@ -1059,12 +1084,12 @@ def live_vehicles(page: int = Query(default=1, ge=1), size: int = Query(default=
 
 
 @router.get("/vehicles/types")
-def live_vehicle_types(user: dict = Depends(require_auth)):
+def live_vehicle_types(user: dict = Depends(_require_crm_operator)):
     return {"items": [{"id": "taxi", "name": "Taxi"}, {"id": "remis", "name": "Remis"}, {"id": "van", "name": "Van"}], "source": "livre-cloud"}
 
 
 @router.post("/vehicles", status_code=201)
-def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     card = payload.get("identificationCard") or payload
     characteristics = payload.get("characteristics") or {}
     normalized = {
@@ -1085,7 +1110,7 @@ def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(require_
 
 
 @router.post("/drivers", status_code=201)
-def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def create_live_driver(payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     first_name, last_name, email = str(payload.get("firstName", "")).strip(), str(payload.get("lastName", "")).strip(), str(payload.get("email", "")).strip().lower()
     if not first_name or not last_name or "@" not in email:
         raise HTTPException(status_code=422, detail="Nombre, apellido y email válido son obligatorios")
@@ -1099,7 +1124,7 @@ def create_live_driver(payload: dict = Body(...), user: dict = Depends(require_a
 
 
 @router.post("/clients", status_code=201)
-def create_live_client(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def create_live_client(payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     first_name = str(payload.get("firstName", "")).strip()
     last_name = str(payload.get("lastName", "")).strip()
     phone = str(payload.get("phone", "")).strip()
@@ -1114,12 +1139,12 @@ def create_live_client(payload: dict = Body(...), user: dict = Depends(require_a
 
 
 @router.get("/vehicle-owners")
-def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def live_vehicle_owners(page: int = Query(default=1, ge=1), size: int = Query(default=50, ge=1, le=100), q: str = Query(default="", max_length=120), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     return _local_page(cur, "livre_crm_vehicle_owners", page, size, q)
 
 
 @router.post("/confirm-email")
-def confirm_crm_email(payload: dict = Body(...), user: dict = Depends(require_auth)):
+def confirm_crm_email(payload: dict = Body(...), user: dict = Depends(_require_crm_operator)):
     email = str(payload.get("email", "")).strip()
     role = str(payload.get("role", "")).strip().upper()
     if "@" not in email or role not in {"DRIVER", "VEHICLEOWNER"}:
@@ -1128,7 +1153,7 @@ def confirm_crm_email(payload: dict = Body(...), user: dict = Depends(require_au
 
 
 @router.get("/vehicle-owners/{owner_id}")
-def live_vehicle_owner(owner_id: int, user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def live_vehicle_owner(owner_id: int, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     cur.execute("SELECT * FROM livre_crm_vehicle_owners WHERE id = %s", (owner_id,))
     row = cur.fetchone()
     if not row:
@@ -1137,7 +1162,7 @@ def live_vehicle_owner(owner_id: int, user: dict = Depends(require_auth), cur=De
 
 
 @router.post("/vehicle-owners", status_code=201)
-def create_live_vehicle_owner(payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def create_live_vehicle_owner(payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     first_name, last_name = str(payload.get("firstName", "")).strip(), str(payload.get("lastName", "")).strip()
     if not first_name or not last_name:
         raise HTTPException(status_code=422, detail="Nombre y apellido son obligatorios")
@@ -1148,7 +1173,7 @@ def create_live_vehicle_owner(payload: dict = Body(...), user: dict = Depends(re
 
 
 @router.put("/vehicle-owners/{owner_id}")
-def update_live_vehicle_owner(owner_id: int, payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def update_live_vehicle_owner(owner_id: int, payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     cur.execute("""UPDATE livre_crm_vehicle_owners SET first_name=%s,last_name=%s,identification=%s,email=%s,phone=%s,city=%s,province=%s,street=%s,street_number=%s,notes=%s,raw_payload=%s::jsonb,updated_at=now() WHERE id=%s RETURNING *""",
                 (payload.get("firstName", "").strip(), payload.get("lastName", "").strip(), payload.get("cuitNumberTitular") or payload.get("idNumber"), payload.get("contactEmail"), payload.get("contactPhone"), payload.get("city"), payload.get("province"), payload.get("streetName"), payload.get("streetNumber"), payload.get("notes"), json.dumps(payload), owner_id))
     row = cur.fetchone()
@@ -1158,7 +1183,7 @@ def update_live_vehicle_owner(owner_id: int, payload: dict = Body(...), user: di
 
 
 @router.put("/vehicles/{vehicle_id}")
-def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict = Depends(require_auth), cur=Depends(get_cursor_dep)):
+def update_live_vehicle(vehicle_id: int, payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     card = payload.get("identificationCard") or payload
     normalized = {"plate": card.get("plate") or card.get("domain"), "brand": card.get("brand") or card.get("mark"), "model": card.get("model"), "year": card.get("year") or card.get("yearOfVehicle"), "color": card.get("color"), "chassis": card.get("chassis"), "motor": card.get("motor"), "vehicleType": card.get("vehicleType") or card.get("vehicleTypeId") or card.get("type"), "ownerId": payload.get("ownerId") or payload.get("vehicleOwnerId"), "imageUrl": payload.get("imageUrl") or payload.get("photo")}
     if any(not str(normalized.get(key) or "").strip() for key in ("plate", "brand", "model", "year", "color", "vehicleType")):
@@ -1179,7 +1204,7 @@ def resource(
     offset: int = Query(default=0, ge=0),
     state: str = Query(default="", max_length=120),
     travel_date: str = Query(default="", max_length=10),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
     if resource == "drivers":

@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import require_auth, require_driver
+from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
 from app.mobility.schemas import (
@@ -163,20 +164,26 @@ def update_trip_status(
     user: dict = Depends(require_driver),
 ):
     """Actualiza el estado desde el circuito autenticado de conductor/operación."""
-    _trip_or_404(cur, trip_id)
+    trip = _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
         """
         UPDATE livi_trips
         SET status = %s, updated_at = NOW()
-        WHERE id = %s
+        WHERE id = %s AND assigned_driver_user_id = %s
         RETURNING id, origen, destino, status, tracking_driver_name, tracking_plate,
                   tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
                                  tracking_longitude, tracking_location_updated_at, fare, original_fare,
                                  discount_percentage, discount_amount, final_fare, fare_source
         """,
-        (payload.status, trip_id),
+        (payload.status, trip_id, user["id"]),
     )
-    return _public_trip(cur.fetchone())
+    updated = cur.fetchone()
+    record_trip_event(
+        cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
+        event_type="status_changed", previous_status=trip["status"],
+        new_status=payload.status,
+    )
+    return _public_trip(updated)
 
 
 @router.post("/trips/{trip_id}/location", response_model=PublicTrip)
@@ -898,6 +905,10 @@ def driver_reject_trip(
     )
     if not cur.fetchone():
         raise HTTPException(status_code=409, detail="El viaje ya cambió de estado")
+    record_trip_event(
+        cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
+        event_type="trip_rejected", previous_status="assigned", new_status="searching",
+    )
     cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
     rejected_trip = cur.fetchone()
     return _driver_trip(rejected_trip)
@@ -911,11 +922,17 @@ def driver_update_status(
     user: dict = Depends(require_driver),
 ):
     """Claims an assigned trip for the first conductor who takes it."""
+    previous_status = None
     try:
         trip = _driver_trip_or_404(cur, trip_id, user)
     except HTTPException:
         if payload.status != "arriving":
             raise
+        cur.execute("SELECT status FROM livi_trips WHERE id = %s FOR UPDATE", (trip_id,))
+        claim = cur.fetchone()
+        if not claim or claim["status"] not in {"searching", "assigned"}:
+            raise HTTPException(status_code=409, detail="El viaje ya fue tomado por otro conductor")
+        previous_status = claim["status"]
         cur.execute(
             """
             UPDATE livi_trips t
@@ -939,7 +956,8 @@ def driver_update_status(
         if not cur.fetchone():
             raise HTTPException(status_code=409, detail="El viaje ya fue tomado por otro conductor")
         trip = _driver_trip_or_404(cur, trip_id, user)
-    previous_status = trip["status"]
+    if previous_status is None:
+        previous_status = trip["status"]
     if payload.status == "conflict" and not payload.reason:
         raise HTTPException(status_code=422, detail="Indicá el motivo del conflicto")
     if previous_status != "assigned" or payload.status != "arriving":
@@ -959,6 +977,11 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
+    record_trip_event(
+        cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
+        event_type="status_changed", previous_status=previous_status,
+        new_status=payload.status,
+    )
     if payload.status in ("cancelled", "conflict", "lost"):
         # Un viaje que no termina correctamente no deja historial GPS persistido.
         cur.execute(

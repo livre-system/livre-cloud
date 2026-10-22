@@ -138,7 +138,7 @@ def test_crm_assignment_is_atomic_and_requires_available_driver():
     query, params = cur.calls[0]
     assert "t.assigned_driver_user_id IS NULL" in query
     assert "a.operational_status = 'available'" in query
-    assert params == (12, 77, 12)
+    assert params == (77, 12, 12)
 
 
 def test_driver_trip_serializes_commercial_fare_fields():
