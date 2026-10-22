@@ -590,3 +590,11 @@ Pendientes explícitos:
 - Los cambios de layout y conversaciones se validaron localmente con `node --check js/app.js`, `node --test tests/*.test.js` y `git diff --check`; no se crearon viajes ni se alteraron datos productivos.
 - Railway muestra el servicio `livre-chatbot` con deploy `SUCCESS`, pero la verificación HTTPS posterior todavía devolvió el bundle anterior (`Col1` y sin `hideTravelHistory`). Esto significa que el deploy activo no contiene aún `edc165d`, aunque GitHub `main` sí está actualizado. No informar que el Histórico está corregido en producción hasta que el asset HTTPS contenga `['id', 'ID viaje']` y `function hideTravelHistory()`.
 - `livre-chatbot` conserva cambios locales no versionados en `.env.local` y `.gitignore`; no incluirlos en commits ni exponer valores.
+
+## Estado de Railway y cuenta administrativa (2026-10-22)
+
+- Railway permanece temporalmente suspendido; no asumir que el servicio está disponible ni reintentar cambios mientras dure la suspensión.
+- La cuenta administrativa `smoreno` todavía no fue creada porque el entorno no tenía autenticación activa de Railway.
+- La contraseña propuesta para esa cuenta fue `s4m0r3`; no guardar contraseñas reales en este archivo ni en commits.
+- Cuando Railway vuelva a estar disponible, autenticar con `railway login`, crear/verificar la cuenta directamente en la base y confirmar usuario/rol sin tocar webhooks ni otros usuarios.
+- Hasta entonces, no declarar creada la cuenta ni hacer pruebas productivas que requieran ese servicio.
