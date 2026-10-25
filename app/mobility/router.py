@@ -13,7 +13,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 
 from app.core.database import get_cursor_dep
-from app.core.jwt import require_auth, require_driver
+from app.core.jwt import optional_auth, require_auth, require_driver
 from app.core.rate_limit import client_key, gps_limiter, trip_action_limiter
 from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_geometry
@@ -102,9 +102,11 @@ def _public_trip(trip) -> PublicTrip:
 
 
 @router.post("/requests", response_model=TripRequestResponse, status_code=201)
-def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_dep)):
-    """Creates and internally assigns a passenger request to Livre's driver pool."""
+def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_dep), user: dict | None = Depends(optional_auth)):
+    """Creates a passenger request; guests remain supported during migration."""
     trip_action_limiter.check(client_key(request, "trip-request"))
+    if user and "driver" in (user.get("roles") or []):
+        raise HTTPException(status_code=403, detail="Una cuenta de conductor no puede pedir viajes")
     origin = payload.origin.strip()
     destination = payload.destination.strip()
     if origin.casefold() == destination.casefold():
@@ -116,21 +118,23 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     conversation_id = f"web_{uuid.uuid4()}"
+    passenger_identity = f"user:{user['id']}" if user else payload.whatsapp_user.strip()
     cur.execute(
         """
         INSERT INTO livi_trips
-            (conversation_id, origen, destino, whatsapp_user, tracking_token,
+            (conversation_id, user_id, origen, destino, whatsapp_user, tracking_token,
              assigned_driver_user_id, tracking_driver_name, service_type_id,
              fare, original_fare, discount_percentage, discount_amount, final_fare, fare_source,
              activity_type, source, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
         (
             conversation_id,
+            user["id"] if user else None,
             origin,
             destination,
-            payload.whatsapp_user.strip(),
+            passenger_identity,
             tracking_token,
             payload.service_type_id,
             financials["original_fare"],

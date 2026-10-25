@@ -42,6 +42,13 @@ def require_auth(authorization: Optional[str] = Header(default=None)) -> dict:
     }
 
 
+def optional_auth(authorization: Optional[str] = Header(default=None)) -> dict | None:
+    """Read an optional passenger session without making guest flows fail."""
+    if not authorization:
+        return None
+    return require_auth(authorization)
+
+
 def require_driver(user: dict = Depends(require_auth)) -> dict:
     """Require an authenticated token carrying the driver role."""
     if "driver" not in (user.get("roles") or []):
