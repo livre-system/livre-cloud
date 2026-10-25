@@ -36,6 +36,10 @@ from app.mobility.schemas import (
 )
 from app.voice.elevenlabs_trip import send_tracking_message
 
+
+PUBLIC_TRACKING_TOKEN_TTL_HOURS = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN_TTL_HOURS", "24")))
+
+
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 
 
@@ -225,14 +229,15 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Vista pública mínima para el pasajero; solo acepta el token privado del viaje."""
     cur.execute(
         """
-        SELECT id, origen, destino, status, tracking_driver_name, tracking_plate,
+        SELECT id, origen, destino, status, created_at, tracking_driver_name, tracking_plate,
                tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
                               tracking_longitude, tracking_location_updated_at, fare, original_fare,
                               discount_percentage, discount_amount, final_fare, fare_source
         FROM livi_trips
         WHERE tracking_token = %s
+          AND created_at > NOW() - (%s * INTERVAL '1 hour')
         """,
-        (tracking_token,),
+        (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
     )
     trip = cur.fetchone()
     if not trip:
@@ -243,7 +248,12 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
 @router.get("/tracking/{tracking_token}/messages")
 def public_trip_messages(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Mensajería del pasajero, aislada del canal interno de base."""
-    cur.execute("SELECT id FROM livi_trips WHERE tracking_token = %s", (tracking_token,))
+    cur.execute(
+        """SELECT id FROM livi_trips
+           WHERE tracking_token = %s
+             AND created_at > NOW() - (%s * INTERVAL '1 hour')""",
+        (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
+    )
     trip = cur.fetchone()
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
@@ -263,7 +273,12 @@ def public_send_trip_message(
     payload: TripMessageCreate,
     cur=Depends(get_cursor_dep),
 ):
-    cur.execute("SELECT id FROM livi_trips WHERE tracking_token = %s", (tracking_token,))
+    cur.execute(
+        """SELECT id FROM livi_trips
+           WHERE tracking_token = %s
+             AND created_at > NOW() - (%s * INTERVAL '1 hour')""",
+        (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
+    )
     trip = cur.fetchone()
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
