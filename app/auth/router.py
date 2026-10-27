@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.core.database import get_cursor
 from app.core.jwt import create_token, require_auth
 from app.core.rate_limit import client_key, driver_login_limiter, login_limiter
+from app.core.config import FIREBASE_PROJECT_ID
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,6 +33,10 @@ class PassengerRegisterBody(BaseModel):
 class PassengerLoginBody(BaseModel):
     email: str
     password: str
+
+
+class FirebasePassengerBody(BaseModel):
+    id_token: str
 
 
 class DriverRegisterBody(RegisterBody):
@@ -144,6 +149,54 @@ def login_passenger(body: PassengerLoginBody, request: Request):
         user = cur.fetchone()
         if not user or not _verify_password(body.password, user["password_hash"]):
             raise HTTPException(status_code=401, detail="Credenciales de pasajero inválidas")
+        roles = _roles_for_user(cur, user["id"])
+
+    token = create_token(id=user["id"], name=user["name"], email=user["email"] or user["username"], roles=roles)
+    return {"token": token, "user": {"id": user["id"], "email": user["email"] or user["username"], "name": user["name"], "roles": roles}}
+
+
+@router.post("/passenger/firebase")
+def login_passenger_firebase(body: FirebasePassengerBody, request: Request):
+    """Intercambia un Firebase ID token por la sesión JWT de Livre."""
+    login_limiter.check(client_key(request, "passenger-firebase-login"))
+    try:
+        import requests
+        from google.oauth2 import id_token as google_id_token
+
+        claims = google_id_token.verify_firebase_token(
+            body.id_token,
+            requests.Request(),
+            audience=FIREBASE_PROJECT_ID,
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Sesión Firebase inválida")
+
+    email = (claims.get("email") or "").strip().casefold()
+    name = (claims.get("name") or email.split("@", 1)[0] or "Pasajero").strip()
+    if not email:
+        raise HTTPException(status_code=401, detail="Firebase no informó un email de pasajero")
+
+    with get_cursor() as cur:
+        cur.execute(
+            """SELECT u.id, u.name, u.email, u.username, u.password_hash
+               FROM livre_users u
+               WHERE (u.email = %s OR u.username = %s)
+                 AND NOT EXISTS (
+                     SELECT 1 FROM livre_driver_accounts a
+                     WHERE a.user_id = u.id AND a.active = TRUE
+                 )""",
+            [email, email],
+        )
+        user = cur.fetchone()
+        if not user:
+            user_id = str(uuid.uuid4())
+            cur.execute(
+                """INSERT INTO livre_users (id, username, email, name, password_hash)
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id, name, email, username""",
+                [user_id, email, email, name, _hash_password(uuid.uuid4().hex)],
+            )
+            user = cur.fetchone()
         roles = _roles_for_user(cur, user["id"])
 
     token = create_token(id=user["id"], name=user["name"], email=user["email"] or user["username"], roles=roles)
