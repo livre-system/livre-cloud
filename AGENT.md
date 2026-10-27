@@ -594,8 +594,9 @@ Pendientes explícitos:
 ## Estado de Railway y cuenta administrativa (2026-10-22)
 
 - Railway permanece temporalmente suspendido; no asumir que el servicio está disponible ni reintentar cambios mientras dure la suspensión.
-- La cuenta administrativa `smoreno` todavía no fue creada porque el entorno no tenía autenticación activa de Railway.
-- Cuando Railway vuelva a estar disponible, autenticar con `railway login`, crear/verificar la cuenta directamente en la base y confirmar usuario/rol sin tocar webhooks ni otros usuarios.
+- La cuenta administrativa `smoreno` fue creada en producción con roles `admin`, `crm` y `crm_admin`; sus credenciales no se documentan en este archivo.
+- La segunda cuenta administrativa queda pendiente de definir y crear con credenciales propias.
+- La cuenta `smoreno` fue verificada con login real y acceso a las rutas protegidas del CRM; no se modificaron viajes ni datos operativos.
 
 ## Corrección de viajes aceptados no visibles en el CRM (2026-10-27)
 
@@ -607,4 +608,4 @@ Pendientes explícitos:
 - Despliegues verificados online en Railway: `livre-cloud` `40b69c15-7c9e-4d99-b517-33097515db69` y `livre-chatbot` `cbab3fc1-100c-4c62-8751-32f09feba684`. `GET /openapi.json` respondió HTTP 200 y publicó `/crm/travels/live`; el asset JS público contiene `arriving` e `in_progress`.
 - Validaciones: `PYTHONPATH=. .venv/bin/pytest -q tests/test_operational_status.py` → `18 passed`; `node --check js/app.js` y `node --test tests/*.test.js` del CRM → `19 passed`; `git diff --check` OK. No se crearon viajes ni se modificaron datos productivos durante la validación.
 - El repositorio `livre-chatbot` conserva `.env.local` y `.gitignore` como cambios locales/no versionados; no incluirlos ni exponer su contenido.
-- Hasta entonces, no declarar creada la cuenta ni hacer pruebas productivas que requieran ese servicio.
+- La creación de una segunda cuenta administrativa queda pendiente de definir y autorizar.
