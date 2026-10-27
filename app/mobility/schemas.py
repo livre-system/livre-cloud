@@ -40,6 +40,11 @@ class DriverOperationalStatusResponse(BaseModel):
     status: DriverOperationalStatus
 
 
+class TripQuoteRequest(BaseModel):
+    origin: str = Field(min_length=3, max_length=240)
+    destination: str = Field(min_length=3, max_length=240)
+
+
 class TripRequest(BaseModel):
     origin: str = Field(min_length=3, max_length=240)
     destination: str = Field(min_length=3, max_length=240)

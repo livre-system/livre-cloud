@@ -16,8 +16,8 @@ from app.core.database import get_cursor_dep
 from app.core.jwt import optional_auth, require_auth, require_driver
 from app.core.rate_limit import client_key, gps_limiter, trip_action_limiter
 from app.core.operational_events import record_trip_event
-from app.integrations.google_maps import GeocodingError, geocode_address, route_geometry
-from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare
+from app.integrations.google_maps import GeocodingError, geocode_address, route_distance_km, route_geometry
+from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare, historical_options
 from app.mobility.schemas import (
     DriverTrip,
     DriverHistoryResponse,
@@ -32,6 +32,7 @@ from app.mobility.schemas import (
     StatusUpdate,
     TripMessageCreate,
     TripRequest,
+    TripQuoteRequest,
     TripRequestResponse,
 )
 from app.voice.elevenlabs_trip import send_tracking_message
@@ -99,6 +100,35 @@ def _public_trip(trip) -> PublicTrip:
         final_fare=float(trip["final_fare"]) if trip.get("final_fare") is not None else None,
         fare_source=trip.get("fare_source"),
     )
+
+
+@router.post("/quote")
+def quote_trip(payload: TripQuoteRequest, request: Request):
+    """Calcula el importe con la tarifa vigente sin crear un viaje."""
+    trip_action_limiter.check(client_key(request, "trip-quote"))
+    origin_text = payload.origin.strip()
+    destination_text = payload.destination.strip()
+    local_terms = ("bahía blanca", "bahia blanca", "ingeniero white", "white", "cerri", "general daniel cerro")
+    if not any(term in origin_text.casefold() for term in local_terms) or not any(term in destination_text.casefold() for term in local_terms):
+        raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
+    try:
+        origin = geocode_address(origin_text)
+        destination = geocode_address(destination_text)
+        distance_km = route_distance_km(origin, destination)
+        options = historical_options(Decimal(str(distance_km)))
+        option = next((item for item in options if str(item.get("transportTypeId")) == "2"), options[0])
+    except GeocodingError as exc:
+        raise HTTPException(status_code=422, detail="No pudimos ubicar esas direcciones") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="La tarifa no está disponible en este momento") from exc
+    return {
+        "fare": float(option["pricePointToPoint"]),
+        "currency": "ARS",
+        "service_type_id": int(option["transportTypeId"]),
+        "distance_km": option["routeDistance"],
+        "origin": origin.get("formatted_address") or origin_text,
+        "destination": destination.get("formatted_address") or destination_text,
+    }
 
 
 @router.post("/requests", response_model=TripRequestResponse, status_code=201)
