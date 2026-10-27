@@ -83,10 +83,20 @@ def _require_crm_admin(
 
 
 def _require_livreuser(cur, user: dict) -> None:
-    """The first CRM administrator is the only route-history viewer for now."""
-    cur.execute("SELECT username FROM livre_users WHERE id = %s", (user.get("id"),))
+    """Permite recorridos al administrador legado y a admins CRM vigentes."""
+    cur.execute(
+        """SELECT u.username,
+                  COALESCE(array_agg(r.role) FILTER (WHERE r.role IS NOT NULL), ARRAY[]::TEXT[]) AS roles
+             FROM livre_users u
+             LEFT JOIN livre_user_roles r ON r.user_id = u.id
+            WHERE u.id = %s
+            GROUP BY u.id, u.username""",
+        (user.get("id"),),
+    )
     row = cur.fetchone()
-    if not row or row["username"] != "livreuser":
+    if not row:
+        raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
+    if row["username"] != "livreuser" and not set(row["roles"] or []).intersection({"crm_admin", "admin"}):
         raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
 
 

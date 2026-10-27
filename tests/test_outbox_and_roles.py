@@ -32,6 +32,8 @@ def test_crm_authorization_reads_current_roles_from_database():
     assert "FROM livre_users u" in source
     assert "LEFT JOIN livre_user_roles" in source
     assert "el JWT solo aporta la identidad" in source
+    assert "No tenés permiso para ver recorridos" in source
+    assert "{\"crm_admin\", \"admin\"}" in source
 
 
 def test_runtime_defaults_are_safe_and_readiness_is_separate():
