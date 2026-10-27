@@ -595,6 +595,16 @@ Pendientes explícitos:
 
 - Railway permanece temporalmente suspendido; no asumir que el servicio está disponible ni reintentar cambios mientras dure la suspensión.
 - La cuenta administrativa `smoreno` todavía no fue creada porque el entorno no tenía autenticación activa de Railway.
-- La contraseña propuesta para esa cuenta fue `s4m0r3`; no guardar contraseñas reales en este archivo ni en commits.
 - Cuando Railway vuelva a estar disponible, autenticar con `railway login`, crear/verificar la cuenta directamente en la base y confirmar usuario/rol sin tocar webhooks ni otros usuarios.
+
+## Corrección de viajes aceptados no visibles en el CRM (2026-10-27)
+
+- El CRM no mostraba en Gestión de viajes/“En curso” los viajes aceptados por un conductor porque filtraba únicamente `confirmed`, mientras el flujo vigente usa `assigned` → `arriving` → `in_progress`.
+- `livre-cloud/app/crm/router.py` ahora incluye `confirmed`, `assigned`, `arriving` e `in_progress` en los estados operativos con conductor. `assigned` sólo aparece en “Asignar” cuando `assigned_driver_user_id IS NULL`; una aceptación no vuelve a la cola abierta.
+- `livre-chatbot/js/app.js` traduce los estados operativos a las vistas del CRM: `assigned` → `WITH_DRIVER_ASSIGNED`, `arriving` → `GOING_TO_CLIENT`, `in_progress` → `GOING_TO_DESTINATION` y `completed`/`done` → `DONE`.
+- Se agregó una regresión en `livre-cloud/tests/test_operational_status.py` para garantizar que un viaje `in_progress` asignado aparezca en la pestaña de viajes en curso sin exigir parámetros de estado incorrectos.
+- Commits publicados: `livre-cloud` `171be02` (`fix(crm): show accepted trips in progress`) y `livre-chatbot` `0bcc5f6` (`fix(crm): label live trip states`). Ambos fueron enviados a `origin/main`.
+- Despliegues verificados online en Railway: `livre-cloud` `40b69c15-7c9e-4d99-b517-33097515db69` y `livre-chatbot` `cbab3fc1-100c-4c62-8751-32f09feba684`. `GET /openapi.json` respondió HTTP 200 y publicó `/crm/travels/live`; el asset JS público contiene `arriving` e `in_progress`.
+- Validaciones: `PYTHONPATH=. .venv/bin/pytest -q tests/test_operational_status.py` → `18 passed`; `node --check js/app.js` y `node --test tests/*.test.js` del CRM → `19 passed`; `git diff --check` OK. No se crearon viajes ni se modificaron datos productivos durante la validación.
+- El repositorio `livre-chatbot` conserva `.env.local` y `.gitignore` como cambios locales/no versionados; no incluirlos ni exponer su contenido.
 - Hasta entonces, no declarar creada la cuenta ni hacer pruebas productivas que requieran ese servicio.
