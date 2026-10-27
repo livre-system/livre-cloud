@@ -353,29 +353,33 @@ def _local_trip_page(
         params.extend([term, term, term])
     if state.strip():
         requested = {value.strip() for value in state.split("-") if value.strip()}
-        local_states = set()
+        state_clauses = []
+        state_params = []
         if requested & {"SEARCHING_DRIVER"}:
-            # Los pedidos nuevos y los liberados por un rechazo individual
-            # viven en searching; pending queda por compatibilidad histórica.
-            # Algunos pedidos históricos del canal ElevenLabs/WhatsApp se
-            # crean como assigned mientras siguen sin chofer asignado.
-            local_states.update({"assigned", "searching", "pending"})
+            # `assigned` sólo pertenece a Asignar cuando todavía no tiene
+            # conductor; una aceptación lo convierte en viaje operativo.
+            state_clauses.append("(status IN ('searching', 'pending') OR (status = 'assigned' AND assigned_driver_user_id IS NULL))")
         if requested & {"SCHEDULED"}:
-            local_states.add("scheduled")
+            state_clauses.append("status = %s")
+            state_params.append("scheduled")
         if requested & {"WITH_DRIVER_ASSIGNED", "RESERVED", "GOING_TO_CLIENT", "GOING_TO_DESTINATION", "CLOSING_TRAVEL"}:
-            local_states.add("confirmed")
+            # El conductor usa assigned -> arriving -> in_progress.
+            # `confirmed` queda por compatibilidad con viajes históricos.
+            state_clauses.append("status IN ('confirmed', 'assigned', 'arriving', 'in_progress')")
         if requested & {"IN_CONFLICT"}:
-            local_states.add("conflict")
-        if requested & {"CANCELED", "CANCELLED"}:
-            local_states.add("cancelled")
+            state_clauses.append("status = %s")
+            state_params.append("conflict")
         if requested & {"LOST"}:
-            local_states.add("lost")
+            state_clauses.append("status = %s")
+            state_params.append("lost")
+        if requested & {"CANCELED", "CANCELLED"}:
+            state_clauses.append("status = %s")
+            state_params.append("cancelled")
         if requested & {"DONE"}:
-            local_states.add("done")
-        if local_states:
-            placeholders = ", ".join(["%s"] * len(local_states))
-            filters.append(f"(status IN ({placeholders}) AND (status <> 'assigned' OR assigned_driver_user_id IS NULL))")
-            params.extend(sorted(local_states))
+            state_clauses.append("status IN ('done', 'completed')")
+        if state_clauses:
+            filters.append("(" + " OR ".join(state_clauses) + ")")
+            params.extend(state_params)
     # The panel sends the operator's local calendar date.  Convert the
     # timestamptz before comparing so late-night requests in Argentina are
     # not pushed into the next UTC date and hidden from "Asignar".

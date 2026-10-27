@@ -99,6 +99,24 @@ def driver_row(user_id, status, trip_status=None):
     }
 
 
+def test_live_travels_includes_driver_accepted_states_in_progress_tab():
+    cur = FakeCursor([
+        [{"status": "in_progress", "unassigned": False, "total": 1}],
+        {"total": 1},
+        [{"id": 99, "status": "in_progress", "assigned_driver_user_id": "driver-a"}],
+        [],
+        [],
+    ])
+
+    result = _local_trip_page(cur, 1, 20, state="CLOSING_TRAVEL-GOING_TO_CLIENT-GOING_TO_DESTINATION")
+
+    assert result["total"] == 1
+    query, params = cur.calls[1]
+    assert "status IN ('confirmed', 'assigned', 'arriving', 'in_progress')" in query
+    assert "assigned_driver_user_id IS NULL" not in query
+    assert params == []
+
+
 def test_driver_trips_returns_available_open_trips_and_own_assignments():
     cur = FakeCursor([[]])
 
