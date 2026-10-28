@@ -9,6 +9,7 @@ from app.crm.router import (
 )
 from fastapi import HTTPException
 from pydantic import ValidationError
+from datetime import datetime, timedelta, timezone
 
 from app.mobility.schemas import DriverOperationalStatusUpdate
 from app.mobility.router import _driver_trip, driver_trips
@@ -246,6 +247,19 @@ def test_snapshot_preserves_the_three_canonical_statuses():
     assert [item["operationalStatus"] for item in snapshot] == ["available", "unavailable", "out_of_service"]
     assert [item["operationalLabel"] for item in snapshot] == ["Disponible", "No disponible", "Fuera de servicio"]
     assert all(item["source"] == "livre_driver_accounts+driver_vehicle_association+livi_trips" for item in snapshot)
+
+
+def test_snapshot_hides_positions_older_than_24_hours():
+    old = driver_row("old", "available")
+    old["location_updated_at"] = datetime.now(timezone.utc) - timedelta(hours=24, seconds=1)
+    recent = driver_row("recent", "available")
+    recent["location_updated_at"] = datetime.now(timezone.utc) - timedelta(hours=23)
+    cur = FakeCursor([[old, recent]])
+
+    snapshot = _operational_snapshot(cur)
+
+    assert snapshot[0]["lastPlace"] is None
+    assert snapshot[1]["lastPlace"] == {"latitude": -38.7, "longitude": -62.2}
 
 
 def test_snapshot_uses_the_persistent_driver_vehicle_association():
