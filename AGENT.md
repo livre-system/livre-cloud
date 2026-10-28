@@ -192,6 +192,8 @@ Las direcciones deben conservar el texto confirmado por el usuario. Las geolocal
 
 - PostgreSQL/Railway es la fuente de verdad de la operación actual.
 - Persistir viajes, estados, asignaciones, conductor, vehículo, ubicación, eventos y timestamps en el modelo propio.
+- La última coordenada del conductor puede persistir en PostgreSQL, pero el snapshot de Operaciones/CRM sólo debe devolverla como `lastPlace` durante las 24 horas posteriores a `location_updated_at`. Después debe devolver `lastPlace: null`; nunca mostrar una ubicación de días anteriores como actual.
+- La actividad en línea y la vigencia de la coordenada son criterios distintos: una sesión puede vencer antes, pero una coordenada reciente todavía puede mostrarse dentro de la ventana de 24 horas.
 - La memoria y los embeddings sirven para contexto o texto libre; no son la fuente de verdad de viajes ni estados.
 - No borrar ni recrear tablas, viajes, embeddings, memorias o históricos sin una decisión explícita y un plan reversible.
 - No reparar datos históricos inventando relaciones entre identidades.
