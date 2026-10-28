@@ -27,7 +27,7 @@ class SlidingWindowLimiter:
                 self._events[key] = bucket
             else:
                 while bucket and bucket[0] <= cutoff:
-                    bucket.pop(0)
+                    bucket.popleft()
                 self._events.move_to_end(key)
             if len(bucket) >= self.limit:
                 retry_after = max(1, int(bucket[0] + self.window_seconds - now))
