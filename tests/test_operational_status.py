@@ -87,7 +87,7 @@ def driver_row(user_id, status, trip_status=None):
         "username": f"driver-{user_id}",
         "latitude": -38.7,
         "longitude": -62.2,
-        "location_updated_at": None,
+        "location_updated_at": datetime.now(timezone.utc),
         "associated_vehicle_plate": None,
         "associated_vehicle_model": None,
         "associated_vehicle_color": None,
