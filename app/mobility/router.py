@@ -3,6 +3,7 @@
 Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente.
 """
 
+import logging
 import os
 import secrets
 import uuid
@@ -42,11 +43,17 @@ PUBLIC_TRACKING_TOKEN_TTL_HOURS = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN
 
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
+log = logging.getLogger(__name__)
 
 
 def _require_current_driver_device(cur, user: dict, device_id: str | None) -> None:
     """Require a valid JWT device bound to its own active driver session."""
     if not device_id or device_id != user.get("device_id"):
+        log.warning(
+            "driver_location_rejected event=device_mismatch driver_user_id=%s device_id=%s",
+            user.get("id"),
+            device_id or "missing",
+        )
         raise HTTPException(status_code=401, detail="Sesión de dispositivo inválida")
     cur.execute(
         """SELECT s.user_id, s.device_id
@@ -59,6 +66,11 @@ def _require_current_driver_device(cur, user: dict, device_id: str | None) -> No
         (user["id"], device_id),
     )
     if not cur.fetchone():
+        log.warning(
+            "driver_location_rejected event=session_invalid driver_user_id=%s device_id=%s",
+            user.get("id"),
+            device_id,
+        )
         raise HTTPException(status_code=401, detail="Sesión de dispositivo revocada")
 
 
@@ -1115,7 +1127,18 @@ def driver_update_live_location(
     )
     row = cur.fetchone()
     if not row:
+        log.warning(
+            "driver_location_rejected event=inactive_driver driver_user_id=%s device_id=%s",
+            user.get("id"),
+            payload.device_id,
+        )
         raise HTTPException(status_code=403, detail="La cuenta de conductor no está activa")
+    log.info(
+        "driver_location_received event=heartbeat driver_user_id=%s device_id=%s recorded_at=%s",
+        user.get("id"),
+        payload.device_id,
+        row["location_updated_at"],
+    )
     return {"status": "updated", "location_updated_at": row["location_updated_at"]}
 
 
