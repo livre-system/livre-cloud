@@ -641,11 +641,10 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
             last_seen = last_seen.replace(tzinfo=timezone.utc)
         session_active = bool(last_seen and last_seen >= datetime.now(timezone.utc) - timedelta(minutes=15))
         location_is_recent = bool(last_seen and last_seen >= location_cutoff)
-        effective_state = "EN VIAJE" if busy else operational_label
         # El estado operativo es manual; la sesión GPS es una señal aparte.
-        # Una cuenta disponible sin heartbeat no se convierte en "No disponible".
-        if effective_state == "Disponible" and not session_active:
-            effective_state = "Sin sesión"
+        # Una cuenta disponible sin heartbeat permanece en TODOS, pero no cuenta
+        # como disponible hasta que vuelva a enviar ubicación.
+        effective_state = "EN VIAJE" if busy else operational_label
         items.append({
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
@@ -803,7 +802,7 @@ def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cur
     activity_row = cur.fetchone()
     metric = lambda name: None if activity_row[name] is None else int(activity_row[name])
     in_travel = sum(item["operationalState"] == "EN VIAJE" for item in drivers)
-    available = sum(item["operationalState"] == "Disponible" for item in drivers)
+    available = sum(item["operationalState"] == "Disponible" and item["sessionActive"] for item in drivers)
     unavailable = sum(item["operationalState"] == "No disponible" for item in drivers)
     out_of_service = sum(item["operationalState"] == "Fuera de servicio" for item in drivers)
     known_vehicles = {item["vehicle"]["plate"] for item in drivers if item["vehicle"].get("plate")}
