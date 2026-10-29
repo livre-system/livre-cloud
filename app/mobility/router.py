@@ -347,6 +347,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
+          AND t.status IN ('assigned', 'arriving', 'in_progress')
         """,
         (trip_id, user["id"]),
     )
@@ -719,6 +720,7 @@ def driver_trip_route(
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
+          AND t.status IN ('assigned', 'arriving', 'in_progress')
         """,
         (trip_id, user["id"]),
     )
@@ -1028,6 +1030,15 @@ def driver_update_status(
         trip = _driver_trip_or_404(cur, trip_id, user)
     if previous_status is None:
         previous_status = trip["status"]
+    allowed_transitions = {
+        "assigned": {"arriving", "cancelled", "conflict"},
+        "arriving": {"in_progress", "cancelled", "conflict"},
+        "in_progress": {"completed", "cancelled", "conflict"},
+    }
+    if previous_status in {"scheduled", "searching"} and payload.status in {"assigned", "arriving"}:
+        pass
+    elif payload.status not in allowed_transitions.get(previous_status, set()):
+        raise HTTPException(status_code=409, detail="El viaje ya no permite esa transición")
     if payload.status == "conflict" and not payload.reason:
         raise HTTPException(status_code=422, detail="Indicá el motivo del conflicto")
     if previous_status != "assigned" or payload.status != "arriving":

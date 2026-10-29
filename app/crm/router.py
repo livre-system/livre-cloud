@@ -1250,10 +1250,13 @@ def cancel_live_travel(
 ):
     """Cancela el registro local de Livre, sin proveedor externo."""
     cur.execute(
-        """UPDATE livi_trips SET status = 'cancelled', updated_at = NOW()
+        """UPDATE livi_trips
+            SET status = 'cancelled',
+                assigned_driver_user_id = NULL,
+                tracking_driver_name = NULL,
+                updated_at = NOW()
             WHERE id = %s AND status NOT IN ('completed', 'cancelled')
-            RETURNING id""", (travel_id,)
-    )
+            RETURNING id""", (travel_id,))
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Viaje no encontrado o ya finalizado")
