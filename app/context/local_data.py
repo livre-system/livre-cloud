@@ -205,6 +205,100 @@ def get_local_data_context(query: str) -> str:
                         ]))
                     return "\n".join(parts)
 
+            if "livi_whatsapp_quotes" in available and re.search(r"\b(cotizacion|cotizaciones|presupuesto|presupuestos)\b", normalized):
+                condition, params = _condition(
+                    ("quote_id", "conversation_id", "whatsapp_user", "source", "origen", "destino"),
+                    terms,
+                )
+                cur.execute(f"""SELECT quote_id, conversation_id, whatsapp_user, source, origen, destino,
+                    options, expires_at, consumed_at, created_at
+                    FROM livi_whatsapp_quotes
+                    WHERE {condition}
+                    ORDER BY created_at DESC NULLS LAST LIMIT %s""", [*params, 50])
+                rows = cur.fetchall()
+                cur.execute(f"SELECT COUNT(*) AS total FROM livi_whatsapp_quotes WHERE {condition}", params)
+                total = cur.fetchone()["total"]
+                parts.append(f"Cotizaciones encontradas={total}; mostrando hasta 50 registros.")
+                for row in rows:
+                    parts.append("Cotización: " + "; ".join(
+                        f"{column}={_fmt(row[column])}" for column in (
+                            "quote_id", "whatsapp_user", "source", "origen", "destino",
+                            "options", "expires_at", "consumed_at", "created_at",
+                        )
+                    ))
+                return "\n".join(parts)
+
+            if "livre_driver_vehicles" in available and re.search(r"\b(vehiculo|vehiculos|auto|autos)\b", normalized) and re.search(r"\b(conductor|conductores|chofer|choferes)\b", normalized):
+                condition, params = _condition(
+                    ("driver_user_id", "vehicle_magiis_id::text", "vehicle_label", "vehicle_id", "plate", "vehicle_model", "owner_name"),
+                    terms,
+                )
+                cur.execute(f"""SELECT driver_user_id, vehicle_magiis_id, vehicle_label, vehicle_id,
+                    plate, vehicle_model, owner_name, is_primary, created_at, updated_at
+                    FROM livre_driver_vehicles
+                    WHERE {condition}
+                    ORDER BY is_primary DESC NULLS LAST, updated_at DESC NULLS LAST LIMIT %s""", [*params, 50])
+                rows = cur.fetchall()
+                cur.execute(f"SELECT COUNT(*) AS total FROM livre_driver_vehicles WHERE {condition}", params)
+                total = cur.fetchone()["total"]
+                parts.append(f"Vehículos de conductores encontrados={total}; mostrando hasta 50 registros.")
+                for row in rows:
+                    parts.append("Vehículo de conductor: " + "; ".join(
+                        f"{column}={_fmt(row[column])}" for column in (
+                            "driver_user_id", "vehicle_magiis_id", "vehicle_label", "vehicle_id",
+                            "plate", "vehicle_model", "owner_name", "is_primary", "created_at", "updated_at",
+                        )
+                    ))
+                return "\n".join(parts)
+
+            if "livre_driver_shift_closures" in available and re.search(r"\b(cierre|cierres|turno|turnos|recaudo|recaudacion|ingreso|ingresos)\b", normalized):
+                condition, params = _condition(
+                    ("driver_user_id", "vehicle_label", "vehicle_model", "plate", "owner_name"),
+                    terms,
+                )
+                cur.execute(f"""SELECT id, driver_user_id, closure_date, closed_at, trip_count,
+                    total_revenue, gross_revenue, commission_total, total_driver_net, vehicle_label,
+                    vehicle_model, plate, owner_name, created_at
+                    FROM livre_driver_shift_closures
+                    WHERE {condition}
+                    ORDER BY closure_date DESC NULLS LAST, closed_at DESC NULLS LAST LIMIT %s""", [*params, 50])
+                rows = cur.fetchall()
+                cur.execute(f"SELECT COUNT(*) AS total FROM livre_driver_shift_closures WHERE {condition}", params)
+                total = cur.fetchone()["total"]
+                parts.append(f"Cierres de turno encontrados={total}; mostrando hasta 50 registros.")
+                for row in rows:
+                    parts.append("Cierre de turno: " + "; ".join(
+                        f"{column}={_fmt(row[column])}" for column in (
+                            "id", "driver_user_id", "closure_date", "closed_at", "trip_count",
+                            "total_revenue", "gross_revenue", "commission_total", "total_driver_net",
+                            "vehicle_label", "vehicle_model", "plate", "owner_name", "created_at",
+                        )
+                    ))
+                return "\n".join(parts)
+
+            if "livre_quote_profiles" in available and re.search(r"\b(perfil|perfiles|rate|tarifa|precio|costo|costos)\b", normalized):
+                condition, params = _condition(
+                    ("rate_id::text", "transport_type_id", "source"),
+                    terms,
+                )
+                cur.execute(f"""SELECT id, rate_id, transport_type_id, price_per_km, fixed_cost,
+                    distance, total_cost_price, quote_body, source, created_at
+                    FROM livre_quote_profiles
+                    WHERE {condition}
+                    ORDER BY created_at DESC NULLS LAST LIMIT %s""", [*params, 50])
+                rows = cur.fetchall()
+                cur.execute(f"SELECT COUNT(*) AS total FROM livre_quote_profiles WHERE {condition}", params)
+                total = cur.fetchone()["total"]
+                parts.append(f"Perfiles de tarifa encontrados={total}; mostrando hasta 50 registros.")
+                for row in rows:
+                    parts.append("Perfil de tarifa: " + "; ".join(
+                        f"{column}={_fmt(row[column])}" for column in (
+                            "id", "rate_id", "transport_type_id", "price_per_km", "fixed_cost",
+                            "distance", "total_cost_price", "quote_body", "source", "created_at",
+                        )
+                    ))
+                return "\n".join(parts)
+
             entity_specs = [
                 ("livre_crm_passengers", ("id", "first_name", "last_name", "phone", "email"), ("first_name", "last_name", "phone", "email"), "Pasajero"),
                 ("livre_crm_vehicle_owners", ("id", "first_name", "last_name", "phone", "email", "city"), ("first_name", "last_name", "phone", "email", "identification", "city"), "Propietario"),
