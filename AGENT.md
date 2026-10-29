@@ -612,3 +612,20 @@ Pendientes explícitos:
 - Validaciones: `PYTHONPATH=. .venv/bin/pytest -q tests/test_operational_status.py` → `18 passed`; `node --check js/app.js` y `node --test tests/*.test.js` del CRM → `19 passed`; `git diff --check` OK. No se crearon viajes ni se modificaron datos productivos durante la validación.
 - El repositorio `livre-chatbot` conserva `.env.local` y `.gitignore` como cambios locales/no versionados; no incluirlos ni exponer su contenido.
 - La creación de una segunda cuenta administrativa queda pendiente de definir y autorizar.
+
+## Programación de viajes y migración productiva (2026-10-29)
+
+- La confirmación desde Crear viaje ya recibía `date_programmed`, pero el backend perdía ese dato antes de persistirlo. `_save_trip()` ahora guarda `status` y `scheduled_at`; las fechas sin zona se interpretan como `America/Argentina/Buenos_Aires` y se almacenan en UTC.
+- Los viajes programados quedan en `scheduled` y `GET /mobility/driver/trips` los libera a `searching` cuando `scheduled_at <= NOW()`. No se ofrecen antes de la hora programada.
+- Se agregó `app/migrations/20261029_scheduled_trips.sql`, aditiva e idempotente, con `scheduled_at TIMESTAMPTZ` e índice `(status, scheduled_at)`.
+- El primer despliegue del cambio dejó la migración sin aplicar porque producción tiene `AUTO_MIGRATE=false`. El síntoma real fue `psycopg2.errors.UndefinedColumn: column "scheduled_at" ... does not exist`, afectando confirmar viajes y la lectura de viajes del conductor.
+- La migración se aplicó manualmente en la base productiva y quedó registrada en `schema_migrations`. `/health` y `/ready` responden correctamente; posteriormente `/mobility/driver/trips` volvió a responder HTTP 200.
+- En Gestión de viajes, el botón `#crm-refresh` ya estaba correctamente conectado a `loadCrmData()`; el endpoint `/crm/travels/live` respondía HTTP 200. El error visible no era del botón, sino del esquema incompleto.
+- Commit publicado: `9556b95` (`fix: persist and release scheduled trips`). Tests enfocados: `26 passed`; `git diff --check` OK. No se creó un viaje real durante la verificación.
+
+## Hora del dashboard en Argentina (2026-10-29)
+
+- `livre-chatbot/js/app.js` usa `America/Argentina/Buenos_Aires` explícitamente para la hora de actualización del visor, el último dato GPS, los campos de fecha del historial y valores de fecha genéricos; no depende de la zona horaria del navegador.
+- El popup del mapa etiqueta el último dato como `Último dato (Argentina)` y la barra como `Última actualización (Argentina)`.
+- Commit publicado en `livre-chatbot`: `75f3b44` (`fix: show dashboard times in Argentina`). `node --check js/app.js` y `git diff --check` OK.
+- `livre-chatbot` mantiene cambios locales previos sin versionar en `.env.local`, `errores/` y `.gitignore`; no incluirlos ni exponer su contenido.
