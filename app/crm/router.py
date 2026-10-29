@@ -244,8 +244,8 @@ def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = ""
     params = []
     if q.strip():
         term = "%" + q.strip() + "%"
-        filters.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR a.user_id::text ILIKE %s)")
-        params.extend([term, term, term, term])
+        filters.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR d.raw_payload->>'driverUserEmail' ILIKE %s OR d.raw_payload->>'phoneNumber' ILIKE %s OR a.user_id::text ILIKE %s)")
+        params.extend([term, term, term, term, term, term])
     if vehicle.strip():
         filters.append("EXISTS (SELECT 1 FROM livre_driver_vehicles dv WHERE dv.driver_user_id = a.user_id AND dv.vehicle_label ILIKE %s)")
         params.append("%" + vehicle.strip() + "%")
@@ -253,14 +253,18 @@ def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = ""
         filters.append("a.operational_status = %s")
         params.append(operability.strip())
     where = " WHERE " + " AND ".join(filters)
-    cur.execute(f"SELECT count(*) AS total FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id{where}", params)
+    cur.execute(f"SELECT count(*) AS total FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id{where}", params)
     total = int(cur.fetchone()["total"])
     cur.execute(
-        f"""SELECT a.user_id AS id, u.name, u.username, u.email, a.operational_status,
+        f"""SELECT a.user_id AS id, u.name, u.username,
+                   COALESCE(NULLIF(u.email, ''), NULLIF(d.raw_payload->>'driverUserEmail', '')) AS driver_email,
+                   NULLIF(d.raw_payload->>'phoneNumber', '') AS phone_number,
+                   a.operational_status,
                    a.active, a.current_latitude, a.current_longitude, a.location_updated_at,
                    COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels
               FROM livre_driver_accounts a
               JOIN livre_users u ON u.id = a.user_id
+              LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id
               LEFT JOIN LATERAL (
                   SELECT ARRAY_AGG(DISTINCT vehicle_label ORDER BY vehicle_label)
                          FILTER (WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicle_labels
@@ -276,7 +280,9 @@ def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = ""
         vehicles = row["vehicle_labels"] or []
         items.append({
             "id": row["id"], "driverUserId": row["id"], "driverName": row["name"] or row["username"],
-            "email": row["email"], "operationalStatus": row["operational_status"],
+            "email": row["driver_email"], "driverUserEmail": row["driver_email"],
+            "phone": row["phone_number"], "phoneNumber": row["phone_number"],
+            "operationalStatus": row["operational_status"],
             "active": row["active"], "vehicles": vehicles,
             "vehicle": {"plate": ", ".join(vehicles) if vehicles else None},
             "vehicleDescription": ", ".join(vehicles) if vehicles else None,
@@ -894,14 +900,23 @@ def live_drivers(
 def live_driver_detail(driver_user_id: str, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
     """Detalle del conductor según el registro propio de Livre."""
     cur.execute(
-        """SELECT a.user_id, a.operational_status, a.active, u.name, u.username, u.email
-             FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id
+        """SELECT a.user_id, a.operational_status, a.active, u.name, u.username,
+                  COALESCE(NULLIF(u.email, ''), NULLIF(d.raw_payload->>'driverUserEmail', '')) AS email,
+                  NULLIF(d.raw_payload->>'phoneNumber', '') AS phone_number
+             FROM livre_driver_accounts a
+             JOIN livre_users u ON u.id = a.user_id
+             LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id
             WHERE a.user_id = %s""", (str(driver_user_id),)
     )
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Conductor no encontrado en Livre")
-    return {**dict(row), "source": "livre-cloud"}
+    result = dict(row)
+    result["driverUserEmail"] = result["email"]
+    result["mail"] = result["email"]
+    result["phoneNumber"] = result.pop("phone_number")
+    result["phone"] = result["phoneNumber"]
+    return {**result, "source": "livre-cloud"}
 
 @router.get("/operational/driver/{driver_user_id}")
 def operational_driver(driver_user_id: str, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
