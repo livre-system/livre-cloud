@@ -238,27 +238,30 @@ def _local_page(cur, table: str, page: int, size: int, q: str = ""):
     return {"source": "livre-cloud", "items": items, "page": page, "size": size, "total": total}
 
 
-def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = "", operability: str = ""):
+def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = "", vehicle_type: str = "", operability: str = ""):
     """Lista conductores desde la identidad y estado propios de Livre."""
     filters = ["a.active = TRUE"]
     params = []
     if q.strip():
         term = "%" + q.strip() + "%"
-        filters.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR d.raw_payload->>'driverUserEmail' ILIKE %s OR d.raw_payload->>'phoneNumber' ILIKE %s OR a.user_id::text ILIKE %s)")
-        params.extend([term, term, term, term, term, term])
+        filters.append("(u.name ILIKE %s OR u.username ILIKE %s OR u.email ILIKE %s OR d.raw_payload->>'driverUserEmail' ILIKE %s OR d.raw_payload->>'phoneNumber' ILIKE %s OR COALESCE(dp.phone_number, '') ILIKE %s OR a.user_id::text ILIKE %s)")
+        params.extend([term, term, term, term, term, term, term])
     if vehicle.strip():
         filters.append("EXISTS (SELECT 1 FROM livre_driver_vehicles dv WHERE dv.driver_user_id = a.user_id AND dv.vehicle_label ILIKE %s)")
         params.append("%" + vehicle.strip() + "%")
+    if vehicle_type.strip():
+        filters.append("EXISTS (SELECT 1 FROM livre_driver_vehicles dv LEFT JOIN livre_crm_vehicles cv ON UPPER(cv.plate) = UPPER(dv.vehicle_label) WHERE dv.driver_user_id = a.user_id AND (cv.vehicle_type ILIKE %s OR cv.brand ILIKE %s OR cv.model ILIKE %s))")
+        params.extend(["%" + vehicle_type.strip() + "%"] * 3)
     if operability.strip():
         filters.append("a.operational_status = %s")
         params.append(operability.strip())
     where = " WHERE " + " AND ".join(filters)
-    cur.execute(f"SELECT count(*) AS total FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id{where}", params)
+    cur.execute(f"SELECT count(*) AS total FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id LEFT JOIN livre_crm_driver_profiles dp ON dp.driver_user_id = a.user_id{where}", params)
     total = int(cur.fetchone()["total"])
     cur.execute(
         f"""SELECT a.user_id AS id, u.name, u.username,
                    COALESCE(NULLIF(u.email, ''), NULLIF(d.raw_payload->>'driverUserEmail', '')) AS driver_email,
-                   NULLIF(d.raw_payload->>'phoneNumber', '') AS phone_number,
+                   COALESCE(NULLIF(dp.phone_number, ''), NULLIF(d.raw_payload->>'phoneNumber', '')) AS phone_number,
                    a.operational_status,
                    a.active, a.current_latitude, a.current_longitude, a.location_updated_at,
                    COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels,
@@ -266,6 +269,7 @@ def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = ""
               FROM livre_driver_accounts a
               JOIN livre_users u ON u.id = a.user_id
               LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id
+              LEFT JOIN livre_crm_driver_profiles dp ON dp.driver_user_id = a.user_id
               LEFT JOIN LATERAL (
                   SELECT ARRAY_AGG(DISTINCT vehicle_label ORDER BY vehicle_label)
                          FILTER (WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicle_labels,
@@ -901,6 +905,7 @@ def live_drivers(
         cur, page, size,
         driver_name or driver_code or phone or email,
         vehicle=vehicle,
+        vehicle_type=vehicle_type,
         operability=operability,
     )
 
@@ -1301,14 +1306,36 @@ def create_live_vehicle(payload: dict = Body(...), user: dict = Depends(_require
 
 @router.post("/drivers", status_code=201)
 def create_live_driver(payload: dict = Body(...), user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
-    first_name, last_name, email = str(payload.get("firstName", "")).strip(), str(payload.get("lastName", "")).strip(), str(payload.get("email", "")).strip().lower()
-    if not first_name or not last_name or "@" not in email:
-        raise HTTPException(status_code=422, detail="Nombre, apellido y email válido son obligatorios")
+    first_name = str(payload.get("firstName", "")).strip()
+    last_name = str(payload.get("lastName", "")).strip()
+    email = str(payload.get("driverUserEmail") or payload.get("email") or "").strip().lower()
+    phone = str(payload.get("phoneNumber") or payload.get("phone") or "").strip()
+    try:
+        dni = int(payload.get("dni"))
+    except (TypeError, ValueError):
+        dni = 0
+    if not first_name or not last_name or "@" not in email or not dni or not phone:
+        raise HTTPException(status_code=422, detail="Nombre, apellido, DNI, teléfono y email válido son obligatorios")
     driver_id = str(uuid.uuid4())
     password_hash = bcrypt.hashpw(secrets.token_urlsafe(24).encode(), bcrypt.gensalt()).decode()
     cur.execute("INSERT INTO livre_users (id, username, email, name, password_hash) VALUES (%s,%s,%s,%s,%s) RETURNING id, username, email, name", (driver_id, email, email, f"{first_name} {last_name}", password_hash))
     created = dict(cur.fetchone())
     cur.execute("INSERT INTO livre_driver_accounts (user_id, active) VALUES (%s, TRUE)", (driver_id,))
+    cur.execute("""INSERT INTO livre_crm_driver_profiles
+        (driver_user_id, dni, cuil, born_date, genre, city, province, country, phone_number,
+         street_name, street_number, type_of_living_place, floor_number, postal_code,
+         travel_percentage, cost_percentage, vehicle_owner_id, languages, driver_schedule,
+         payment_settings, vehicles, documents, driver_image, raw_payload)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s::jsonb)
+        RETURNING driver_user_id""",
+        (driver_id, dni, payload.get("cuil"), payload.get("bornDate"), payload.get("genre"),
+         payload.get("city"), payload.get("province"), payload.get("country") or "Argentina", phone,
+         payload.get("streetName"), payload.get("streetNumber"), payload.get("typeOfLivingPlace"),
+         payload.get("floorNumber"), payload.get("postalCode"), payload.get("travelPercentage") or 15,
+         payload.get("costPercentage") or 0, payload.get("vehicleOwnerId"),
+         json.dumps(payload.get("languages") or []), json.dumps(payload.get("driverSchedule") or []),
+         json.dumps(payload.get("paymentSettings") or []), json.dumps(payload.get("vehicles") or []),
+         json.dumps(payload.get("documents") or []), payload.get("driverImage"), json.dumps(payload)))
     return {**created, "source": "livre-cloud", "operational_status": "unavailable"}
 
 
