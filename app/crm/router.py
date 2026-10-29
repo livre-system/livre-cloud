@@ -576,7 +576,7 @@ def update_trip_tracking(
 
 def _operational_snapshot(cur, viewer_user_id: str | None = None):
     """Returns one consistent Livre snapshot of accounts, trips and GPS."""
-    location_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    location_cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
     cur.execute(
         """
         SELECT a.user_id, a.active, a.operational_status,
@@ -639,7 +639,7 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
         last_seen = row["location_updated_at"]
         if last_seen and last_seen.tzinfo is None:
             last_seen = last_seen.replace(tzinfo=timezone.utc)
-        session_active = bool(last_seen and last_seen >= datetime.now(timezone.utc) - timedelta(minutes=15))
+        session_active = bool(last_seen and last_seen >= datetime.now(timezone.utc) - timedelta(minutes=2))
         location_is_recent = bool(last_seen and last_seen >= location_cutoff)
         # El estado operativo es manual; la sesión GPS es una señal aparte.
         # Una cuenta disponible sin heartbeat permanece en TODOS, pero no cuenta

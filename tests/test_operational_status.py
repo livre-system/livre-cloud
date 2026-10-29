@@ -251,9 +251,9 @@ def test_snapshot_preserves_the_three_canonical_statuses():
 
 def test_snapshot_keeps_old_position_and_marks_it_stale():
     old = driver_row("old", "available")
-    old["location_updated_at"] = datetime.now(timezone.utc) - timedelta(hours=24, seconds=1)
+    old["location_updated_at"] = datetime.now(timezone.utc) - timedelta(minutes=3)
     recent = driver_row("recent", "available")
-    recent["location_updated_at"] = datetime.now(timezone.utc) - timedelta(hours=23)
+    recent["location_updated_at"] = datetime.now(timezone.utc) - timedelta(minutes=1)
     cur = FakeCursor([[old, recent]])
 
     snapshot = _operational_snapshot(cur)
