@@ -24,8 +24,12 @@ _log = _logging.getLogger(__name__)
 
 
 def _get_all_memory(user_id: str = None) -> str:
-    """Trae memoria estática (documentos subidos, excluye chat_log). Nunca lanza excepción."""
-    target_users = list(dict.fromkeys([user_id, MEMORY_USER_ID])) if user_id else [MEMORY_USER_ID]
+    """Trae la memoria operativa global de LIVI, excluyendo chat_log.
+
+    La identidad del administrador sirve para autenticar y separar sus chats,
+    pero no para aislar la base de conocimiento compartida.
+    """
+    target_users = [MEMORY_USER_ID]
     try:
         with get_cursor() as cur:
             cur.execute("""
@@ -67,8 +71,8 @@ def _get_all_memory(user_id: str = None) -> str:
 
 
 def _search_memory(user_id: str = None, query: str = "") -> str:
-    """Busca en memoria del usuario y en la proyección operacional global."""
-    target_users = list(dict.fromkeys([user_id, MEMORY_USER_ID])) if user_id else [MEMORY_USER_ID]
+    """Busca en la memoria operativa global de LIVI."""
+    target_users = [MEMORY_USER_ID]
     _log.info(f"[MEMORY DEBUG] SEARCH START memory_users={target_users} query={query!r}")
 
     try:

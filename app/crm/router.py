@@ -96,7 +96,7 @@ def _require_livreuser(cur, user: dict) -> None:
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
-    if row["username"] != "livreuser" and not set(row["roles"] or []).intersection({"crm_admin", "admin"}):
+    if row["username"] != "livreuser" and not set(row.get("roles") or []).intersection({"crm_admin", "admin"}):
         raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
 
 
