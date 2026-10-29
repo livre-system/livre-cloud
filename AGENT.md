@@ -22,6 +22,16 @@ Contexto vivo para trabajar en Livre Cloud con Hermes. Este archivo describe el 
 
 Ubicación habitual: `/home/calambre/Documentos/Clientes/Livre/`.
 
+## Estado vigente y pendientes (2026-10-29)
+
+- Los cuatro servicios y PostgreSQL operan en Railway; la fuente activa es Livre Cloud. MAGIIS permanece legado inactivo y no debe probarse ni reactivarse.
+- El CRM muestra operaciones, mapa e historial desde endpoints propios. Los horarios visibles del dashboard usan `America/Argentina/Buenos_Aires` explícitamente.
+- Crear viaje y programar viaje están implementados. Los viajes programados se guardan como `scheduled` con `scheduled_at` y pasan a `searching` al llegar la hora.
+- La migración `20261029_scheduled_trips.sql` está aplicada y registrada en producción. Como `AUTO_MIGRATE=false`, cada migración nueva requiere ejecución controlada antes de usar el código que la necesita.
+- El botón `Actualizar` de Gestión de viajes está conectado a `loadCrmData()` y `/crm/travels/live` responde correctamente.
+- Pendiente real: probar un flujo completo autorizado de creación y programación con una operación controlada; durante las últimas verificaciones no se creó ningún viaje real.
+- Pendientes separados: validación física de GPS/notificaciones en Android y definición de la segunda cuenta administrativa.
+
 ## Orden operativo: WEB HTTPS antes que APK
 
 - El orden obligatorio es verificar y corregir primero el flujo web por HTTPS en producción, y recién después evaluar la APK.
@@ -237,6 +247,8 @@ Responder breve y en criollo con:
 - pendientes o riesgos;
 - repositorios y archivos afectados;
 - si hubo commit/push.
+
+## Historial de decisiones y verificaciones
 
 ## Implementación de comunicaciones y conducción por voz (2026-09-29)
 
@@ -580,7 +592,7 @@ Pendientes explícitos:
 - Regresiones agregadas en `livre-chatbot/tests/crm-local-data.test.js` para validar campos reales del endpoint y la salida correcta de la vista.
 - Validación local: `node --check js/app.js`, `node --test tests/*.test.js` → `19 passed, 0 failed`, y `git diff --check` OK.
 - Publicado en `livre-chatbot` con commit `edc165d` (`Fix travel history rendering and navigation`) y push a `main`.
-- En la última comprobación Railway tenía un deploy nuevo de `livre-chatbot` en estado `BUILDING`, mientras producción aún servía el deploy anterior; verificar el asset JavaScript por HTTPS antes de declarar la corrección disponible.
+- En la comprobación del 2026-10-21 el deploy de `livre-chatbot` todavía estaba en transición y el asset HTTPS podía servir el bundle anterior. Ese estado quedó superado por los despliegues posteriores y no debe usarse como estado actual; validar siempre el asset si se investiga una regresión del CRM.
 
 ## Cambios previos del CRM, conversaciones y layout (2026-10-21)
 
@@ -596,7 +608,7 @@ Pendientes explícitos:
 
 ## Estado de Railway y cuenta administrativa (2026-10-22)
 
-- Railway permanece temporalmente suspendido; no asumir que el servicio está disponible ni reintentar cambios mientras dure la suspensión.
+- Railway tuvo una suspensión temporal registrada en ese momento; ese estado quedó superado. Actualmente los servicios operativos están online en Railway; no usar esta nota histórica para diagnosticar disponibilidad actual.
 - La cuenta administrativa `smoreno` fue creada en producción con roles `admin`, `crm` y `crm_admin`; sus credenciales no se documentan en este archivo.
 - La segunda cuenta administrativa queda pendiente de definir y crear con credenciales propias.
 - La cuenta `smoreno` fue verificada con login real y acceso a las rutas protegidas del CRM; no se modificaron viajes ni datos operativos.
