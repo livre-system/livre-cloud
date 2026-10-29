@@ -32,6 +32,18 @@ def test_exposes_historical_service_options():
     assert all(item["serviceStatus"] == "AVAILABLE" for item in options)
 
 
+def test_ahorro_is_25_percent_below_premium():
+    options = historical_options(Decimal("2.63"), [
+        {"rate_id": 6243, "transport_type_id": "1", "price_per_km": "1610", "fixed_cost": "2153.1"},
+        {"rate_id": 6243, "transport_type_id": "2", "price_per_km": "1046.5", "fixed_cost": "1399.3"},
+    ])
+    premium, ahorro = options
+    assert premium["price"] == 6387
+    assert ahorro["price"] == 4790
+    assert ahorro["pricePointToPoint"] == 4790
+    assert ahorro["totalCostPrice"] == 4790
+
+
 def test_whatsapp_quote_options_are_gross_and_split_is_not_embedded():
     options = historical_options(Decimal("2.63"), [{
         "rate_id": 6243,

@@ -10,6 +10,7 @@ from typing import Any
 DEFAULT_RATE_ID = 6243
 FARE_SOURCE_COMMERCIAL = "commercial"
 COMMERCIAL_DISCOUNT_PERCENTAGE = Decimal("15")
+AHORRO_PRICE_FACTOR = Decimal("0.75")
 AHORRO_SERVICE_TYPE_ID = "2"
 PREMIUM_SERVICE_TYPE_ID = "1"
 AGENCY_COMMISSION_PERCENTAGE = Decimal("15")
@@ -140,7 +141,7 @@ def load_historical_profiles() -> list[dict[str, Any]]:
 
 def historical_options(distance_km: Decimal, profiles: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     profiles = profiles if profiles is not None else load_historical_profiles()
-    return [
+    options = [
         calculate_quote(
             distance_km=distance_km,
             price_per_km=Decimal(str(profile["price_per_km"])),
@@ -150,3 +151,10 @@ def historical_options(distance_km: Decimal, profiles: list[dict[str, Any]] | No
         )
         for profile in profiles
     ]
+    premium = next((item for item in options if str(item["transportTypeId"]) == PREMIUM_SERVICE_TYPE_ID), None)
+    ahorro = next((item for item in options if str(item["transportTypeId"]) == AHORRO_SERVICE_TYPE_ID), None)
+    if premium and ahorro:
+        ahorro_price = _money(Decimal(str(premium["price"])) * AHORRO_PRICE_FACTOR)
+        for key in ("price", "pricePointToPoint", "totalCostPrice"):
+            ahorro[key] = ahorro_price
+    return options
