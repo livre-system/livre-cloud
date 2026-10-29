@@ -261,15 +261,23 @@ def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = ""
                    NULLIF(d.raw_payload->>'phoneNumber', '') AS phone_number,
                    a.operational_status,
                    a.active, a.current_latitude, a.current_longitude, a.location_updated_at,
-                   COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels
+                   COALESCE(v.vehicle_labels, ARRAY[]::text[]) AS vehicle_labels,
+                   COALESCE(v.vehicle_details, '[]'::json) AS vehicle_details
               FROM livre_driver_accounts a
               JOIN livre_users u ON u.id = a.user_id
               LEFT JOIN magiis_crm_drivers d ON d.magiis_id = a.magiis_driver_id
               LEFT JOIN LATERAL (
                   SELECT ARRAY_AGG(DISTINCT vehicle_label ORDER BY vehicle_label)
-                         FILTER (WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicle_labels
-                    FROM livre_driver_vehicles
-                   WHERE driver_user_id = a.user_id
+                         FILTER (WHERE NULLIF(trim(vehicle_label), '') IS NOT NULL) AS vehicle_labels,
+                         JSON_AGG(JSONB_BUILD_OBJECT(
+                             'plate', dv.vehicle_label,
+                             'model', NULLIF(TRIM(CONCAT_WS(' ', cv.brand, cv.model)), ''),
+                             'vehicleType', cv.vehicle_type
+                         ) ORDER BY dv.vehicle_label)
+                         FILTER (WHERE NULLIF(trim(dv.vehicle_label), '') IS NOT NULL) AS vehicle_details
+                    FROM livre_driver_vehicles dv
+                    LEFT JOIN livre_crm_vehicles cv ON UPPER(cv.plate) = UPPER(dv.vehicle_label)
+                   WHERE dv.driver_user_id = a.user_id
               ) v ON TRUE{where}
              ORDER BY u.name NULLS LAST, a.user_id
              LIMIT %s OFFSET %s""",
@@ -284,6 +292,7 @@ def _local_driver_page(cur, page: int, size: int, q: str = "", vehicle: str = ""
             "phone": row["phone_number"], "phoneNumber": row["phone_number"],
             "operationalStatus": row["operational_status"],
             "active": row["active"], "vehicles": vehicles,
+            "vehicleDetails": row["vehicle_details"] or [],
             "vehicle": {"plate": ", ".join(vehicles) if vehicles else None},
             "vehicleDescription": ", ".join(vehicles) if vehicles else None,
             "lastSee": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
