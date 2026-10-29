@@ -43,7 +43,7 @@ PUBLIC_TRACKING_TOKEN_TTL_HOURS = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN
 
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
-log = logging.getLogger(__name__)
+log = logging.getLogger("uvicorn.error")
 
 
 def _require_current_driver_device(cur, user: dict, device_id: str | None) -> None:
