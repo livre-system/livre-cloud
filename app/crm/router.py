@@ -642,8 +642,10 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
         session_active = bool(last_seen and last_seen >= datetime.now(timezone.utc) - timedelta(minutes=15))
         location_is_recent = bool(last_seen and last_seen >= location_cutoff)
         effective_state = "EN VIAJE" if busy else operational_label
+        # El estado operativo es manual; la sesión GPS es una señal aparte.
+        # Una cuenta disponible sin heartbeat no se convierte en "No disponible".
         if effective_state == "Disponible" and not session_active:
-            effective_state = "No disponible"
+            effective_state = "Sin sesión"
         items.append({
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
