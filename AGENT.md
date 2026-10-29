@@ -641,3 +641,12 @@ Pendientes explícitos:
 - El popup del mapa etiqueta el último dato como `Último dato (Argentina)` y la barra como `Última actualización (Argentina)`.
 - Commit publicado en `livre-chatbot`: `75f3b44` (`fix: show dashboard times in Argentina`). `node --check js/app.js` y `git diff --check` OK.
 - `livre-chatbot` mantiene cambios locales previos sin versionar en `.env.local`, `errores/` y `.gitignore`; no incluirlos ni exponer su contenido.
+
+## Diagnóstico pendiente de pronunciación de números en ElevenLabs (2026-10-29)
+
+- En el flujo WhatsApp/LIVI, `livre-cloud/app/voice/elevenlabs_trip.py` recibe y persiste las direcciones como texto; no genera el audio ni transforma la numeración para pronunciarla.
+- La respuesta hablada y escrita la genera el agente alojado en ElevenLabs (`agent_3701m0dfvnmmemptqcm2jym9wdvv`). La configuración activa indica repetir la dirección exactamente y pedir que las direcciones se escriban en el chat; las direcciones recibidas por audio deberían rechazarse para evitar errores de calle y numeración.
+- La configuración TTS observada en producción usa `eleven_flash_v2_5`, `text_normalisation_type = system_prompt`, velocidad `0.99`, estabilidad `1.0` y `enable_phoneme_tags = true`. No se modificó esa configuración.
+- El síntoma reportado es que una dirección como `Estomba 566` aparece correctamente o casi correctamente en texto, pero el número no se entiende bien en el audio. Todavía no está probado si el número se altera en la transcripción del audio entrante, en el texto generado por el agente o únicamente durante la síntesis TTS.
+- Para resolverlo hace falta una prueba controlada comparando texto `Estomba 566`, texto `Estomba 89` y audio diciendo `Estomba 566`, registrando texto de WhatsApp, transcripción, texto generado y audio. No cambiar prompts ni TTS hasta separar esas etapas.
+- El diagnóstico fue sólo lectura: no se enviaron mensajes, no se generaron viajes y no se modificó el agente de ElevenLabs.
