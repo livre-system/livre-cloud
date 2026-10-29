@@ -125,7 +125,7 @@ def test_driver_trips_returns_available_open_trips_and_own_assignments():
 
     assert result == []
     query, params = next(
-        call for call in cur.calls if "t.status IN ('searching')" in call[0]
+        call for call in cur.calls if "t.status IN ('scheduled', 'searching')" in call[0]
     )
     assert "active_driver.operational_status = 'available'" in query
     assert "t.assigned_driver_user_id IS NULL" in query
@@ -182,6 +182,7 @@ def test_driver_trip_serializes_commercial_fare_fields():
         "discount_amount": "758.10",
         "final_fare": "4295.90",
         "fare_source": "commercial",
+        "scheduled_at": None,
     })
 
     assert trip.model_dump() | {"id": trip.id} == {
@@ -206,6 +207,7 @@ def test_driver_trip_serializes_commercial_fare_fields():
         "discount_amount": 758.10,
         "final_fare": 4295.90,
         "fare_source": "commercial",
+        "scheduled_at": None,
     }
 
 

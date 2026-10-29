@@ -330,7 +330,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
     """Returns a trip only when it is assigned to the authenticated driver."""
     cur.execute(
         """
-        SELECT t.id, t.origen, t.destino, t.status, t.created_at,
+        SELECT t.id, t.origen, t.destino, t.status, t.created_at, t.scheduled_at,
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
@@ -417,6 +417,7 @@ def _driver_trip(trip) -> DriverTrip:
         ),
         final_fare=float(trip["final_fare"]) if trip["final_fare"] is not None else None,
         fare_source=trip["fare_source"],
+        scheduled_at=trip.get("scheduled_at"),
     )
 
 
@@ -662,7 +663,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
     )
     cur.execute(
         """
-        SELECT t.id, t.origen, t.destino, t.status, t.created_at,
+        SELECT t.id, t.origen, t.destino, t.status, t.created_at, t.scheduled_at,
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
@@ -686,7 +687,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                       AND (active_driver.active = TRUE
                            OR active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes')
                 )
-                AND t.status IN ('searching')
+                AND t.status IN ('scheduled', 'searching')
                 AND t.assigned_driver_user_id IS NULL
             )
             OR (
@@ -959,19 +960,23 @@ def driver_reject_trip(
         raise HTTPException(status_code=409, detail="Sólo se puede rechazar un viaje pendiente")
     cur.execute(
         """UPDATE livi_trips
-           SET status = 'searching',
+           SET status = CASE
+                    WHEN scheduled_at IS NOT NULL AND scheduled_at > NOW() THEN 'scheduled'
+                    ELSE 'searching'
+               END,
                assigned_driver_user_id = NULL,
                tracking_driver_name = NULL,
                updated_at = NOW()
            WHERE id = %s AND assigned_driver_user_id = %s AND status = 'assigned'
-           RETURNING id""",
+           RETURNING id, status""",
         (trip_id, user["id"]),
     )
-    if not cur.fetchone():
+    rejected = cur.fetchone()
+    if not rejected:
         raise HTTPException(status_code=409, detail="El viaje ya cambió de estado")
     record_trip_event(
         cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
-        event_type="trip_rejected", previous_status="assigned", new_status="searching",
+        event_type="trip_rejected", previous_status="assigned", new_status=rejected["status"],
     )
     cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
     rejected_trip = cur.fetchone()
@@ -990,13 +995,14 @@ def driver_update_status(
     try:
         trip = _driver_trip_or_404(cur, trip_id, user)
     except HTTPException:
-        if payload.status != "arriving":
+        if payload.status not in {"assigned", "arriving"}:
             raise
         cur.execute("SELECT status FROM livi_trips WHERE id = %s FOR UPDATE", (trip_id,))
         claim = cur.fetchone()
-        if not claim or claim["status"] not in {"searching", "assigned"}:
+        if not claim or claim["status"] not in {"scheduled", "searching", "assigned"}:
             raise HTTPException(status_code=409, detail="El viaje ya fue tomado por otro conductor")
         previous_status = claim["status"]
+        claimed_status = "assigned" if previous_status == "scheduled" else payload.status
         cur.execute(
             """
             UPDATE livi_trips t
@@ -1015,7 +1021,7 @@ def driver_update_status(
                    OR a.location_updated_at >= NOW() - INTERVAL '2 minutes')
             RETURNING t.id
             """,
-            (user["id"], payload.status, trip_id, user["id"]),
+            (user["id"], claimed_status, trip_id, user["id"]),
         )
         if not cur.fetchone():
             raise HTTPException(status_code=409, detail="El viaje ya fue tomado por otro conductor")
