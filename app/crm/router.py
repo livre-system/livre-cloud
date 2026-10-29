@@ -448,6 +448,7 @@ def _local_trip_page(
         f"""SELECT id, origen, destino, whatsapp_user, status,
                    assigned_driver_user_id, tracking_driver_name,
                    tracking_plate, tracking_vehicle_model, tracking_vehicle_color,
+                   service_type_id, service_type_name, scheduled_at,
                    created_at, updated_at
             FROM livi_trips{where}
             ORDER BY created_at DESC LIMIT %s OFFSET %s""",
