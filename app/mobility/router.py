@@ -338,10 +338,11 @@ def public_send_trip_message(
     return cur.fetchone()
 
 
-def _driver_trip_or_404(cur, trip_id: int, user: dict):
-    """Returns a trip only when it is assigned to the authenticated driver."""
+def _driver_trip_or_404(cur, trip_id: int, user: dict, include_terminal: bool = False):
+    """Returns a trip assigned to the authenticated driver."""
+    terminal_statuses = ", 'completed', 'cancelled', 'conflict'" if include_terminal else ""
     cur.execute(
-        """
+        f"""
         SELECT t.id, t.origen, t.destino, t.status, t.created_at, t.scheduled_at,
                t.tracking_driver_name, t.tracking_plate,
                t.tracking_vehicle_model, t.tracking_vehicle_color,
@@ -359,7 +360,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
-          AND t.status IN ('assigned', 'arriving', 'in_progress')
+          AND t.status IN ('assigned', 'arriving', 'in_progress'{terminal_statuses})
         """,
         (trip_id, user["id"]),
     )
@@ -1102,7 +1103,7 @@ def driver_update_status(
                    WHERE id = %s""",
                 (str(exc)[:500], trip_id),
             )
-    return _driver_trip(_driver_trip_or_404(cur, trip_id, user))
+    return _driver_trip(_driver_trip_or_404(cur, trip_id, user, include_terminal=True))
 
 
 @router.post("/driver/location")
