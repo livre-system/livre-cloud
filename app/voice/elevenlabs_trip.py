@@ -337,6 +337,17 @@ def _run_local_quote(origen: str, destino: str) -> dict:
         return {"error": str(exc)}
 
 
+def _format_quote_message(options: list[dict]) -> str:
+    """Presenta las dos alternativas en un formato breve y fácil de elegir."""
+    lines = ["Estas son las opciones para tu viaje:"]
+    for index, option in enumerate(options, 1):
+        service_name = option.get("serviceName", "servicio")
+        price = option.get("pricePointToPoint", option.get("price", ""))
+        lines.append(f"{index}. {service_name}: ${price}")
+    lines.append("Respondé 1 o 2 para elegir.")
+    return "\n".join(lines)
+
+
 @router.post("/quote")
 async def elevenlabs_quote(request: Request):
     """Cotiza un viaje sin crear el viaje real en MAGIIS."""
@@ -378,10 +389,7 @@ async def elevenlabs_quote(request: Request):
         quote.get("options", []),
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
     )[:2]]
-    option_text = " ".join(
-        f"Opción {index} ({option.get('serviceName', 'servicio')}): ${option['pricePointToPoint']}."
-        for index, option in enumerate(options, 1)
-    )
+    option_text = _format_quote_message(options)
     quote_id = _save_whatsapp_quote(
         conversation_id=conversation_id,
         whatsapp_user=whatsapp_user,
@@ -390,7 +398,7 @@ async def elevenlabs_quote(request: Request):
         options=options,
     )
     return {
-        "result": f"Tengo dos cotizaciones. {option_text}",
+        "result": option_text,
         "options": options,
         "quote_id": quote_id,
         "conversation_id": conversation_id,

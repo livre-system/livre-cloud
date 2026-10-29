@@ -75,3 +75,17 @@ def test_save_trip_binds_scheduled_state_and_time(monkeypatch):
     assert cursor.params[-5] == "whatsapp"
     assert cursor.params[-4] == "scheduled"
     assert cursor.params[-3] == scheduled_at
+
+
+def test_format_quote_message_numbers_options_and_uses_lines():
+    message = trip._format_quote_message([
+        {"serviceName": "Livre Premium", "pricePointToPoint": 4410},
+        {"serviceName": "Livre Ahorro", "pricePointToPoint": 3308},
+    ])
+
+    assert message == (
+        "Estas son las opciones para tu viaje:\n"
+        "1. Livre Premium: $4410\n"
+        "2. Livre Ahorro: $3308\n"
+        "Respondé 1 o 2 para elegir."
+    )
