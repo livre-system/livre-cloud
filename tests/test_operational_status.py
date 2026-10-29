@@ -249,7 +249,7 @@ def test_snapshot_preserves_the_three_canonical_statuses():
     assert all(item["source"] == "livre_driver_accounts+driver_vehicle_association+livi_trips" for item in snapshot)
 
 
-def test_snapshot_hides_positions_older_than_24_hours():
+def test_snapshot_keeps_old_position_and_marks_it_stale():
     old = driver_row("old", "available")
     old["location_updated_at"] = datetime.now(timezone.utc) - timedelta(hours=24, seconds=1)
     recent = driver_row("recent", "available")
@@ -258,8 +258,10 @@ def test_snapshot_hides_positions_older_than_24_hours():
 
     snapshot = _operational_snapshot(cur)
 
-    assert snapshot[0]["lastPlace"] is None
+    assert snapshot[0]["lastPlace"] == {"latitude": -38.7, "longitude": -62.2}
+    assert snapshot[0]["locationFresh"] is False
     assert snapshot[1]["lastPlace"] == {"latitude": -38.7, "longitude": -62.2}
+    assert snapshot[1]["locationFresh"] is True
 
 
 def test_snapshot_uses_the_persistent_driver_vehicle_association():
@@ -367,6 +369,8 @@ def test_crm_operational_separates_trip_activity_and_deduplicates_vehicles():
         "conversations_with_transcript": 4,
     }
     assert result["activity"]["crm"] == {"trip_requests": 9}
+    assert "CURRENT_TIMESTAMP AT TIME ZONE 'America/Argentina/Buenos_Aires'" in cur.calls[2][0]
+    assert "CURRENT_TIMESTAMP AT TIME ZONE 'America/Argentina/Buenos_Aires'" in cur.calls[3][0]
 
 
 def test_crm_operational_counts_legacy_null_activity_as_unclassified():

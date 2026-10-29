@@ -654,7 +654,8 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
             "lastPlace": {
                 "latitude": float(row["latitude"]),
                 "longitude": float(row["longitude"]),
-            } if location_is_recent and row["latitude"] is not None and row["longitude"] is not None else None,
+            } if row["latitude"] is not None and row["longitude"] is not None else None,
+            "locationFresh": location_is_recent,
             "lastSee": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
             "vehicle": {
                 "plate": row["associated_vehicle_plate"],
@@ -741,10 +742,18 @@ def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cur
     drivers = _operational_snapshot(cur, user.get("id"))
     schema = _operational_schema(cur)
     activity_type_sql = "COALESCE(activity_type, 'unclassified')" if schema["capabilities"]["trip_activity_type"] else "'unclassified'"
+    local_created_at = "created_at AT TIME ZONE 'America/Argentina/Buenos_Aires'"
+    daily_trip_filter = (
+        f"{local_created_at} >= (CURRENT_TIMESTAMP AT TIME ZONE "
+        "'America/Argentina/Buenos_Aires')::date "
+        f"AND {local_created_at} < ((CURRENT_TIMESTAMP AT TIME ZONE "
+        "'America/Argentina/Buenos_Aires')::date + INTERVAL '1 day')"
+    )
     cur.execute(
         f"""
         SELECT status, {activity_type_sql} AS activity_type, count(*) AS total
         FROM livi_trips
+        WHERE {daily_trip_filter}
         GROUP BY status, {activity_type_sql}
         """
     )
@@ -777,10 +786,10 @@ def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cur
     cur.execute(
         f"""
         SELECT
-          (SELECT count(*) FROM livi_trips) AS trips_total,
-          (SELECT count(*) FROM livi_trips WHERE {source_filter}) AS whatsapp_trip_requests,
-          (SELECT count(*) FROM livi_trips WHERE {crm_source_filter}) AS crm_trip_requests,
-          {test_count} AS test_trips_total,
+          (SELECT count(*) FROM livi_trips WHERE {daily_trip_filter}) AS trips_total,
+          (SELECT count(*) FROM livi_trips WHERE {daily_trip_filter} AND ({source_filter})) AS whatsapp_trip_requests,
+          (SELECT count(*) FROM livi_trips WHERE {daily_trip_filter} AND ({crm_source_filter})) AS crm_trip_requests,
+          (SELECT count(*) FROM livi_trips WHERE {daily_trip_filter} AND activity_type = 'test') AS test_trips_total,
           NULL::bigint AS whatsapp_quote_requests,
           {whatsapp_quotes_count} AS whatsapp_quotes_total,
           {transcripts_count} AS whatsapp_conversations_with_transcript
