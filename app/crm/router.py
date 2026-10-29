@@ -759,6 +759,11 @@ def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cur
         if schema["capabilities"]["trip_source"]
         else "whatsapp_user IS NOT NULL"
     )
+    crm_source_filter = (
+        "source = 'web' OR (source IS NULL AND whatsapp_user IS NULL)"
+        if schema["capabilities"]["trip_source"]
+        else "whatsapp_user IS NULL"
+    )
     # Keep missing optional metrics NULL: zero would falsely claim the source was checked.
     test_count = "(SELECT count(*) FROM livi_trips WHERE activity_type = 'test')" if schema["capabilities"]["trip_activity_type"] else "NULL::bigint"
     whatsapp_quotes_count = "(SELECT count(*) FROM livi_whatsapp_quotes)" if schema["capabilities"]["whatsapp_quotes"] else "NULL::bigint"
@@ -774,6 +779,7 @@ def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cur
         SELECT
           (SELECT count(*) FROM livi_trips) AS trips_total,
           (SELECT count(*) FROM livi_trips WHERE {source_filter}) AS whatsapp_trip_requests,
+          (SELECT count(*) FROM livi_trips WHERE {crm_source_filter}) AS crm_trip_requests,
           {test_count} AS test_trips_total,
           NULL::bigint AS whatsapp_quote_requests,
           {whatsapp_quotes_count} AS whatsapp_quotes_total,
@@ -814,6 +820,9 @@ def operational(user: dict = Depends(_require_crm_operator), cur=Depends(get_cur
                 "quote_requests": metric("whatsapp_quote_requests"),
                 "quotes": metric("whatsapp_quotes_total"),
                 "conversations_with_transcript": metric("whatsapp_conversations_with_transcript"),
+            },
+            "crm": {
+                "trip_requests": metric("crm_trip_requests"),
             },
             "note": "Los contadores salen de tablas existentes; no se generan eventos paralelos.",
         },

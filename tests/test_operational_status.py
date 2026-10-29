@@ -300,6 +300,7 @@ def test_crm_operational_counts_each_canonical_status_without_active_as_status()
     cur = FakeCursor([rows, [], {
         "trips_total": 0,
         "whatsapp_trip_requests": 0,
+        "crm_trip_requests": 0,
         "test_trips_total": 0,
         "whatsapp_quote_requests": 0,
         "whatsapp_quotes_total": 0,
@@ -336,6 +337,7 @@ def test_crm_operational_separates_trip_activity_and_deduplicates_vehicles():
         {
             "trips_total": 14,
             "whatsapp_trip_requests": 5,
+            "crm_trip_requests": 9,
             "test_trips_total": 2,
             "whatsapp_quote_requests": 3,
             "whatsapp_quotes_total": 3,
@@ -364,6 +366,7 @@ def test_crm_operational_separates_trip_activity_and_deduplicates_vehicles():
         "quotes": 3,
         "conversations_with_transcript": 4,
     }
+    assert result["activity"]["crm"] == {"trip_requests": 9}
 
 
 def test_crm_operational_counts_legacy_null_activity_as_unclassified():
@@ -373,6 +376,7 @@ def test_crm_operational_counts_legacy_null_activity_as_unclassified():
         {
             "trips_total": 3,
             "whatsapp_trip_requests": 0,
+            "crm_trip_requests": 0,
             "test_trips_total": 0,
             "whatsapp_quote_requests": 0,
             "whatsapp_quotes_total": 0,
@@ -404,6 +408,7 @@ def test_crm_operational_uses_explicit_legacy_capabilities_without_querying_new_
             {
                 "trips_total": 2,
                 "whatsapp_trip_requests": 1,
+                "crm_trip_requests": 0,
                 "test_trips_total": None,
                 "whatsapp_quote_requests": 4,
                 "whatsapp_quotes_total": None,
