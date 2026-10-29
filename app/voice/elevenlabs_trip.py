@@ -28,6 +28,7 @@ import secrets
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Request, HTTPException
@@ -223,6 +224,8 @@ def _save_trip(
     fare_source: str | None = None,
     activity_type: str = "real",
     source: str = "whatsapp",
+    status: str = "searching",
+    scheduled_at: datetime | None = None,
 ) -> tuple[int, str]:
     """Inserta el viaje con la distribución comercial canónica de Livre."""
     if original_fare is not None or fare is not None:
@@ -243,8 +246,8 @@ def _save_trip(
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
-                 activity_type, source, status, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', %s, %s)
+                 activity_type, source, status, scheduled_at, created_at, updated_at)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
@@ -265,6 +268,8 @@ def _save_trip(
                 fare_source,
                 activity_type,
                 source,
+                status,
+                scheduled_at,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
@@ -621,6 +626,22 @@ async def elevenlabs_trip(request: Request):
     if not source:
         return {"result": "Error: source no puede estar vacío."}
 
+    scheduled_at = None
+    status = "searching"
+    if date_programmed:
+        try:
+            scheduled_at = datetime.fromisoformat(date_programmed)
+            if scheduled_at.tzinfo is None:
+                scheduled_at = scheduled_at.replace(
+                    tzinfo=ZoneInfo("America/Argentina/Buenos_Aires")
+                )
+            scheduled_at = scheduled_at.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            return {"result": "Error: fecha programada inválida."}
+        if scheduled_at <= datetime.now(timezone.utc):
+            return {"result": "Error: la fecha programada debe ser futura."}
+        status = "scheduled"
+
     log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
     log.info(f"[ELEVEN TRIP] origen={origen!r}")
     log.info(f"[ELEVEN TRIP] destino={destino!r}")
@@ -712,6 +733,8 @@ async def elevenlabs_trip(request: Request):
             fare_source="official",
             activity_type=activity_type,
             source=source,
+            status=status,
+            scheduled_at=scheduled_at,
         )
         if quote_id:
             with get_cursor() as cur:

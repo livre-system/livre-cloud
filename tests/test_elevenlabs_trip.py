@@ -50,7 +50,28 @@ def test_save_trip_binds_all_insert_columns(monkeypatch):
     assert cursor.query.count("%s") == len(cursor.params)
     assert cursor.params[:5] == ("conv-1", "Origen", "Destino", "5492915650870", "")
     assert isinstance(cursor.params[5], str)
-    assert cursor.params[-4] == "real"
-    assert cursor.params[-3] == "panel"
-    assert "'searching'" in cursor.query
-    assert "'assigned', %s, %s" not in cursor.query
+    assert cursor.params[-6] == "real"
+    assert cursor.params[-5] == "panel"
+    assert cursor.params[-4] == "searching"
+    assert cursor.params[-3] is None
+    assert "scheduled_at" in cursor.query
+
+
+def test_save_trip_binds_scheduled_state_and_time(monkeypatch):
+    from datetime import datetime, timezone
+
+    cursor = Cursor()
+    monkeypatch.setattr(trip, "get_cursor", lambda: CursorContext(cursor))
+    scheduled_at = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+    trip._save_trip(
+        conversation_id="conv-scheduled",
+        origen="Origen",
+        destino="Destino",
+        status="scheduled",
+        scheduled_at=scheduled_at,
+    )
+
+    assert cursor.params[-5] == "whatsapp"
+    assert cursor.params[-4] == "scheduled"
+    assert cursor.params[-3] == scheduled_at

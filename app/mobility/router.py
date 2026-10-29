@@ -639,6 +639,15 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
     cur.execute(
         """
         UPDATE livi_trips
+           SET status = 'searching', updated_at = NOW()
+         WHERE status = 'scheduled'
+           AND scheduled_at IS NOT NULL
+           AND scheduled_at <= NOW()
+        """
+    )
+    cur.execute(
+        """
+        UPDATE livi_trips
            SET status = 'lost', updated_at = NOW()
          WHERE status IN ('pending', 'searching')
            AND assigned_driver_user_id IS NULL
