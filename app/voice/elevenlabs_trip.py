@@ -124,6 +124,11 @@ def _tracking_url(token: str | None) -> str | None:
     return f"{TRACKING_BASE_URL}/?token={token}" if token else None
 
 
+def requires_advance_payment(service_type_id: str, source: str) -> bool:
+    """Livre Ahorro requiere pago previo sólo en canales de pasajero."""
+    return str(service_type_id) == "2" and str(source or "").strip().lower() not in {"panel", "crm"}
+
+
 def send_tracking_message(trip: dict) -> str:
     """Envía el aviso aprobado al mismo usuario que originó el viaje."""
     api_key = os.getenv("ELEVENLABS_API_KEY")
@@ -714,7 +719,7 @@ async def elevenlabs_trip(request: Request):
 
     payment_record = None
     payment_number = None
-    if service_type_id == "2":
+    if requires_advance_payment(service_type_id, source):
         if not payment_id:
             return {"result": "Elegiste Livre Ahorro. Primero hay que generar y pagar el link de Mercado Pago; después confirmamos el viaje."}
         try:

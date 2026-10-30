@@ -3,6 +3,14 @@ from decimal import Decimal
 import app.voice.elevenlabs_trip as trip
 
 
+def test_ahorro_requires_advance_payment_only_for_passenger_channels():
+    assert trip.requires_advance_payment("2", "whatsapp") is True
+    assert trip.requires_advance_payment("2", "passenger") is True
+    assert trip.requires_advance_payment("2", "panel") is False
+    assert trip.requires_advance_payment("2", "crm") is False
+    assert trip.requires_advance_payment("1", "whatsapp") is False
+
+
 class Cursor:
     def __init__(self):
         self.query = None
