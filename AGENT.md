@@ -22,7 +22,7 @@ Contexto vivo para trabajar en Livre Cloud con Hermes. Este archivo describe el 
 
 Ubicación habitual: `/home/calambre/Documentos/Clientes/Livre/`.
 
-## Estado vigente y pendientes (2026-10-29)
+## Estado vigente y pendientes (2026-10-30)
 
 - Los cuatro servicios y PostgreSQL operan en Railway; la fuente activa es Livre Cloud. MAGIIS permanece legado inactivo y no debe probarse ni reactivarse.
 - El CRM muestra operaciones, mapa e historial desde endpoints propios. Los horarios visibles del dashboard usan `America/Argentina/Buenos_Aires` explícitamente.
@@ -30,7 +30,7 @@ Ubicación habitual: `/home/calambre/Documentos/Clientes/Livre/`.
 - La migración `20261029_scheduled_trips.sql` está aplicada y registrada en producción. Como `AUTO_MIGRATE=false`, cada migración nueva requiere ejecución controlada antes de usar el código que la necesita.
 - El botón `Actualizar` de Gestión de viajes está conectado a `loadCrmData()` y `/crm/travels/live` responde correctamente.
 - Pendiente real: probar un flujo completo autorizado de creación y programación con una operación controlada; durante las últimas verificaciones no se creó ningún viaje real.
-- Pendientes separados: validación física de GPS/notificaciones en Android y definición de la segunda cuenta administrativa.
+- Pendientes separados: validación física de GPS/notificaciones en Android, definición de la segunda cuenta administrativa y configuración del Access Token de producción de Mercado Pago para cobros de Livre.
 
 ## Orden operativo: WEB HTTPS antes que APK
 
@@ -641,6 +641,23 @@ Pendientes explícitos:
 - El popup del mapa etiqueta el último dato como `Último dato (Argentina)` y la barra como `Última actualización (Argentina)`.
 - Commit publicado en `livre-chatbot`: `75f3b44` (`fix: show dashboard times in Argentina`). `node --check js/app.js` y `git diff --check` OK.
 - `livre-chatbot` mantiene cambios locales previos sin versionar en `.env.local`, `errores/` y `.gitignore`; no incluirlos ni exponer su contenido.
+
+## Flujo Livre Ahorro y pagos anticipados (2026-10-30)
+
+- Se agregó el flujo propio de pago anticipado para `service_type_id = "2"` (Livre Ahorro): `POST /elevenlabs/payment-link` valida la cotización/conversación, crea el registro local y solicita a Mercado Pago una preferencia con link de pago; el webhook verifica el estado real antes de completar el pago.
+- La migración `app/migrations/20261030_livi_payments.sql` y el router `app/payments/router.py` fueron publicados, pero requieren `MERCADOPAGO_ACCESS_TOKEN` en Railway producción. Sin esa variable, el endpoint responde HTTP 503 `Mercado Pago todavía no está configurado`; no se genera link ni viaje.
+- En la prueba real del 2026-10-30, la cotización y `POST /elevenlabs/trip` respondieron HTTP 200, pero la selección de Ahorro llamó a `POST /elevenlabs/payment-link` y recibió HTTP 503. La falla está confirmada en configuración de producción, no en el prompt de ElevenLabs.
+- El Access Token debe pertenecer a la cuenta de producción que cobra los viajes de Livre. No documentar el secreto ni usar tokens de otros proyectos. La clave pública no es necesaria para que el backend genere el link.
+- Las solicitudes originadas en `panel`/`crm` no requieren pago anticipado; el pago previo sólo aplica a Ahorro en canales de pasajero (`whatsapp`/`passenger`). Esto evita bloquear viajes creados desde el CRM.
+- Se mejoraron los errores de cotización para devolver una causa accionable en lugar del mensaje genérico. Commits backend publicados: `43631a2` (flujo de pago), `17e529b` (errores de cotización) y `91bc650` (excepción CRM).
+- Pendiente: cargar el Access Token correcto en Railway y repetir una prueba controlada del link, webhook, aprobación y creación posterior del viaje. No afirmar que el cobro está operativo hasta leer de vuelta el link y el estado real del pago.
+
+## Continuidad GPS y diagnóstico del conductor (2026-10-30)
+
+- Se agregaron diagnósticos de heartbeat y sesión de dispositivo para distinguir GPS activo, última coordenada conocida y sesión vencida; no se debe interpretar una coordenada histórica como GPS en tiempo real.
+- La app web del conductor conserva el envío de ubicación mientras el panel está abierto según las restricciones del navegador; los cortes en segundo plano de Safari/Brave/Android todavía requieren validación física por dispositivo.
+- El frontend de conductor publicó la corrección de estado de dirección: antes de `LLEGUÉ` muestra el retiro del cliente y después muestra el destino. Commit `5f3a57a`; `node --check` y la suite del frontend pasaron 58/58.
+- No se crearon viajes ni coordenadas artificiales durante estas verificaciones.
 
 ## Diagnóstico pendiente de pronunciación de números en ElevenLabs (2026-10-29)
 
