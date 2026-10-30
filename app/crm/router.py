@@ -1241,6 +1241,77 @@ def conversations(
     return {"source": "livre-cloud", "items": items, "total": total, "limit": limit, "offset": offset, "warning": None if total else "No hay conversaciones locales cargadas."}
 
 
+def _travel_history_page(
+    cur, page: int, size: int, q: str = "", state: str = "",
+    date_from: str = "", date_to: str = "", driver_id: str = "",
+):
+    """Histórico unificado: viajes, chofer y liquidación Premium."""
+    filters, params = [], []
+    if q.strip():
+        term = f"%{q.strip()}%"
+        filters.append("(t.origen ILIKE %s OR t.destino ILIKE %s OR t.whatsapp_user ILIKE %s OR COALESCE(u.name, u.username, '') ILIKE %s OR COALESCE(t.tracking_plate, '') ILIKE %s)")
+        params.extend([term] * 5)
+    if state.strip():
+        states = [value.strip() for value in state.split(",") if value.strip()]
+        if states:
+            filters.append("t.status = ANY(%s)")
+            params.append(states)
+    if date_from:
+        filters.append("(COALESCE(t.updated_at, t.created_at) AT TIME ZONE 'America/Argentina/Buenos_Aires') >= %s::date")
+        params.append(date_from)
+    if date_to:
+        filters.append("(COALESCE(t.updated_at, t.created_at) AT TIME ZONE 'America/Argentina/Buenos_Aires') < (%s::date + INTERVAL '1 day')")
+        params.append(date_to)
+    if driver_id.strip():
+        filters.append("t.assigned_driver_user_id = %s")
+        params.append(driver_id.strip())
+    where = " WHERE " + " AND ".join(filters) if filters else ""
+    from_sql = """FROM livi_trips t
+        LEFT JOIN livre_users u ON u.id = t.assigned_driver_user_id"""
+    cur.execute(f"SELECT count(*) AS total {from_sql}{where}", params)
+    total = int(cur.fetchone()["total"])
+    cur.execute(
+        f"""SELECT t.id, t.created_at, t.updated_at, t.origen, t.destino, t.whatsapp_user,
+                   t.status, t.assigned_driver_user_id, COALESCE(u.name, u.username) AS tracking_driver_name,
+                   t.tracking_plate, t.tracking_vehicle_model, t.service_type_id, t.service_type_name,
+                   COALESCE(t.original_fare, t.fare) AS gross_amount,
+                   CASE WHEN t.status = 'completed' AND t.service_type_id = '1'
+                        THEN ROUND(COALESCE(t.original_fare, t.fare) * 0.15, 2) ELSE 0 END AS commission_amount,
+                   CASE WHEN t.status = 'completed'
+                        THEN COALESCE(t.original_fare, t.fare) - CASE WHEN t.service_type_id = '1' THEN ROUND(COALESCE(t.original_fare, t.fare) * 0.15, 2) ELSE 0 END
+                        ELSE NULL END AS driver_amount,
+                   CASE WHEN t.status = 'completed' AND t.service_type_id = '1' THEN 15.00 ELSE 0 END AS commission_percentage
+              {from_sql}{where}
+             ORDER BY COALESCE(t.updated_at, t.created_at) DESC, t.id DESC
+             LIMIT %s OFFSET %s""",
+        params + [size, (page - 1) * size],
+    )
+    items = [dict(row) for row in cur.fetchall()]
+    cur.execute(
+        f"""SELECT COALESCE(SUM(gross_amount), 0) AS gross_amount,
+                   COALESCE(SUM(commission_amount), 0) AS commission_amount,
+                   COALESCE(SUM(driver_amount), 0) AS driver_amount
+              FROM (
+                SELECT COALESCE(t.original_fare, t.fare) AS gross_amount,
+                       CASE WHEN t.status = 'completed' AND t.service_type_id = '1' THEN ROUND(COALESCE(t.original_fare, t.fare) * 0.15, 2) ELSE 0 END AS commission_amount,
+                       CASE WHEN t.status = 'completed' THEN COALESCE(t.original_fare, t.fare) - CASE WHEN t.service_type_id = '1' THEN ROUND(COALESCE(t.original_fare, t.fare) * 0.15, 2) ELSE 0 END ELSE NULL END AS driver_amount
+                  {from_sql}{where}
+              ) amounts""",
+        params,
+    )
+    summary = dict(cur.fetchone())
+    cur.execute("""SELECT a.user_id AS id, COALESCE(u.name, u.username, a.user_id::text) AS name
+                     FROM livre_driver_accounts a JOIN livre_users u ON u.id = a.user_id
+                    WHERE a.active = TRUE ORDER BY name""")
+    drivers = [dict(row) for row in cur.fetchall()]
+    return {
+        "source": "livre-cloud", "items": items, "page": page, "size": size, "total": total,
+        "drivers": drivers,
+        "summary": {"trips": total, **summary},
+        "commission_rule": "Sólo Premium completado: 15%; Ahorro y otros servicios: 0%.",
+    }
+
+
 @router.get("/travel-history")
 def travel_history(
     page: int = Query(default=1, ge=1, le=10000),
@@ -1249,14 +1320,12 @@ def travel_history(
     state: str = Query(default="", max_length=120),
     date_from: str = Query(default="", max_length=10),
     date_to: str = Query(default="", max_length=10),
+    driver_id: str = Query(default="", max_length=120),
     user: dict = Depends(_require_crm_operator),
     cur=Depends(get_cursor_dep),
 ):
-    """Histórico de viajes de livi_trips; no agrega reportes externos."""
-    result = _local_trip_page(cur, page, size, q, state, date_from, date_to)
-    result["summary"] = {"trips": result["total"], "final_amount_ars": None, "amount_ars": None, "budget_ars": None}
-    result["warning"] = "Los importes no tienen una fuente confiable en Livre y se muestran como —."
-    return result
+    """Histórico unificado de viajes y liquidación Premium."""
+    return _travel_history_page(cur, page, size, q, state, date_from, date_to, driver_id)
 
 
 @router.get("/travel-history/{travel_id}/route")
