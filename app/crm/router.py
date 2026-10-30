@@ -5,6 +5,7 @@ import math
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 
 import bcrypt
 from fastapi import APIRouter, Body, Depends, Query, HTTPException
@@ -165,6 +166,68 @@ def set_user_roles(user_id: str, payload: dict = Body(...), user: dict = Depends
     )
     cur.execute("SELECT role, created_at FROM livre_user_roles WHERE user_id = %s ORDER BY role", (user_id,))
     return {"user_id": user_id, "roles": [dict(row) for row in cur.fetchall()]}
+
+
+def _tariff_payload(cur) -> dict:
+    cur.execute(
+        """SELECT id, rate_id, premium_price_per_km, premium_fixed_cost,
+                  ahorro_discount_percentage, updated_by, updated_at
+             FROM livre_tariff_configuration WHERE id = 1"""
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=503, detail="La configuración tarifaria todavía no está instalada")
+    result = dict(row)
+    if result["premium_price_per_km"] is None or result["premium_fixed_cost"] is None:
+        cur.execute(
+            """SELECT price_per_km, fixed_cost FROM livre_quote_profiles
+                WHERE rate_id = %s AND transport_type_id = '1'
+                ORDER BY created_at DESC LIMIT 1""",
+            (result["rate_id"],),
+        )
+        profile = cur.fetchone()
+        if profile:
+            result["premium_price_per_km"] = profile["price_per_km"]
+            result["premium_fixed_cost"] = profile["fixed_cost"]
+    result.update({
+        "formula": "Premium = distancia × precio por km + costo fijo; Ahorro = Premium × (1 - descuento / 100)",
+        "source": "livre_tariff_configuration",
+    })
+    return result
+
+
+@router.get("/tariff")
+def get_tariff_configuration(user: dict = Depends(_require_crm_admin), cur=Depends(get_cursor_dep)):
+    """Devuelve la configuración vigente de tarifas a administradores CRM."""
+    return _tariff_payload(cur)
+
+
+@router.put("/tariff")
+def update_tariff_configuration(
+    payload: dict = Body(...),
+    user: dict = Depends(_require_crm_admin),
+    cur=Depends(get_cursor_dep),
+):
+    """Actualiza tarifa Premium y descuento Ahorro; no modifica viajes existentes."""
+    try:
+        rate_id = int(payload.get("rate_id", 6243))
+        premium_price_per_km = Decimal(str(payload["premium_price_per_km"]))
+        premium_fixed_cost = Decimal(str(payload["premium_fixed_cost"]))
+        ahorro_discount_percentage = Decimal(str(payload["ahorro_discount_percentage"]))
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise HTTPException(status_code=422, detail="La tarifa debe incluir valores numéricos válidos") from exc
+    if rate_id <= 0 or premium_price_per_km <= 0 or premium_fixed_cost < 0 or not 0 <= ahorro_discount_percentage <= 100:
+        raise HTTPException(status_code=422, detail="Tarifa inválida: km > 0, fijo >= 0 y Ahorro entre 0 y 100%")
+    cur.execute(
+        """UPDATE livre_tariff_configuration
+              SET rate_id = %s, premium_price_per_km = %s, premium_fixed_cost = %s,
+                  ahorro_discount_percentage = %s, updated_by = %s, updated_at = now()
+            WHERE id = 1""",
+        (rate_id, premium_price_per_km, premium_fixed_cost, ahorro_discount_percentage, user.get("id")),
+    )
+    if cur.rowcount != 1:
+        raise HTTPException(status_code=503, detail="La configuración tarifaria todavía no está instalada")
+    return _tariff_payload(cur)
 
 
 @router.get("/operational/metrics")

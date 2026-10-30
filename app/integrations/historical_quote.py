@@ -139,8 +139,58 @@ def load_historical_profiles() -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def historical_options(distance_km: Decimal, profiles: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    profiles = profiles if profiles is not None else load_historical_profiles()
+def default_tariff_configuration() -> dict[str, Any]:
+    return {
+        "id": 1,
+        "rate_id": DEFAULT_RATE_ID,
+        "premium_price_per_km": None,
+        "premium_fixed_cost": None,
+        "ahorro_discount_percentage": Decimal("25.00"),
+        "formula": "Premium = distancia × precio por km + costo fijo; Ahorro = Premium × (1 - descuento / 100)",
+        "source": "historical_quotes",
+    }
+
+
+def validate_tariff_configuration(config: dict[str, Any]) -> dict[str, Any]:
+    result = {**default_tariff_configuration(), **config}
+    result["rate_id"] = int(result["rate_id"])
+    for key in ("premium_price_per_km", "premium_fixed_cost", "ahorro_discount_percentage"):
+        if result[key] is not None:
+            result[key] = Decimal(str(result[key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if result["premium_price_per_km"] is not None and result["premium_price_per_km"] <= 0:
+        raise ValueError("premium_price_per_km debe ser mayor que cero")
+    if result["premium_fixed_cost"] is not None and result["premium_fixed_cost"] < 0:
+        raise ValueError("premium_fixed_cost no puede ser negativo")
+    discount = result["ahorro_discount_percentage"]
+    if discount is None or discount < 0 or discount > 100:
+        raise ValueError("ahorro_discount_percentage debe estar entre 0 y 100")
+    return result
+
+
+def load_tariff_configuration() -> dict[str, Any]:
+    """Lee la configuración vigente; los perfiles históricos son el fallback de tarifa."""
+    from app.core.database import get_cursor
+
+    with get_cursor() as cur:
+        cur.execute(
+            """SELECT id, rate_id, premium_price_per_km, premium_fixed_cost,
+                      ahorro_discount_percentage, updated_by, updated_at
+                 FROM livre_tariff_configuration WHERE id = 1"""
+        )
+        row = cur.fetchone()
+    return validate_tariff_configuration(dict(row) if row else {})
+
+
+def historical_options(
+    distance_km: Decimal,
+    profiles: list[dict[str, Any]] | None = None,
+    tariff_config: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    profiles_were_provided = profiles is not None
+    profiles = profiles if profiles_were_provided else load_historical_profiles()
+    if tariff_config is None:
+        tariff_config = default_tariff_configuration() if profiles_were_provided else load_tariff_configuration()
+    config = validate_tariff_configuration(tariff_config)
     options = [
         calculate_quote(
             distance_km=distance_km,
@@ -153,8 +203,20 @@ def historical_options(distance_km: Decimal, profiles: list[dict[str, Any]] | No
     ]
     premium = next((item for item in options if str(item["transportTypeId"]) == PREMIUM_SERVICE_TYPE_ID), None)
     ahorro = next((item for item in options if str(item["transportTypeId"]) == AHORRO_SERVICE_TYPE_ID), None)
+    if premium and config["premium_price_per_km"] is not None and config["premium_fixed_cost"] is not None:
+        premium = calculate_quote(
+            distance_km=distance_km,
+            price_per_km=config["premium_price_per_km"],
+            fixed_cost=config["premium_fixed_cost"],
+            rate_id=config["rate_id"],
+            transport_type_id=PREMIUM_SERVICE_TYPE_ID,
+        )
+        options = [premium if str(item["transportTypeId"]) == PREMIUM_SERVICE_TYPE_ID else item for item in options]
     if premium and ahorro:
-        ahorro_price = _money(Decimal(str(premium["price"])) * AHORRO_PRICE_FACTOR)
+        factor = Decimal("1") - config["ahorro_discount_percentage"] / Decimal("100")
+        ahorro_price = _money(Decimal(str(premium["price"])) * factor)
         for key in ("price", "pricePointToPoint", "totalCostPrice"):
             ahorro[key] = ahorro_price
+        ahorro["tariffDiscountPercentage"] = float(config["ahorro_discount_percentage"])
+        premium["tariffDiscountPercentage"] = 0.0
     return options

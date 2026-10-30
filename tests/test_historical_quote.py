@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from app.integrations.historical_quote import calculate_quote, historical_options
+from app.integrations.historical_quote import calculate_quote, historical_options, validate_tariff_configuration
 from app.integrations import google_maps
 
 
@@ -131,3 +131,32 @@ def test_google_route_denied_falls_back_to_osrm(monkeypatch):
         {"latitude": -38.7, "longitude": -62.2},
         {"latitude": -38.69, "longitude": -62.21},
     ) == 3.2
+
+
+def test_tariff_configuration_changes_premium_and_ahorro_together():
+    config = {
+        "rate_id": 7000,
+        "premium_price_per_km": "1000",
+        "premium_fixed_cost": "500",
+        "ahorro_discount_percentage": "20",
+    }
+    normalized = validate_tariff_configuration(config)
+    options = historical_options(Decimal("10"), [
+        {"rate_id": 6243, "transport_type_id": "1", "price_per_km": "1", "fixed_cost": "1"},
+        {"rate_id": 6243, "transport_type_id": "2", "price_per_km": "1", "fixed_cost": "1"},
+    ], normalized)
+    premium, ahorro = options
+    assert premium["price"] == 10500
+    assert ahorro["price"] == 8400
+    assert ahorro["tariffDiscountPercentage"] == 20.0
+    assert premium["rateId"] == 7000
+
+
+def test_tariff_configuration_rejects_invalid_values():
+    for key, value in (("premium_price_per_km", "0"), ("premium_fixed_cost", "-1"), ("ahorro_discount_percentage", "101")):
+        try:
+            validate_tariff_configuration({key: value})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected {key} to fail")
