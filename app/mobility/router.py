@@ -1140,6 +1140,22 @@ def driver_update_live_location(
         payload.device_id,
         row["location_updated_at"],
     )
+    # Una muestra por ventana de 30 minutos permite medir suspensiones reales
+    # sin guardar coordenadas ni inundar los logs con cada pulso.
+    cur.execute(
+        """
+        INSERT INTO livre_driver_heartbeat_diagnostics
+            (driver_user_id, device_id, bucket_start, last_received_at)
+        VALUES (
+            %s, %s,
+            to_timestamp(floor(extract(epoch from NOW()) / 1800) * 1800),
+            NOW()
+        )
+        ON CONFLICT (driver_user_id, device_id, bucket_start)
+        DO UPDATE SET last_received_at = EXCLUDED.last_received_at
+        """,
+        (user["id"], payload.device_id),
+    )
     return {"status": "updated", "location_updated_at": row["location_updated_at"]}
 
 

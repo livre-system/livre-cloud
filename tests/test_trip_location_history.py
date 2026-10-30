@@ -44,6 +44,10 @@ def test_route_history_migration_creates_own_table_and_indexes():
     assert "CREATE TABLE IF NOT EXISTS livre_trip_location_history" in migration
     assert "REFERENCES livi_trips(id) ON DELETE CASCADE" in migration
     assert "idx_livre_trip_location_history_trip_time" in migration
+    assert "idx_livre_trip_location_history_driver" in migration
+    diagnostics = open("app/migrations/20261030_driver_heartbeat_diagnostics.sql").read()
+    assert "livre_driver_heartbeat_diagnostics" in diagnostics
+    assert "PRIMARY KEY (driver_user_id, device_id, bucket_start)" in diagnostics
 
 
 def test_livreuser_is_allowed_to_view_routes():

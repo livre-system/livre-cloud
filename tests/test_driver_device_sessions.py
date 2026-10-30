@@ -80,8 +80,9 @@ def test_live_location_updates_after_valid_device_session():
         user=user(),
     )
     assert result["status"] == "updated"
-    assert len(cur.calls) == 2
+    assert len(cur.calls) == 3
     assert "UPDATE livre_driver_accounts" in cur.calls[1][0]
+    assert "livre_driver_heartbeat_diagnostics" in cur.calls[2][0]
 
 
 def test_live_location_does_not_write_after_revoked_session():
