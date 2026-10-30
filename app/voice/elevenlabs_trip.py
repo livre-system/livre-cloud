@@ -226,6 +226,11 @@ def _save_trip(
     source: str = "whatsapp",
     status: str = "searching",
     scheduled_at: datetime | None = None,
+    payment_status: str | None = None,
+    payment_method: str | None = None,
+    payment_provider: str | None = None,
+    paid_at: datetime | None = None,
+    payment_reference: str | None = None,
 ) -> tuple[int, str]:
     """Inserta el viaje con la distribución comercial canónica de Livre."""
     if original_fare is not None or fare is not None:
@@ -246,8 +251,9 @@ def _save_trip(
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
-                 activity_type, source, status, scheduled_at, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 activity_type, source, status, scheduled_at, payment_status, payment_method,
+                 payment_provider, paid_at, payment_reference, created_at, updated_at)
+                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
@@ -270,6 +276,11 @@ def _save_trip(
                 source,
                 status,
                 scheduled_at,
+                payment_status,
+                payment_method,
+                payment_provider,
+                paid_at,
+                payment_reference,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
             ),
@@ -676,6 +687,8 @@ async def elevenlabs_trip(request: Request):
         log.warning("[ELEVEN TRIP] sin conversation_id — generando uno de fallback")
         conversation_id = f"fallback_{tool_call_id or 'unknown'}"
 
+    payment_record = None
+    payment_number = None
     if service_type_id == "2":
         if not payment_id:
             return {"result": "Elegiste Livre Ahorro. Primero hay que generar y pagar el link de Mercado Pago; después confirmamos el viaje."}
@@ -685,12 +698,14 @@ async def elevenlabs_trip(request: Request):
             return {"result": "El identificador del pago no es válido. Generemos un nuevo link de pago."}
         with get_cursor() as cur:
             cur.execute(
-                """SELECT id FROM livi_payments
+                """SELECT id, payment_method, payment_provider, paid_at, external_reference
+                   FROM livi_payments
                    WHERE id = %s AND quote_id = %s AND conversation_id = %s
                      AND whatsapp_user = %s AND service_type_id = '2' AND status = 'approved'""",
                 (payment_number, quote_id, conversation_id, whatsapp_user),
             )
-            if not cur.fetchone():
+            payment_record = cur.fetchone()
+            if not payment_record:
                 return {"result": "El pago de Livre Ahorro todavía no figura aprobado. Esperá la confirmación o pedí revisar el link."}
 
     # ── 4. Idempotencia ──────────────────────────────────────────────────
@@ -749,6 +764,11 @@ async def elevenlabs_trip(request: Request):
         service_type_name = {"1": "Premium", "2": "Ahorro"}.get(
             service_type_id, selected.get("serviceName")
         )
+        payment_status = "paid" if payment_record else ("pay_on_trip" if service_type_id == "1" else None)
+        payment_method = payment_record.get("payment_method") if payment_record else ("cash" if service_type_id == "1" else None)
+        payment_provider = payment_record.get("payment_provider") if payment_record else None
+        paid_at = payment_record.get("paid_at") if payment_record else None
+        payment_reference = payment_record.get("external_reference") if payment_record else None
         trip_id, tracking_token = _save_trip(
             conversation_id=conversation_id,
             origen=origen,
@@ -768,6 +788,11 @@ async def elevenlabs_trip(request: Request):
             source=source,
             status=status,
             scheduled_at=scheduled_at,
+            payment_status=payment_status,
+            payment_method=payment_method,
+            payment_provider=payment_provider,
+            paid_at=paid_at,
+            payment_reference=payment_reference,
         )
         if quote_id:
             with get_cursor() as cur:

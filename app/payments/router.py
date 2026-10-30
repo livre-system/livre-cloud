@@ -189,8 +189,14 @@ def mercadopago_webhook(request: Request, payload: dict):
         raise HTTPException(status_code=502, detail="No se pudo verificar el pago en Mercado Pago") from exc
     reference = provider.get("external_reference")
     status = str(provider.get("status") or "unknown")
+    payment_method = str(provider.get("payment_method_id") or "").strip() or None
+    payment_type = str(provider.get("payment_type_id") or "").strip() or None
+    paid_at = provider.get("date_approved") or provider.get("date_last_updated")
     with get_cursor() as cur:
-        cur.execute("UPDATE livi_payments SET status = %s, provider_payment_id = %s, provider_response = %s::jsonb, updated_at = NOW() WHERE external_reference = %s RETURNING id", (status, provider_payment_id, json.dumps(provider), reference))
+        cur.execute("""UPDATE livi_payments
+            SET status = %s, payment_method = %s, payment_type = %s, paid_at = %s,
+                provider_payment_id = %s, provider_response = %s::jsonb, updated_at = NOW()
+            WHERE external_reference = %s RETURNING id""", (status, payment_method, payment_type, paid_at, provider_payment_id, json.dumps(provider), reference))
         row = cur.fetchone()
     return {"received": True, "payment_id": row["id"] if row else None, "status": status}
 

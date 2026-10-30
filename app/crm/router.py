@@ -547,6 +547,7 @@ def _local_trip_page(
                    assigned_driver_user_id, tracking_driver_name,
                    tracking_plate, tracking_vehicle_model, tracking_vehicle_color,
                    service_type_id, service_type_name, scheduled_at,
+                   payment_status, payment_method, payment_provider, paid_at, payment_reference,
                    created_at, updated_at
             FROM livi_trips{where}
             ORDER BY created_at DESC LIMIT %s OFFSET %s""",
@@ -1267,7 +1268,11 @@ def _travel_history_page(
         params.append(driver_id.strip())
     where = " WHERE " + " AND ".join(filters) if filters else ""
     from_sql = """FROM livi_trips t
-        LEFT JOIN livre_users u ON u.id = t.assigned_driver_user_id"""
+        LEFT JOIN livre_users u ON u.id = t.assigned_driver_user_id
+        LEFT JOIN LATERAL (
+            SELECT p.payment_method, p.provider, p.paid_at, p.external_reference, p.status
+            FROM livi_payments p WHERE p.trip_id = t.id ORDER BY p.updated_at DESC LIMIT 1
+        ) p ON TRUE"""
     cur.execute(f"SELECT count(*) AS total {from_sql}{where}", params)
     total = int(cur.fetchone()["total"])
     cur.execute(
@@ -1280,7 +1285,14 @@ def _travel_history_page(
                    CASE WHEN t.status = 'completed'
                         THEN COALESCE(t.original_fare, t.fare) - CASE WHEN t.service_type_id = '1' THEN ROUND(COALESCE(t.original_fare, t.fare) * 0.15, 2) ELSE 0 END
                         ELSE NULL END AS driver_amount,
-                   CASE WHEN t.status = 'completed' AND t.service_type_id = '1' THEN 15.00 ELSE 0 END AS commission_percentage
+                   CASE WHEN t.status = 'completed' AND t.service_type_id = '1' THEN 15.00 ELSE 0 END AS commission_percentage,
+                   COALESCE(t.payment_status, CASE WHEN p.status = 'approved' THEN 'paid' END,
+                            CASE WHEN t.service_type_id = '1' THEN 'pay_on_trip' END) AS payment_status,
+                   COALESCE(t.payment_method, p.payment_method,
+                            CASE WHEN t.service_type_id = '1' THEN 'cash' END) AS payment_method,
+                   COALESCE(t.payment_provider, p.provider) AS payment_provider,
+                   COALESCE(t.paid_at, p.paid_at) AS paid_at,
+                   COALESCE(t.payment_reference, p.external_reference) AS payment_reference
               {from_sql}{where}
              ORDER BY COALESCE(t.updated_at, t.created_at) DESC, t.id DESC
              LIMIT %s OFFSET %s""",

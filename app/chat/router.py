@@ -97,7 +97,9 @@ def _get_operational_context() -> str:
             totals = ", ".join(f"{r['status'] or 'sin_estado'}={r['total']}" for r in cur.fetchall())
             cur.execute("""
                 SELECT id, origen, destino, status, tracking_driver_name,
-                       tracking_plate, created_at, updated_at
+                       tracking_plate, service_type_name, service_type_id,
+                       payment_status, payment_method, payment_provider, paid_at,
+                       created_at, updated_at
                 FROM livi_trips
                 ORDER BY updated_at DESC NULLS LAST
                 LIMIT 12
@@ -108,6 +110,9 @@ def _get_operational_context() -> str:
             lines.append(
                 f"Viaje {row['id']}: {row['status'] or 'sin estado'}; "
                 f"origen={row['origen'] or '—'}; destino={row['destino'] or '—'}; "
+                f"servicio={row['service_type_name'] or row['service_type_id'] or '—'}; "
+                f"pago={row['payment_status'] or '—'} / medio={row['payment_method'] or '—'} / proveedor={row['payment_provider'] or '—'}; "
+                f"pagado={row['paid_at'] or '—'}; "
                 f"chofer={row['tracking_driver_name'] or '—'}; patente={row['tracking_plate'] or '—'}; "
                 f"actualizado={row['updated_at'] or row['created_at']}"
             )

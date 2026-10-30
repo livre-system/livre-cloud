@@ -50,10 +50,10 @@ def test_save_trip_binds_all_insert_columns(monkeypatch):
     assert cursor.query.count("%s") == len(cursor.params)
     assert cursor.params[:5] == ("conv-1", "Origen", "Destino", "5492915650870", "")
     assert isinstance(cursor.params[5], str)
-    assert cursor.params[-6] == "real"
-    assert cursor.params[-5] == "panel"
-    assert cursor.params[-4] == "searching"
-    assert cursor.params[-3] is None
+    assert cursor.params[-11] == "real"
+    assert cursor.params[-10] == "panel"
+    assert cursor.params[-9] == "searching"
+    assert cursor.params[-8] is None
     assert "scheduled_at" in cursor.query
 
 
@@ -72,9 +72,9 @@ def test_save_trip_binds_scheduled_state_and_time(monkeypatch):
         scheduled_at=scheduled_at,
     )
 
-    assert cursor.params[-5] == "whatsapp"
-    assert cursor.params[-4] == "scheduled"
-    assert cursor.params[-3] == scheduled_at
+    assert cursor.params[-10] == "whatsapp"
+    assert cursor.params[-9] == "scheduled"
+    assert cursor.params[-8] == scheduled_at
 
 
 def test_format_quote_message_numbers_options_and_uses_lines():
