@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from app.crm.router import _require_livreuser
+from app.crm.router import _require_crm_admin, _require_crm_operator, _require_livreuser
 from app.mobility.router import driver_update_location
 from app.mobility.schemas import LocationUpdate
 
@@ -76,6 +76,21 @@ def test_location_history_insert_is_gated_to_accepted_trip_states(monkeypatch):
     assert history_call[1] == (-38.7, -62.2, 42, "driver-a")
 
 
+def test_named_crm_users_have_operator_and_admin_privileges():
+    for username in ("livreuser", "smoreno", "mgiagante"):
+        user_identity = {"id": f"{username}-id", "username": username}
+        _require_crm_operator(user_identity)
+        _require_crm_admin(user_identity)
+
+
+def test_unprivileged_user_without_role_is_rejected():
+    user_identity = {"id": "other-id", "username": "another-user"}
+    with pytest.raises(HTTPException) as operator_exc:
+        _require_crm_operator(user_identity)
+    assert operator_exc.value.status_code == 403
+    with pytest.raises(HTTPException) as admin_exc:
+        _require_crm_admin(user_identity)
+    assert admin_exc.value.status_code == 403
 def test_location_history_is_not_recorded_for_unaccepted_trip(monkeypatch):
     monkeypatch.setattr("app.mobility.router._driver_trip", lambda trip: trip)
     cur = FakeCursor([

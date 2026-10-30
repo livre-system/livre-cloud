@@ -28,6 +28,17 @@ _RESOURCES = {
 # Keep this list keyed by verified production user_id, not display names:
 # "Perez Ezequiel" and "IBAÑEZ PUCHULO CARLOS MARTIN" are real drivers.
 _HIDDEN_GPS_DRIVER_USER_IDS = ()
+_CRM_PRIVILEGED_USERNAMES = frozenset({"livreuser", "smoreno", "mgiagante"})
+_CRM_OPERATOR_ROLES = frozenset({"crm", "crm_admin", "admin"})
+_CRM_ADMIN_ROLES = frozenset({"crm_admin", "admin"})
+
+
+def _is_privileged_username(username: str | None) -> bool:
+    return str(username or "").strip().lower() in _CRM_PRIVILEGED_USERNAMES
+
+
+def _is_privileged_identity(user: dict) -> bool:
+    return _is_privileged_username(user.get("username")) or _is_privileged_username(user.get("id"))
 
 
 def _live_roles(cur, user: dict) -> tuple[set[str], str | None]:
@@ -56,11 +67,11 @@ def _require_crm_operator(
         # Compatibilidad para llamadas internas directas; las rutas HTTP ya
         # ejecutaron esta misma autorización con el cursor real de FastAPI.
         token_roles = set(user.get("roles") or [])
-        if user.get("id") == "livreuser" or token_roles.intersection({"crm", "crm_admin", "admin"}):
+        if _is_privileged_identity(user) or token_roles.intersection(_CRM_OPERATOR_ROLES):
             return user
         raise HTTPException(status_code=403, detail="Se requiere un rol de operador CRM")
     roles, username = _live_roles(cur, user)
-    if roles.intersection({"crm", "crm_admin", "admin"}) or username == "livreuser":
+    if roles.intersection(_CRM_OPERATOR_ROLES) or _is_privileged_username(username):
         user["roles"] = sorted(roles)
         return user
     raise HTTPException(status_code=403, detail="Se requiere un rol de operador CRM")
@@ -73,11 +84,11 @@ def _require_crm_admin(
     """Autoriza administración con roles vigentes en DB."""
     if not hasattr(cur, "execute"):
         token_roles = set(user.get("roles") or [])
-        if user.get("id") == "livreuser" or token_roles.intersection({"crm_admin", "admin"}):
+        if _is_privileged_identity(user) or token_roles.intersection(_CRM_ADMIN_ROLES):
             return user
         raise HTTPException(status_code=403, detail="Se requiere un rol administrador CRM")
     roles, username = _live_roles(cur, user)
-    if roles.intersection({"crm_admin", "admin"}) or username == "livreuser":
+    if roles.intersection(_CRM_ADMIN_ROLES) or _is_privileged_username(username):
         user["roles"] = sorted(roles)
         return user
     raise HTTPException(status_code=403, detail="Se requiere un rol administrador CRM")
@@ -97,7 +108,7 @@ def _require_livreuser(cur, user: dict) -> None:
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
-    if row["username"] != "livreuser" and not set(row.get("roles") or []).intersection({"crm_admin", "admin"}):
+    if not _is_privileged_username(row["username"]) and not set(row.get("roles") or []).intersection(_CRM_ADMIN_ROLES):
         raise HTTPException(status_code=403, detail="No tenés permiso para ver recorridos")
 
 
