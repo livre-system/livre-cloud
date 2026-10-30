@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 import app.voice.elevenlabs_trip as trip
+from app.mobility.router import should_send_tracking_message
 
 
 def test_ahorro_requires_advance_payment_only_for_passenger_channels():
@@ -15,6 +16,12 @@ def test_arriving_message_contains_private_passenger_tracking_url(monkeypatch):
     monkeypatch.setattr(trip, "TRACKING_BASE_URL", "https://pasajeros.livre.com.ar/seguimiento")
     message = trip.arriving_message({"id": 7, "tracking_token": "tok-abc"})
     assert "https://pasajeros.livre.com.ar/seguimiento/?token=tok-abc" in message
+
+
+def test_tracking_message_is_sent_when_premium_moves_from_assigned_to_arriving():
+    assert should_send_tracking_message("assigned", "arriving") is True
+    assert should_send_tracking_message("searching", "arriving") is True
+    assert should_send_tracking_message("assigned", "in_progress") is False
 
 
 def test_missing_service_id_resolves_from_unique_confirmed_fare():

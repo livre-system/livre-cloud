@@ -39,6 +39,11 @@ from app.mobility.schemas import (
 from app.voice.elevenlabs_trip import send_tracking_message
 
 
+def should_send_tracking_message(previous_status: str | None, new_status: str) -> bool:
+    """El aviso sale cuando el conductor toma un viaje abierto o ya asignado."""
+    return previous_status in {"searching", "assigned"} and new_status == "arriving"
+
+
 PUBLIC_TRACKING_TOKEN_TTL_HOURS = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN_TTL_HOURS", "24")))
 
 
@@ -1135,27 +1140,30 @@ def driver_update_status(
     if previous_status in {"scheduled", "searching"} and payload.status in {"assigned", "arriving"}:
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
         accepted_trip = cur.fetchone()
-        if accepted_trip and not accepted_trip.get("tracking_message_sent_at"):
-            try:
-                conversation_id = send_tracking_message(accepted_trip)
-                cur.execute(
-                    """UPDATE livi_trips
-                       SET tracking_message_sent_at = NOW(),
-                           tracking_message_conversation_id = %s,
-                           tracking_message_error = NULL,
-                           updated_at = NOW()
-                       WHERE id = %s""",
-                    (conversation_id or None, trip_id),
-                )
-            except Exception as exc:
-                cur.execute(
-                    """UPDATE livi_trips
-                       SET tracking_message_error = %s, updated_at = NOW()
-                       WHERE id = %s""",
-                    (str(exc)[:500], trip_id),
-                )
     elif previous_status == "assigned" and payload.status == "arriving":
-        pass
+        cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
+        accepted_trip = cur.fetchone()
+    else:
+        accepted_trip = None
+    if should_send_tracking_message(previous_status, payload.status) and accepted_trip and not accepted_trip.get("tracking_message_sent_at"):
+        try:
+            conversation_id = send_tracking_message(accepted_trip)
+            cur.execute(
+                """UPDATE livi_trips
+                   SET tracking_message_sent_at = NOW(),
+                       tracking_message_conversation_id = %s,
+                       tracking_message_error = NULL,
+                       updated_at = NOW()
+                   WHERE id = %s""",
+                (conversation_id or None, trip_id),
+            )
+        except Exception as exc:
+            cur.execute(
+                """UPDATE livi_trips
+                   SET tracking_message_error = %s, updated_at = NOW()
+                   WHERE id = %s""",
+                (str(exc)[:500], trip_id),
+            )
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user, include_terminal=True))
 
 
