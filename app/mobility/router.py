@@ -291,6 +291,56 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     return _public_trip(trip)
 
 
+@router.get("/tracking/{tracking_token}/route")
+def public_tracking_route(
+    tracking_token: str,
+    phase: str = Query("pickup", pattern="^(pickup|trip)$"),
+    cur=Depends(get_cursor_dep),
+):
+    """Trazado vial público del viaje; autoriza exclusivamente el token privado."""
+    cur.execute(
+        """SELECT t.id, t.origen, t.destino, t.status,
+                  t.origen_latitude, t.origen_longitude,
+                  t.destino_latitude, t.destino_longitude,
+                  a.current_latitude, a.current_longitude
+           FROM livi_trips t
+           LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
+           WHERE t.tracking_token = %s
+             AND t.created_at > NOW() - (%s * INTERVAL '1 hour')""",
+        (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
+    )
+    trip = cur.fetchone()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
+    if trip["status"] not in {"assigned", "arriving", "in_progress"}:
+        raise HTTPException(status_code=409, detail="El viaje todavía no tiene una ruta activa")
+
+    if phase == "pickup":
+        origin = {"latitude": trip["current_latitude"], "longitude": trip["current_longitude"]}
+        destination = {"latitude": trip["origen_latitude"], "longitude": trip["origen_longitude"]}
+        address_fallbacks = (None, trip["origen"])
+    else:
+        origin = {"latitude": trip["origen_latitude"], "longitude": trip["origen_longitude"]}
+        destination = {"latitude": trip["destino_latitude"], "longitude": trip["destino_longitude"]}
+        address_fallbacks = (trip["origen"], trip["destino"])
+
+    points = [origin, destination]
+    for index, point in enumerate(points):
+        if any(value is None for value in point.values()):
+            address = address_fallbacks[index]
+            if not address:
+                raise HTTPException(status_code=409, detail="La ruta todavía no tiene coordenadas suficientes")
+            try:
+                points[index] = geocode_address(address)
+            except GeocodingError as exc:
+                raise HTTPException(status_code=409, detail="No se pudo ubicar una dirección del viaje") from exc
+    try:
+        route = route_geometry(*points)
+    except GeocodingError as exc:
+        raise HTTPException(status_code=502, detail="No se pudo calcular la ruta vial") from exc
+    return {"trip_id": trip["id"], "phase": phase, **route}
+
+
 @router.get("/tracking/{tracking_token}/messages")
 def public_trip_messages(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Mensajería del pasajero, aislada del canal interno de base."""

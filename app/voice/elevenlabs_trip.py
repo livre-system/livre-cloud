@@ -65,7 +65,7 @@ router = APIRouter(prefix="/elevenlabs", tags=["elevenlabs"])
 
 TRACKING_BASE_URL = os.getenv(
     "PASSENGER_TRACKING_BASE_URL",
-    "https://livre-system.github.io/livre-pasajeros/",
+    "https://livre-pasajeros-production.up.railway.app",
 ).rstrip("/")
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message"
 ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
@@ -81,8 +81,18 @@ ELEVENLABS_WHATSAPP_REJECTION_TEMPLATE_NAME = os.getenv(
 ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv(
     "ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE", "es_AR"
 )
-ARRIVING_MESSAGE = "Tu viaje Livre fue tomado. El conductor ya está en camino."
 REJECTION_MESSAGE = "El conductor no pudo tomar tu viaje. Estamos buscando otra opción."
+
+
+def arriving_message(trip: dict) -> str:
+    """Texto único para el template aprobado; incluye el seguimiento privado."""
+    tracking_url = _tracking_url(trip.get("tracking_token"))
+    if not tracking_url:
+        raise RuntimeError(f"El viaje {trip.get('id')} no tiene tracking_token")
+    return (
+        "Tu viaje Livre fue tomado. El conductor ya está en camino. "
+        f"Seguilo acá: {tracking_url}"
+    )
 
 
 def send_rejection_message(trip: dict) -> str:
@@ -147,7 +157,7 @@ def send_tracking_message(trip: dict) -> str:
         "whatsapp_user_id": whatsapp_user,
         "template_name": ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [{"type": "body", "parameters": [{"text": ARRIVING_MESSAGE}]}],
+        "template_params": [{"type": "body", "parameters": [{"text": arriving_message(trip)}]}],
         "agent_id": ELEVENLABS_AGENT_ID,
     }
     response = httpx.post(

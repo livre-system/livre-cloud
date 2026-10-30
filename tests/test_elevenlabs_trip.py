@@ -11,6 +11,12 @@ def test_ahorro_requires_advance_payment_only_for_passenger_channels():
     assert trip.requires_advance_payment("1", "whatsapp") is False
 
 
+def test_arriving_message_contains_private_passenger_tracking_url(monkeypatch):
+    monkeypatch.setattr(trip, "TRACKING_BASE_URL", "https://pasajeros.livre.com.ar/seguimiento")
+    message = trip.arriving_message({"id": 7, "tracking_token": "tok-abc"})
+    assert "https://pasajeros.livre.com.ar/seguimiento/?token=tok-abc" in message
+
+
 class Cursor:
     def __init__(self):
         self.query = None

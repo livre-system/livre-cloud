@@ -667,3 +667,10 @@ Pendientes explícitos:
 - El síntoma reportado es que una dirección como `Estomba 566` aparece correctamente o casi correctamente en texto, pero el número no se entiende bien en el audio. Todavía no está probado si el número se altera en la transcripción del audio entrante, en el texto generado por el agente o únicamente durante la síntesis TTS.
 - Para resolverlo hace falta una prueba controlada comparando texto `Estomba 566`, texto `Estomba 89` y audio diciendo `Estomba 566`, registrando texto de WhatsApp, transcripción, texto generado y audio. No cambiar prompts ni TTS hasta separar esas etapas.
 - El diagnóstico fue sólo lectura: no se enviaron mensajes, no se generaron viajes y no se modificó el agente de ElevenLabs.
+
+## Seguimiento público desde Pasajeros tras aceptación (2026-10-30)
+
+- Al pasar de `assigned` a `arriving`, el mensaje de WhatsApp usa el `tracking_token` privado y agrega el link de Pasajeros; el fallback productivo es `https://livre-pasajeros-production.up.railway.app` y puede reemplazarse con `PASSENGER_TRACKING_BASE_URL` cuando exista el subdominio definitivo.
+- Se agregó `GET /mobility/tracking/{tracking_token}/route?phase=pickup|trip`. Valida el token y TTL, usa coordenadas/direcciones propias de Livre Cloud y calcula la geometría vial del mismo proveedor interno que usa Conductor; no expone endpoints ni credenciales del conductor.
+- Pasajeros dibuja el tramo conductor→retiro después de la aceptación y cambia a retiro→destino cuando el viaje entra en `in_progress`; el primer tramo se recalcula con cada actualización GPS.
+- Pendiente externo: definir DNS/subdominio y configurarlo en Railway; no se inventó un dominio ni se publicó una configuración DNS sin autorización. Pendiente operativo: comprobar en un viaje real el outbound 200 y la recepción del link.
