@@ -1132,27 +1132,30 @@ def driver_update_status(
             "DELETE FROM livre_trip_location_history WHERE trip_id = %s",
             (trip_id,),
         )
-    if previous_status == "assigned" and payload.status == "arriving":
+    if previous_status in {"scheduled", "searching"} and payload.status in {"assigned", "arriving"}:
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
-        arriving_trip = cur.fetchone()
-        try:
-            conversation_id = send_tracking_message(arriving_trip)
-            cur.execute(
-                """UPDATE livi_trips
-                   SET tracking_message_sent_at = NOW(),
-                       tracking_message_conversation_id = %s,
-                       tracking_message_error = NULL,
-                       updated_at = NOW()
-                   WHERE id = %s""",
-                (conversation_id or None, trip_id),
-            )
-        except Exception as exc:
-            cur.execute(
-                """UPDATE livi_trips
-                   SET tracking_message_error = %s, updated_at = NOW()
-                   WHERE id = %s""",
-                (str(exc)[:500], trip_id),
-            )
+        accepted_trip = cur.fetchone()
+        if accepted_trip and not accepted_trip.get("tracking_message_sent_at"):
+            try:
+                conversation_id = send_tracking_message(accepted_trip)
+                cur.execute(
+                    """UPDATE livi_trips
+                       SET tracking_message_sent_at = NOW(),
+                           tracking_message_conversation_id = %s,
+                           tracking_message_error = NULL,
+                           updated_at = NOW()
+                       WHERE id = %s""",
+                    (conversation_id or None, trip_id),
+                )
+            except Exception as exc:
+                cur.execute(
+                    """UPDATE livi_trips
+                       SET tracking_message_error = %s, updated_at = NOW()
+                       WHERE id = %s""",
+                    (str(exc)[:500], trip_id),
+                )
+    elif previous_status == "assigned" and payload.status == "arriving":
+        pass
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user, include_terminal=True))
 
 
