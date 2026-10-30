@@ -134,6 +134,29 @@ def _tracking_url(token: str | None) -> str | None:
     return f"{TRACKING_BASE_URL}/?token={token}" if token else None
 
 
+def resolve_service_type_id(explicit_id: str | None, label: str, selected_fare, options: list[dict] | None) -> str | None:
+    """Resuelve la opción sin inventar Ahorro cuando LIVI omite el id."""
+    normalized = str(explicit_id or "").strip()
+    if normalized in {"1", "2"}:
+        return normalized
+    text = str(label or "").casefold()
+    if "premium" in text:
+        return "1"
+    if "ahorro" in text:
+        return "2"
+    if selected_fare is not None:
+        try:
+            amount = Decimal(str(selected_fare).replace("$", "").replace(",", "").strip())
+            matches = [item for item in (options or []) if Decimal(str(item.get("pricePointToPoint", item.get("price")))) == amount]
+            if len(matches) == 1:
+                candidate = str(matches[0].get("transportTypeId") or "")
+                if candidate in {"1", "2"}:
+                    return candidate
+        except (TypeError, ValueError, ArithmeticError):
+            pass
+    return None
+
+
 def requires_advance_payment(service_type_id: str, source: str) -> bool:
     """Livre Ahorro requiere pago previo sólo en canales de pasajero."""
     return str(service_type_id) == "2" and str(source or "").strip().lower() not in {"panel", "crm"}
@@ -651,8 +674,20 @@ async def elevenlabs_trip(request: Request):
         parameters.get("service_type_id")
         or body.get("service_type_id")
         or data.get("service_type_id")
-        or "2"
-    )
+        or ""
+    ).strip() or None
+    service_type_label = str(
+        parameters.get("service_type_name")
+        or parameters.get("service")
+        or parameters.get("product")
+        or body.get("service_type_name")
+        or body.get("service")
+        or body.get("product")
+        or data.get("service_type_name")
+        or data.get("service")
+        or data.get("product")
+        or ""
+    ).strip()
 
     selected_fare = (
         parameters.get("fare")
@@ -727,6 +762,18 @@ async def elevenlabs_trip(request: Request):
         log.warning("[ELEVEN TRIP] sin conversation_id — generando uno de fallback")
         conversation_id = f"fallback_{tool_call_id or 'unknown'}"
 
+    quote_snapshot = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user) if quote_id else None
+    if quote_id and not quote_snapshot:
+        return {"result": "La cotización de WhatsApp no existe, venció o ya fue usada."}
+    service_type_id = resolve_service_type_id(
+        service_type_id,
+        service_type_label,
+        selected_fare,
+        (quote_snapshot or {}).get("options") if quote_snapshot else None,
+    )
+    if service_type_id is None:
+        return {"result": "No recibí si elegiste Livre Premium o Livre Ahorro. Respondé 1 o 2 para confirmar."}
+
     payment_record = None
     payment_number = None
     if requires_advance_payment(service_type_id, source):
@@ -766,7 +813,6 @@ async def elevenlabs_trip(request: Request):
 
     # ── 5. Guardar el viaje ──────────────────────────────────────────────────
     try:
-        quote_snapshot = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user) if quote_id else None
         if quote_id and not quote_snapshot:
             raise RuntimeError("La cotización de WhatsApp no existe, venció o ya fue usada")
         if quote_snapshot:

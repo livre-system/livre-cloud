@@ -17,6 +17,20 @@ def test_arriving_message_contains_private_passenger_tracking_url(monkeypatch):
     assert "https://pasajeros.livre.com.ar/seguimiento/?token=tok-abc" in message
 
 
+def test_missing_service_id_resolves_from_unique_confirmed_fare():
+    options = [
+        {"transportTypeId": "1", "pricePointToPoint": 9200},
+        {"transportTypeId": "2", "pricePointToPoint": 7360},
+    ]
+    assert trip.resolve_service_type_id(None, "", "9200", options) == "1"
+    assert trip.resolve_service_type_id(None, "", "7360", options) == "2"
+    assert trip.resolve_service_type_id(None, "", None, options) is None
+
+
+def test_explicit_service_id_wins_over_label_and_fare():
+    assert trip.resolve_service_type_id("1", "Ahorro", "7360", []) == "1"
+
+
 class Cursor:
     def __init__(self):
         self.query = None
