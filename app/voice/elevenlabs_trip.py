@@ -21,6 +21,8 @@ Idempotente: un conversation_id = un viaje. Si ElevenLabs reintenta, devuelve OK
 El registro y el seguimiento son propios de Livre; MAGIIS no participa.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -42,6 +44,22 @@ from app.integrations.historical_quote import (
 )
 
 log = logging.getLogger(__name__)
+
+ELEVENLABS_WEBHOOK_SECRET = os.getenv("ELEVENLABS_WEBHOOK_SECRET", "")
+
+
+def _verify_elevenlabs_signature(raw_body: bytes, signature_header: str) -> bool:
+    try:
+        parts = dict(part.split("=", 1) for part in signature_header.split(","))
+        timestamp = parts.get("t", "")
+        provided = parts.get("v0", "")
+        signed_payload = f"{timestamp}.{raw_body.decode('utf-8')}"
+        expected = hmac.new(
+            ELEVENLABS_WEBHOOK_SECRET.encode(), signed_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        return hmac.compare_digest(expected, provided)
+    except Exception:
+        return False
 
 router = APIRouter(prefix="/elevenlabs", tags=["elevenlabs"])
 
@@ -498,6 +516,9 @@ async def elevenlabs_trip_status(request: Request):
 @router.get("/tracking/{tracking_token}")
 def passenger_tracking(tracking_token: str):
     """Devuelve sólo los datos públicos mínimos del viaje para el mapa."""
+    # El link de voz no puede seguir válido indefinidamente. Mantener el mismo TTL
+    # que el endpoint público de movilidad evita contratos inconsistentes.
+    public_tracking_ttl_hours = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN_TTL_HOURS", "24")))
     with get_cursor() as cur:
         cur.execute(
             """
@@ -508,9 +529,10 @@ def passenger_tracking(tracking_token: str):
                    tracking_location_updated_at, tracking_location_visible_at
             FROM livi_trips
             WHERE tracking_token = %s
+              AND created_at > NOW() - (%s * INTERVAL '1 hour')
             LIMIT 1;
             """,
-            [tracking_token],
+            [tracking_token, public_tracking_ttl_hours],
         )
         trip = cur.fetchone()
     if not trip:
@@ -828,9 +850,23 @@ async def elevenlabs_trip(request: Request):
 
 @router.post("/cancel")
 async def elevenlabs_cancel(request: Request):
-    """Cancela el último viaje activo registrado por Livre."""
+    """Cancela el último viaje activo registrado por Livre.
+
+    Sólo acepta llamadas firmadas por el webhook/tool configurado.
+    """
+    if not ELEVENLABS_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Webhook de ElevenLabs no configurado")
+    sig_header = request.headers.get("elevenlabs-signature", "")
+    if not sig_header:
+        raise HTTPException(status_code=401, detail="Firma requerida")
     try:
-        body = await request.json()
+        raw_body = await request.body()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
+    if not _verify_elevenlabs_signature(raw_body, sig_header):
+        raise HTTPException(status_code=401, detail="Firma inválida")
+    try:
+        body = json.loads(raw_body)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
 

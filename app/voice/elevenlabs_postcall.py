@@ -161,10 +161,14 @@ async def elevenlabs_post_call(request: Request):
 
     # ── 2. Validar firma ────────────────────────────────────────────────────
     sig_header = request.headers.get("elevenlabs-signature", "")
-    if ELEVENLABS_WEBHOOK_SECRET and sig_header:
-        if not _verify_signature(raw_body, sig_header):
-            log.error("[ELEVEN POSTCALL] Firma inválida — request rechazado")
-            raise HTTPException(status_code=401, detail="Firma inválida")
+    if not ELEVENLABS_WEBHOOK_SECRET:
+        log.error("[ELEVEN POSTCALL] ELEVENLABS_WEBHOOK_SECRET no configurado — request rechazado")
+        raise HTTPException(status_code=503, detail="Webhook de ElevenLabs no configurado")
+    if not sig_header:
+        raise HTTPException(status_code=401, detail="Firma requerida")
+    if not _verify_signature(raw_body, sig_header):
+        log.error("[ELEVEN POSTCALL] Firma inválida — request rechazado")
+        raise HTTPException(status_code=401, detail="Firma inválida")
 
     # ── 3. Parsear JSON ─────────────────────────────────────────────────────
     try:

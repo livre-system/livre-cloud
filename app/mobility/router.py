@@ -1205,7 +1205,7 @@ def driver_update_location(
         FROM livi_trips
         WHERE id = %s
           AND assigned_driver_user_id = %s
-          AND status IN ('accepted', 'arriving', 'started', 'in_progress')
+          AND status IN ('assigned', 'arriving', 'in_progress')
         """,
         (payload.latitude, payload.longitude, trip_id, user["id"]),
     )
