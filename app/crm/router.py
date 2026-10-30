@@ -210,7 +210,12 @@ def update_tariff_configuration(
 ):
     """Actualiza tarifa Premium y descuento Ahorro; no modifica viajes existentes."""
     try:
-        rate_id = int(payload.get("rate_id", 6243))
+        rate_id = payload.get("rate_id")
+        if rate_id is None:
+            cur.execute("SELECT rate_id FROM livre_tariff_configuration WHERE id = 1")
+            current = cur.fetchone()
+            rate_id = current["rate_id"] if current else 6243
+        rate_id = int(rate_id)
         premium_price_per_km = Decimal(str(payload["premium_price_per_km"]))
         premium_fixed_cost = Decimal(str(payload["premium_fixed_cost"]))
         ahorro_discount_percentage = Decimal(str(payload["ahorro_discount_percentage"]))
