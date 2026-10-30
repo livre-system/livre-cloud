@@ -338,13 +338,15 @@ def _run_local_quote(origen: str, destino: str) -> dict:
 
 
 def _format_quote_message(options: list[dict]) -> str:
-    """Presenta las dos alternativas en un formato breve y fácil de elegir."""
+    """Presenta las dos alternativas con su forma de pago explícita."""
     lines = ["Estas son las opciones para tu viaje:"]
     for index, option in enumerate(options, 1):
-        service_name = option.get("serviceName", "servicio")
+        service_id = str(option.get("transportTypeId") or index)
+        service_name = "Livre Premium" if service_id == "1" else "Livre Ahorro" if service_id == "2" else option.get("serviceName", "servicio")
         price = option.get("pricePointToPoint", option.get("price", ""))
-        lines.append(f"{index}. {service_name}: ${price}")
-    lines.append("Respondé 1 o 2 para elegir.")
+        payment = "efectivo, en el momento" if service_id == "1" else "pago anticipado con tarjeta débito/crédito o Mercado Pago"
+        lines.append(f"{index}. {service_name}: ${price} ({payment})")
+    lines.append("Elegí una opción. Premium se paga en efectivo; Ahorro requiere pagar antes de confirmar.")
     return "\n".join(lines)
 
 
@@ -615,6 +617,12 @@ async def elevenlabs_trip(request: Request):
         or data.get("quote_id")
         or ""
     ).strip() or None
+    payment_id = str(
+        parameters.get("payment_id")
+        or body.get("payment_id")
+        or data.get("payment_id")
+        or ""
+    ).strip() or None
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
     activity_type = str(
@@ -668,7 +676,24 @@ async def elevenlabs_trip(request: Request):
         log.warning("[ELEVEN TRIP] sin conversation_id — generando uno de fallback")
         conversation_id = f"fallback_{tool_call_id or 'unknown'}"
 
-    # ── 4. Idempotencia ──────────────────────────────────────────────────────
+    if service_type_id == "2":
+        if not payment_id:
+            return {"result": "Elegiste Livre Ahorro. Primero hay que generar y pagar el link de Mercado Pago; después confirmamos el viaje."}
+        try:
+            payment_number = int(payment_id)
+        except ValueError:
+            return {"result": "El identificador del pago no es válido. Generemos un nuevo link de pago."}
+        with get_cursor() as cur:
+            cur.execute(
+                """SELECT id FROM livi_payments
+                   WHERE id = %s AND quote_id = %s AND conversation_id = %s
+                     AND whatsapp_user = %s AND service_type_id = '2' AND status = 'approved'""",
+                (payment_number, quote_id, conversation_id, whatsapp_user),
+            )
+            if not cur.fetchone():
+                return {"result": "El pago de Livre Ahorro todavía no figura aprobado. Esperá la confirmación o pedí revisar el link."}
+
+    # ── 4. Idempotencia ──────────────────────────────────────────────────
     existing = _get_existing_trip(conversation_id)
     if existing:
         log.info(
@@ -749,6 +774,12 @@ async def elevenlabs_trip(request: Request):
                 cur.execute(
                     "UPDATE livi_whatsapp_quotes SET consumed_at = NOW() WHERE quote_id = %s",
                     (quote_id,),
+                )
+        if payment_id:
+            with get_cursor() as cur:
+                cur.execute(
+                    "UPDATE livi_payments SET trip_id = %s, tracking_token = %s, completed_at = NOW(), updated_at = NOW() WHERE id = %s AND trip_id IS NULL",
+                    (trip_id, tracking_token, int(payment_id)),
                 )
         log.info(f"[ELEVEN TRIP] quote consumed locally quote_id={quote_id!r}")
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")

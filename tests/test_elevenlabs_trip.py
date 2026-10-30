@@ -85,7 +85,7 @@ def test_format_quote_message_numbers_options_and_uses_lines():
 
     assert message == (
         "Estas son las opciones para tu viaje:\n"
-        "1. Livre Premium: $4410\n"
-        "2. Livre Ahorro: $3308\n"
-        "Respondé 1 o 2 para elegir."
+        "1. Livre Premium: $4410 (efectivo, en el momento)\n"
+        "2. Livre Ahorro: $3308 (pago anticipado con tarjeta débito/crédito o Mercado Pago)\n"
+        "Elegí una opción. Premium se paga en efectivo; Ahorro requiere pagar antes de confirmar."
     )
