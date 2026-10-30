@@ -197,8 +197,8 @@ def _tariff_payload(cur) -> dict:
 
 
 @router.get("/tariff")
-def get_tariff_configuration(user: dict = Depends(_require_crm_admin), cur=Depends(get_cursor_dep)):
-    """Devuelve la configuración vigente de tarifas a administradores CRM."""
+def get_tariff_configuration(user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
+    """Devuelve la configuración vigente a operadores CRM; solo admin la modifica."""
     return _tariff_payload(cur)
 
 
