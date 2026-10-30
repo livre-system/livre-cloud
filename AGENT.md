@@ -645,12 +645,12 @@ Pendientes explícitos:
 ## Flujo Livre Ahorro y pagos anticipados (2026-10-30)
 
 - Se agregó el flujo propio de pago anticipado para `service_type_id = "2"` (Livre Ahorro): `POST /elevenlabs/payment-link` valida la cotización/conversación, crea el registro local y solicita a Mercado Pago una preferencia con link de pago; el webhook verifica el estado real antes de completar el pago.
-- La migración `app/migrations/20261030_livi_payments.sql` y el router `app/payments/router.py` fueron publicados, pero requieren `MERCADOPAGO_ACCESS_TOKEN` en Railway producción. Sin esa variable, el endpoint responde HTTP 503 `Mercado Pago todavía no está configurado`; no se genera link ni viaje.
-- En la prueba real del 2026-10-30, la cotización y `POST /elevenlabs/trip` respondieron HTTP 200, pero la selección de Ahorro llamó a `POST /elevenlabs/payment-link` y recibió HTTP 503. La falla está confirmada en configuración de producción, no en el prompt de ElevenLabs.
-- El Access Token debe pertenecer a la cuenta de producción que cobra los viajes de Livre. No documentar el secreto ni usar tokens de otros proyectos. La clave pública no es necesaria para que el backend genere el link.
+- La migración `app/migrations/20261030_livi_payments.sql` y el router `app/payments/router.py` fueron publicados. Railway producción ya tiene `MERCADOPAGO_ACCESS_TOKEN` configurado; no documentar su valor ni exponerlo.
+- El token configurado fue validado contra Mercado Pago producción: la API respondió HTTP 200 para la cuenta argentina. El endpoint de creación sigue protegido por cotización vigente, identidad del pasajero y `service_type_id = "2"`; no se generó una preferencia artificial durante esta verificación.
+- La herramienta activa de ElevenLabs `generar_link_pago` apunta a `POST /elevenlabs/payment-link` y exige `quote_id`, `conversation_id`, `whatsapp_user` y `service_type_id = "2"`. El link se devuelve antes de crear el viaje; el webhook lee el estado real y el viaje sólo se completa cuando el pago figura aprobado.
 - Las solicitudes originadas en `panel`/`crm` no requieren pago anticipado; el pago previo sólo aplica a Ahorro en canales de pasajero (`whatsapp`/`passenger`). Esto evita bloquear viajes creados desde el CRM.
-- Se mejoraron los errores de cotización para devolver una causa accionable en lugar del mensaje genérico. Commits backend publicados: `43631a2` (flujo de pago), `17e529b` (errores de cotización) y `91bc650` (excepción CRM).
-- Pendiente: cargar el Access Token correcto en Railway y repetir una prueba controlada del link, webhook, aprobación y creación posterior del viaje. No afirmar que el cobro está operativo hasta leer de vuelta el link y el estado real del pago.
+- La configuración activa de LIVI fue actualizada a la versión `agtvrsn_9901m6709s4kftntw6fx7hg8rmv7`: al cerrar el pedido informa que el viaje está registrado y que enviará automáticamente el link de seguimiento por el mismo WhatsApp cuando un conductor lo acepte; no afirma que el link ya fue enviado.
+- Validaciones: Mercado Pago HTTP 200, endpoints de pago publicados en OpenAPI, health de Cloud OK, página `payment.html` HTTP 200 y 27 pruebas enfocadas pasan. Pendiente operativo: probar con una cotización real de Ahorro, completar el pago real, verificar el webhook y confirmar la creación del viaje.
 
 ## Continuidad GPS y diagnóstico del conductor (2026-10-30)
 
