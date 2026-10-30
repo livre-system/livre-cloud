@@ -415,7 +415,10 @@ async def elevenlabs_quote(request: Request):
 
     quote = _run_local_quote(origen, destino)
     if quote.get("error"):
-        return {"result": "No pude cotizar el viaje."}
+        error_message = str(quote["error"])
+        if "ambig" in error_message.lower():
+            return {"result": "No pude cotizar el viaje porque la dirección es ambigua. Indicá calle y número, o agregá una referencia más precisa."}
+        return {"result": "No pude cotizar el viaje. Revisá las direcciones e intentá nuevamente."}
     options = [option for option in sorted(
         quote.get("options", []),
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
