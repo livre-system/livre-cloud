@@ -135,6 +135,7 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
     except GeocodingError as exc:
         raise HTTPException(status_code=422, detail="No pudimos ubicar esas direcciones") from exc
     except RuntimeError as exc:
+        logging.getLogger(__name__).exception("passenger quote runtime failure")
         raise HTTPException(status_code=503, detail="La tarifa no está disponible en este momento") from exc
     return {
         "fare": float(option["pricePointToPoint"]),
