@@ -311,6 +311,31 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     return _public_trip(trip)
 
 
+@router.post("/tracking/{tracking_token}/cancel")
+def passenger_cancel_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
+    """Cancela un pedido sólo mientras todavía no fue tomado por un conductor."""
+    cur.execute(
+        """UPDATE livi_trips
+              SET status = 'cancelled', updated_at = NOW()
+            WHERE tracking_token = %s
+              AND created_at > NOW() - (%s * INTERVAL '1 hour')
+              AND status IN ('pending', 'searching', 'scheduled')
+              AND assigned_driver_user_id IS NULL
+            RETURNING id, status""",
+        (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
+    )
+    cancelled = cur.fetchone()
+    if cancelled:
+        return {"trip_id": cancelled["id"], "status": cancelled["status"]}
+    cur.execute("SELECT status FROM livi_trips WHERE tracking_token = %s", (tracking_token,))
+    trip = cur.fetchone()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
+    if trip["status"] in {"assigned", "arriving", "in_progress"}:
+        raise HTTPException(status_code=409, detail="El conductor ya tomó el viaje; ya no se puede cancelar")
+    raise HTTPException(status_code=409, detail="El viaje ya no permite cancelaciones")
+
+
 @router.get("/tracking/{tracking_token}/route")
 def public_tracking_route(
     tracking_token: str,
