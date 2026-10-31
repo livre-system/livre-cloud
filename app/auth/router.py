@@ -160,12 +160,12 @@ def login_passenger_firebase(body: FirebasePassengerBody, request: Request):
     """Intercambia un Firebase ID token por la sesión JWT de Livre."""
     login_limiter.check(client_key(request, "passenger-firebase-login"))
     try:
-        import requests
+        from google.auth.transport import requests as google_requests
         from google.oauth2 import id_token as google_id_token
 
         claims = google_id_token.verify_firebase_token(
             body.id_token,
-            requests.Request(),
+            google_requests.Request(),
             audience=FIREBASE_PROJECT_ID,
         )
     except Exception:
