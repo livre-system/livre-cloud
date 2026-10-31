@@ -234,32 +234,32 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
 
 def _save_whatsapp_quote(
     *, conversation_id: str, whatsapp_user: str, origen: str, destino: str,
-    options: list[dict],
+    options: list[dict], source: str = "whatsapp",
 ) -> str:
     quote_id = str(uuid.uuid4())
     with get_cursor() as cur:
         cur.execute(
             """
             INSERT INTO livi_whatsapp_quotes
-                (quote_id, conversation_id, whatsapp_user, origen, destino, options)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb)
-            """,
-            (quote_id, conversation_id, whatsapp_user, origen, destino, json.dumps(options)),
+                (quote_id, conversation_id, whatsapp_user, source, origen, destino, options)
+            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+            """
+            , (quote_id, conversation_id, whatsapp_user, source, origen, destino, json.dumps(options))
         )
     return quote_id
 
 
-def _get_whatsapp_quote(quote_id: str, conversation_id: str, whatsapp_user: str) -> dict | None:
+def _get_whatsapp_quote(quote_id: str, conversation_id: str, whatsapp_user: str, source: str = "whatsapp") -> dict | None:
     with get_cursor() as cur:
         cur.execute(
             """
             SELECT quote_id, origen, destino, options
             FROM livi_whatsapp_quotes
             WHERE quote_id = %s AND conversation_id = %s AND whatsapp_user = %s
-              AND source = 'whatsapp' AND consumed_at IS NULL AND expires_at > NOW()
+              AND source = %s AND consumed_at IS NULL AND expires_at > NOW()
             FOR UPDATE
             """,
-            (quote_id, conversation_id, whatsapp_user),
+            (quote_id, conversation_id, whatsapp_user, source),
         )
         return cur.fetchone()
 
@@ -269,6 +269,7 @@ def _save_trip(
     origen: str,
     destino: str,
     whatsapp_user: str = "",
+    user_id: str | None = None,
     tool_call_id: str = "",
     service_type_id: str = "2",
     fare: Decimal | int | None = None,

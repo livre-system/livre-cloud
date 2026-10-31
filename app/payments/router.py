@@ -11,13 +11,16 @@ import uuid
 from decimal import Decimal
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.database import get_cursor
+from app.core.jwt import require_auth
 from app.integrations.historical_quote import apply_commercial_discount
 from app.voice.elevenlabs_trip import (
     _get_whatsapp_quote,
     _save_trip,
+    _save_whatsapp_quote,
+    _run_local_quote,
     _tracking_url,
 )
 
@@ -70,7 +73,8 @@ def _complete_payment(row: dict) -> dict:
     if row.get("trip_id"):
         return {"trip_id": row["trip_id"], "tracking_url": _tracking_url(row.get("tracking_token")), "status": "approved"}
 
-    quote = _get_whatsapp_quote(row["quote_id"], row["conversation_id"], row["whatsapp_user"])
+    source = row.get("source") or "whatsapp"
+    quote = _get_whatsapp_quote(row["quote_id"], row["conversation_id"], row["whatsapp_user"], source=source)
     if not quote:
         raise HTTPException(status_code=409, detail="La cotización venció o ya fue utilizada")
     selected = _quote_option(quote, str(row["service_type_id"]))
@@ -86,6 +90,7 @@ def _complete_payment(row: dict) -> dict:
         origen=quote["origen"],
         destino=quote["destino"],
         whatsapp_user=row["whatsapp_user"],
+        user_id=row.get("user_id"),
         service_type_id=str(row["service_type_id"]),
         service_type_name="Livre Ahorro",
         quote_id=row["quote_id"],
@@ -95,7 +100,7 @@ def _complete_payment(row: dict) -> dict:
         discount_amount=Decimal(str(financials["discountAmount"])),
         final_fare=Decimal(str(financials["finalFare"])),
         fare_source="official",
-        source="whatsapp",
+        source=source,
         status="searching",
     )
     with get_cursor() as cur:
@@ -120,8 +125,12 @@ def create_mercadopago_link(payload: dict):
     whatsapp_user = str(payload.get("whatsapp_user") or "").strip()
     if not quote_id or not conversation_id or not whatsapp_user:
         raise HTTPException(status_code=422, detail="Faltan datos de la cotización o del pasajero")
+    source = str(payload.get("source") or "whatsapp")
+    user_id = str(payload.get("user_id") or "").strip() or None
+    if source not in {"whatsapp", "passenger"}:
+        raise HTTPException(status_code=422, detail="Origen de pago inválido")
     _access_token()
-    quote = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user)
+    quote = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user, source=source)
     if not quote:
         raise HTTPException(status_code=404, detail="Cotización no encontrada, vencida o ya utilizada")
     selected = _quote_option(quote, "2")
@@ -131,9 +140,9 @@ def create_mercadopago_link(payload: dict):
     with get_cursor() as cur:
         cur.execute(
             """INSERT INTO livi_payments
-               (provider, quote_id, conversation_id, whatsapp_user, service_type_id, amount, status, external_reference)
-               VALUES ('mercadopago', %s, %s, %s, 2, %s, 'created', '') RETURNING id""",
-            (quote_id, conversation_id, whatsapp_user, amount),
+               (provider, source, user_id, quote_id, conversation_id, whatsapp_user, service_type_id, amount, status, external_reference)
+               VALUES ('mercadopago', %s, %s, %s, %s, %s, 2, %s, 'created', '') RETURNING id""",
+            (source, user_id, quote_id, conversation_id, whatsapp_user, amount),
         )
         payment_id = cur.fetchone()["id"]
         reference = _reference()
@@ -161,6 +170,37 @@ def create_mercadopago_link(payload: dict):
     with get_cursor() as cur:
         cur.execute("UPDATE livi_payments SET provider_preference_id = %s, init_point = %s, provider_response = %s::jsonb WHERE id = %s", (provider.get("id"), init_point, json.dumps(provider), payment_id))
     return {"payment_id": payment_id, "reference": reference, "payment_url": init_point, "amount": float(amount), "currency": "ARS", "service_type_id": 2}
+
+
+@router.post("/passenger/create")
+def passenger_payment_link(payload: dict, user: dict = Depends(require_auth)):
+    """Crea el pago Ahorro desde la app pasajero sin crear aún el viaje."""
+    origin = str(payload.get("origin") or "").strip()
+    destination = str(payload.get("destination") or "").strip()
+    if not origin or not destination:
+        raise HTTPException(status_code=422, detail="Faltan origen o destino")
+    quote = _run_local_quote(origin, destination)
+    if quote.get("error"):
+        raise HTTPException(status_code=422, detail="No pudimos calcular el viaje")
+    options = [item for item in quote.get("options", []) if str(item.get("transportTypeId")) in {"1", "2"}]
+    conversation_id = f"web_{uuid.uuid4()}"
+    passenger_key = f"user:{user['id']}"
+    quote_id = _save_whatsapp_quote(
+        conversation_id=conversation_id,
+        whatsapp_user=passenger_key,
+        origen=origin,
+        destino=destination,
+        options=options,
+        source="passenger",
+    )
+    return create_mercadopago_link({
+        "service_type_id": "2",
+        "quote_id": quote_id,
+        "conversation_id": conversation_id,
+        "whatsapp_user": passenger_key,
+        "source": "passenger",
+        "user_id": user["id"],
+    })
 
 
 @whatsapp_router.post("/payment-link")
