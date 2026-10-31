@@ -21,6 +21,9 @@ class FakeCursor:
     def fetchone(self):
         return self.rows.pop(0) if self.rows else None
 
+    def fetchall(self):
+        return self.rows.pop(0) if self.rows and isinstance(self.rows[0], list) else []
+
 
 def user(user_id="driver-a", device_id="device-a"):
     return {"id": user_id, "device_id": device_id}
@@ -80,9 +83,10 @@ def test_live_location_updates_after_valid_device_session():
         user=user(),
     )
     assert result["status"] == "updated"
-    assert len(cur.calls) == 3
+    assert len(cur.calls) == 4
     assert "UPDATE livre_driver_accounts" in cur.calls[1][0]
     assert "livre_driver_heartbeat_diagnostics" in cur.calls[2][0]
+    assert "UPDATE livi_trips" in cur.calls[3][0]
 
 
 def test_live_location_does_not_write_after_revoked_session():

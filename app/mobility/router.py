@@ -1124,7 +1124,7 @@ def driver_update_status(
             FROM livre_users u
             JOIN livre_driver_accounts a ON a.user_id = u.id
             WHERE t.id = %s
-              AND t.status IN ('searching', 'assigned')
+              AND t.status IN ('searching', 'scheduled', 'assigned')
                               AND t.assigned_driver_user_id IS NULL
               AND a.user_id = %s
               AND a.operational_status = 'available'
@@ -1258,7 +1258,34 @@ def driver_update_live_location(
         """,
         (user["id"], payload.device_id),
     )
-    return {"status": "updated", "location_updated_at": row["location_updated_at"]}
+    cur.execute(
+        """
+        UPDATE livi_trips
+           SET tracking_latitude = %s,
+               tracking_longitude = %s,
+               tracking_location_updated_at = NOW(),
+               tracking_location_visible_at = NOW() + INTERVAL '15 seconds',
+               updated_at = NOW()
+         WHERE assigned_driver_user_id = %s
+           AND status IN ('assigned', 'arriving', 'in_progress')
+        RETURNING id
+        """,
+        (payload.latitude, payload.longitude, user["id"]),
+    )
+    active_trip_rows = cur.fetchall()
+    if active_trip_rows:
+        cur.execute(
+            """
+            INSERT INTO livre_trip_location_history
+                (trip_id, driver_user_id, latitude, longitude)
+            SELECT id, assigned_driver_user_id, %s, %s
+            FROM livi_trips
+            WHERE assigned_driver_user_id = %s
+              AND status IN ('assigned', 'arriving', 'in_progress')
+            """,
+            (payload.latitude, payload.longitude, user["id"]),
+        )
+    return {"status": "updated", "location_updated_at": row["location_updated_at"], "active_trip_count": len(active_trip_rows)}
 
 
 @router.delete("/driver/location")
