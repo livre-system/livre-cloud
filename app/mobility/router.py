@@ -125,6 +125,7 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
     trip_action_limiter.check(client_key(request, "trip-quote"))
     origin_text = payload.origin.strip()
     destination_text = payload.destination.strip()
+    distance_km = None
     try:
         origin = geocode_address(origin_text)
         destination = geocode_address(destination_text)
@@ -135,6 +136,8 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
     except GeocodingError as exc:
         raise HTTPException(status_code=422, detail="No pudimos ubicar esas direcciones") from exc
     except RuntimeError:
+        if distance_km is None:
+            raise HTTPException(status_code=422, detail="No pudimos ubicar esas direcciones")
         # No bloqueamos el pedido si el perfil/configuración del CRM está temporalmente inaccesible.
         fallback_profiles = [
             {"rate_id": 6243, "transportTypeId": "1", "pricePointToPoint": float(1610 * float(distance_km) + 2153.1), "routeDistance": float(distance_km)},
