@@ -238,7 +238,15 @@ def mercadopago_webhook(request: Request, payload: dict):
                 provider_payment_id = %s, provider_response = %s::jsonb, updated_at = NOW()
             WHERE external_reference = %s RETURNING id""", (status, payment_method, payment_type, paid_at, provider_payment_id, json.dumps(provider), reference))
         row = cur.fetchone()
-    return {"received": True, "payment_id": row["id"] if row else None, "status": status}
+    result = {"received": True, "payment_id": row["id"] if row else None, "status": status}
+    if row and status == "approved":
+        try:
+            result.update(_complete_payment(_payment_row(payment_id=row["id"])))
+        except HTTPException as exc:
+            # El retorno del checkout puede reintentar la confirmación si la
+            # cotización quedó bloqueada o hubo una carrera con otro webhook.
+            log.warning("Payment approved but trip completion pending id=%s status=%s", row["id"], exc.status_code)
+    return result
 
 
 @router.get("/status")
