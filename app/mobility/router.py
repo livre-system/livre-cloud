@@ -322,7 +322,8 @@ def public_tracking_route(
         """SELECT t.id, t.origen, t.destino, t.status,
                   t.origen_latitude, t.origen_longitude,
                   t.destino_latitude, t.destino_longitude,
-                  a.current_latitude, a.current_longitude
+                  COALESCE(t.tracking_latitude, a.current_latitude),
+                  COALESCE(t.tracking_longitude, a.current_longitude)
            FROM livi_trips t
            LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
            WHERE t.tracking_token = %s
