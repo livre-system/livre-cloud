@@ -412,9 +412,9 @@ def _format_quote_message(options: list[dict]) -> str:
         service_id = str(option.get("transportTypeId") or index)
         service_name = "Livre Premium" if service_id == "1" else "Livre Ahorro" if service_id == "2" else option.get("serviceName", "servicio")
         price = option.get("pricePointToPoint", option.get("price", ""))
-        payment = "efectivo, en el momento" if service_id == "1" else "pago anticipado con tarjeta débito/crédito o Mercado Pago"
+        payment = "Efectivo" if service_id == "1" else "Tarjeta/Mercado Pago"
         lines.append(f"{index}. {service_name}: ${price} ({payment})")
-    lines.append("Elegí una opción. Premium se paga en efectivo; Ahorro requiere pagar antes de confirmar.")
+    lines.append("Elegí 1 o 2. 🚕")
     return "\n".join(lines)
 
 
