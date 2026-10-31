@@ -125,9 +125,6 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
     trip_action_limiter.check(client_key(request, "trip-quote"))
     origin_text = payload.origin.strip()
     destination_text = payload.destination.strip()
-    local_terms = ("bahía blanca", "bahia blanca", "ingeniero white", "white", "cerri", "general daniel cerro")
-    if not any(term in origin_text.casefold() for term in local_terms) or not any(term in destination_text.casefold() for term in local_terms):
-        raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
     try:
         origin = geocode_address(origin_text)
         destination = geocode_address(destination_text)
@@ -170,10 +167,6 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     destination = payload.destination.strip()
     if origin.casefold() == destination.casefold():
         raise HTTPException(status_code=422, detail="El origen y el destino deben ser distintos")
-    local_terms = ("bahía blanca", "bahia blanca", "ingeniero white", "white", "cerri", "general daniel cerro")
-    if not any(term in origin.casefold() for term in local_terms) or not any(term in destination.casefold() for term in local_terms):
-        raise HTTPException(status_code=422, detail="Indicá una dirección de Bahía Blanca o alrededores")
-
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     conversation_id = f"web_{uuid.uuid4()}"
