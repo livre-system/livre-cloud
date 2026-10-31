@@ -134,6 +134,7 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
         distance_km = route_distance_km(origin, destination)
         options = historical_options(Decimal(str(distance_km)))
         option = next((item for item in options if str(item.get("transportTypeId")) == "2"), options[0])
+        geometry = route_geometry(origin, destination)
     except GeocodingError as exc:
         raise HTTPException(status_code=422, detail="No pudimos ubicar esas direcciones") from exc
     except RuntimeError as exc:
@@ -142,9 +143,20 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
         "fare": float(option["pricePointToPoint"]),
         "currency": "ARS",
         "service_type_id": int(option["transportTypeId"]),
+        "options": [
+            {
+                "service_type_id": int(item["transportTypeId"]),
+                "name": "Livre Premium" if str(item["transportTypeId"]) == "1" else "Livre Ahorro",
+                "fare": float(item["pricePointToPoint"]),
+                "currency": "ARS",
+            }
+            for item in options
+            if str(item.get("transportTypeId")) in {"1", "2"}
+        ],
         "distance_km": option["routeDistance"],
         "origin": origin.get("formatted_address") or origin_text,
         "destination": destination.get("formatted_address") or destination_text,
+        "route": geometry,
     }
 
 
