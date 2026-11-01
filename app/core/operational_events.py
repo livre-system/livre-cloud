@@ -6,6 +6,8 @@ import hashlib
 import json
 from typing import Any
 
+from app.memory.structured_ingestion import schedule_operational_event
+
 
 def record_trip_event(
     cur,
@@ -58,4 +60,8 @@ def record_trip_event(
                 default=str,
             ),
         ),
+    )
+    schedule_operational_event(
+        event_key, trip_id, actor_role, event_type,
+        previous_status, new_status, safe_metadata,
     )

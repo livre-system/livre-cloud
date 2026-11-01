@@ -225,6 +225,32 @@ def schedule_conversation_message(
     ).start()
 
 
+def schedule_operational_event(
+    event_key: str,
+    trip_id: int,
+    actor_role: str,
+    event_type: str,
+    previous_status: str | None,
+    new_status: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Proyecta eventos de auditoría a embeddings sin bloquear la transacción."""
+    safe_metadata = _redact(metadata or {})
+    text = (
+        "FUENTE: auditoría operativa de Livre\n"
+        f"EVENTO: {event_type}\nVIAJE_ID: {trip_id}\n"
+        f"ROL: {actor_role}\nESTADO_ANTERIOR: {previous_status or '—'}\n"
+        f"ESTADO_NUEVO: {new_status or '—'}\n"
+        f"DETALLE: {json.dumps(safe_metadata, ensure_ascii=False, sort_keys=True, default=_json_default)}"
+    )
+    def run() -> None:
+        try:
+            _upsert_chunk(f"operation.event:{event_key}", 0, text[:MAX_CHARS], 1)
+        except Exception:
+            log.exception("No se pudo indexar evento operativo event_key=%s", event_key)
+    threading.Thread(target=run, daemon=True).start()
+
+
 def sync_conversation_knowledge() -> dict[str, int]:
     """Backfill seguro: indexa texto histórico, nunca media_data."""
     with get_cursor() as cur:
