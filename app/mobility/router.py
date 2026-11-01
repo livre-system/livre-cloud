@@ -21,7 +21,7 @@ from app.core.rate_limit import client_key, gps_limiter, trip_action_limiter
 from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_distance_km, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare, historical_options
-from app.memory.structured_ingestion import schedule_conversation_message
+from app.memory.structured_ingestion import schedule_audio_transcription, schedule_conversation_message
 from app.mobility.schemas import (
     DriverTrip,
     DriverHistoryResponse,
@@ -986,7 +986,10 @@ def send_handie_message(
         (session["trip_id"], user["id"], payload.body.strip() or "Audio del handie", payload.audio_data, payload.audio_type, session_id),
     )
     message = cur.fetchone()
-    schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+    if payload.audio_data:
+        schedule_audio_transcription(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], payload.audio_data, message["created_at"])
+    else:
+        schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
     return {"sent": True, "session_id": session_id}
 
 

@@ -7,6 +7,7 @@ meter tablas completas en cada prompt.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -207,6 +208,41 @@ def index_conversation_message(
         log.info("Conversación indexada para LIVI IA: message_id=%s", message_id)
     except Exception:
         log.exception("No se pudo indexar conversación message_id=%s", message_id)
+
+
+def schedule_audio_transcription(
+    message_id: int,
+    trip_id: int | None,
+    channel: str,
+    sender_role: str,
+    body: str,
+    audio_data: str,
+    created_at: Any = None,
+) -> None:
+    """Transcribe audio sin bloquear el envío ni copiar el binario al embedding."""
+    def run() -> None:
+        try:
+            header, encoded = audio_data.split(',', 1)
+            audio_bytes = base64.b64decode(encoded, validate=True)
+            extension = header.split('/')[1].split(';')[0].replace('+', '_')
+            from app.llm.groq import GroqProvider
+            transcript = GroqProvider().transcribe(audio_bytes, filename=f"handie.{extension}")
+            if not transcript:
+                log.warning("Audio del handie sin transcripción: message_id=%s", message_id)
+                index_conversation_message(message_id, trip_id, channel, sender_role, body, created_at)
+                return
+            transcript_body = f"[Transcripción del handie] {transcript}"[:1000]
+            with get_cursor() as cur:
+                cur.execute(
+                    "UPDATE livre_trip_messages SET body = %s WHERE id = %s",
+                    [transcript_body, message_id],
+                )
+            index_conversation_message(message_id, trip_id, channel, sender_role, transcript_body, created_at)
+            log.info("Audio del handie transcripto e indexado: message_id=%s", message_id)
+        except Exception:
+            log.exception("No se pudo transcribir audio del handie: message_id=%s", message_id)
+            index_conversation_message(message_id, trip_id, channel, sender_role, body, created_at)
+    threading.Thread(target=run, daemon=True).start()
 
 
 def schedule_conversation_message(
