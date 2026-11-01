@@ -431,13 +431,26 @@ def public_send_trip_message(
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
     cur.execute(
         """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body)
-           VALUES (%s, 'passenger_chat', 'passenger', NULL, %s)
+           (trip_id, channel, sender_role, sender_id, body, client_message_id)
+           VALUES (%s, 'passenger_chat', 'passenger', NULL, %s, %s)
+           ON CONFLICT DO NOTHING
            RETURNING id, trip_id, channel, sender_role, sender_id, body, created_at""",
-        (trip["id"], payload.body.strip()),
+        (trip["id"], payload.body.strip(), payload.client_message_id),
     )
     message = cur.fetchone()
-    schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+    inserted = message is not None
+    if message is None and payload.client_message_id:
+        cur.execute(
+            """SELECT id, trip_id, channel, sender_role, sender_id, body, created_at
+               FROM livre_trip_messages
+               WHERE trip_id = %s AND channel = 'passenger_chat' AND client_message_id = %s""",
+            (trip["id"], payload.client_message_id),
+        )
+        message = cur.fetchone()
+    if message is None:
+        raise HTTPException(status_code=409, detail="No se pudo registrar el mensaje")
+    if inserted:
+        schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
     return message
 
 
@@ -932,13 +945,26 @@ def driver_send_trip_message(
     _driver_trip_or_404(cur, trip_id, user)
     cur.execute(
         """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body)
-           VALUES (%s, 'passenger_chat', 'driver', %s, %s)
+           (trip_id, channel, sender_role, sender_id, body, client_message_id)
+           VALUES (%s, 'passenger_chat', 'driver', %s, %s, %s)
+           ON CONFLICT DO NOTHING
            RETURNING id, trip_id, channel, sender_role, sender_id, body, created_at""",
-        (trip_id, user["id"], payload.body.strip()),
+        (trip_id, user["id"], payload.body.strip(), payload.client_message_id),
     )
     message = cur.fetchone()
-    schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+    inserted = message is not None
+    if message is None and payload.client_message_id:
+        cur.execute(
+            """SELECT id, trip_id, channel, sender_role, sender_id, body, created_at
+               FROM livre_trip_messages
+               WHERE trip_id = %s AND channel = 'passenger_chat' AND client_message_id = %s""",
+            (trip_id, payload.client_message_id),
+        )
+        message = cur.fetchone()
+    if message is None:
+        raise HTTPException(status_code=409, detail="No se pudo registrar el mensaje")
+    if inserted:
+        schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
     return message
 
 
@@ -980,17 +1006,30 @@ def send_handie_message(
         raise HTTPException(status_code=422, detail="Audio inválido")
     cur.execute(
         """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body, media_data, media_type, handie_session_id)
-           VALUES (%s, 'base', 'driver', %s, %s, %s, %s, %s)
+           (trip_id, channel, sender_role, sender_id, body, media_data, media_type, handie_session_id, client_message_id)
+           VALUES (%s, 'base', 'driver', %s, %s, %s, %s, %s, %s)
+           ON CONFLICT DO NOTHING
            RETURNING id, trip_id, channel, sender_role, body, created_at""",
-        (session["trip_id"], user["id"], payload.body.strip() or "Audio del handie", payload.audio_data, payload.audio_type, session_id),
+        (session["trip_id"], user["id"], payload.body.strip() or "Audio del handie", payload.audio_data, payload.audio_type, session_id, payload.client_message_id),
     )
     message = cur.fetchone()
-    if payload.audio_data:
-        schedule_audio_transcription(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], payload.audio_data, message["created_at"])
-    else:
-        schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
-    return {"sent": True, "session_id": session_id}
+    inserted = message is not None
+    if message is None and payload.client_message_id:
+        cur.execute(
+            """SELECT id, trip_id, channel, sender_role, body, created_at
+               FROM livre_trip_messages
+               WHERE handie_session_id = %s AND client_message_id = %s""",
+            (session_id, payload.client_message_id),
+        )
+        message = cur.fetchone()
+    if message is None:
+        raise HTTPException(status_code=409, detail="No se pudo registrar el mensaje")
+    if inserted:
+        if payload.audio_data:
+            schedule_audio_transcription(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], payload.audio_data, message["created_at"])
+        else:
+            schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+    return {"sent": True, "duplicate": not inserted, "session_id": session_id, "message_id": message["id"]}
 
 
 @router.post("/driver/handie/{session_id}/close")
