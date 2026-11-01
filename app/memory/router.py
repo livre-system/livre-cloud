@@ -16,6 +16,7 @@ from app.memory.structured_ingestion import (
     structured_knowledge_status,
     sync_structured_knowledge,
     sync_conversation_knowledge,
+    sync_trip_documents,
 )
 from pydantic import BaseModel
 
@@ -48,7 +49,10 @@ def structured_status(user: dict = Depends(_require_crm_operator)):
 def structured_sync(user: dict = Depends(_require_crm_operator)):
     """Carga todas las tablas de negocio en chunks estructurados con embeddings."""
     try:
-        return sync_structured_knowledge()
+        result = sync_structured_knowledge()
+        result.update(sync_conversation_knowledge())
+        result.update(sync_trip_documents())
+        return result
     except Exception as exc:
         raise HTTPException(status_code=502, detail="No se pudo actualizar el corpus estructurado") from exc
 
@@ -57,7 +61,9 @@ def structured_sync(user: dict = Depends(_require_crm_operator)):
 def structured_conversations_sync(user: dict = Depends(_require_crm_operator)):
     """Backfill de chats de viajes al índice semántico común de LIVI."""
     try:
-        return sync_conversation_knowledge()
+        result = sync_conversation_knowledge()
+        result.update(sync_trip_documents())
+        return result
     except Exception as exc:
         raise HTTPException(status_code=502, detail="No se pudieron indexar las conversaciones") from exc
 

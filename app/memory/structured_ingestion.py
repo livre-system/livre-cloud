@@ -251,6 +251,62 @@ def schedule_operational_event(
     threading.Thread(target=run, daemon=True).start()
 
 
+def sync_trip_documents() -> dict[str, int]:
+    """Construye un documento semántico por viaje con sus relaciones operativas."""
+    with get_cursor() as cur:
+        cur.execute("SELECT id, row_to_json(t)::text AS trip_json FROM livi_trips t ORDER BY id")
+        trips = cur.fetchall()
+    indexed = 0
+    for trip in trips:
+        trip_id = trip["id"]
+        with get_cursor() as cur:
+            cur.execute("""
+                SELECT created_at, sender_role, channel, body
+                FROM livre_trip_messages
+                WHERE trip_id = %s
+                ORDER BY created_at, id
+            """, [trip_id])
+            messages = cur.fetchall()
+            cur.execute("""
+                SELECT created_at, actor_role, event_type, previous_status,
+                       new_status, metadata
+                FROM livre_trip_audit_events
+                WHERE trip_id = %s
+                ORDER BY created_at, id
+            """, [trip_id])
+            events = cur.fetchall()
+            cur.execute("""
+                SELECT row_to_json(p)::text AS payment_json
+                FROM livi_payments p
+                WHERE p.trip_id = %s
+                ORDER BY p.created_at, p.id
+            """, [trip_id])
+            payments = cur.fetchall()
+        message_lines = [
+            f"{m['created_at']} | {m['channel']} | {m['sender_role']}: {(m['body'] or '[audio/media sin transcripción]')[:MAX_CHARS]}"
+            for m in messages
+        ]
+        event_lines = [
+            json.dumps(_redact(dict(e)), ensure_ascii=False, default=_json_default)
+            for e in events
+        ]
+        payment_lines = [
+            json.dumps(_redact(json.loads(p['payment_json'])), ensure_ascii=False, sort_keys=True, default=_json_default)
+            for p in payments
+        ]
+        content = (
+            "FUENTE: ficha operativa canónica de Livre\n"
+            f"VIAJE_ID: {trip_id}\n"
+            f"DATOS_DEL_VIAJE: {trip['trip_json']}\n"
+            f"PAGOS: {'; '.join(payment_lines) or 'sin_registros'}\n"
+            f"CONVERSACION: {' || '.join(message_lines) or 'sin_mensajes'}\n"
+            f"AUDITORIA: {' || '.join(event_lines) or 'sin_eventos'}"
+        )
+        _upsert_chunk(f"trip:{trip_id}", 0, content[:MAX_CHARS * 4], 1)
+        indexed += 1
+    return {"trips_seen": len(trips), "trips_indexed": indexed}
+
+
 def sync_conversation_knowledge() -> dict[str, int]:
     """Backfill seguro: indexa texto histórico, nunca media_data."""
     with get_cursor() as cur:
