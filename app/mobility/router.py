@@ -154,6 +154,8 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
             {
                 "service_type_id": int(item["transportTypeId"]),
                 "name": "Livre Premium" if str(item["transportTypeId"]) == "1" else "Livre Ahorro",
+                "payment_method": "cash" if str(item["transportTypeId"]) == "1" else "mercado_pago",
+                "payment_label": "Efectivo al conductor" if str(item["transportTypeId"]) == "1" else "Mercado Pago al solicitar",
                 "fare": float(item["pricePointToPoint"]),
                 "currency": "ARS",
             }
@@ -1119,6 +1121,9 @@ def driver_update_status(
             UPDATE livi_trips t
             SET assigned_driver_user_id = %s,
                 tracking_driver_name = u.name,
+                tracking_latitude = a.current_latitude,
+                tracking_longitude = a.current_longitude,
+                tracking_location_updated_at = a.location_updated_at,
                 status = %s,
                 updated_at = NOW()
             FROM livre_users u
