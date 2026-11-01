@@ -158,4 +158,6 @@ class HandieOpenRequest(BaseModel):
 
 
 class HandieMessageCreate(BaseModel):
-    body: str = Field(min_length=1, max_length=1000)
+    body: str = Field(default="Audio del handie", min_length=1, max_length=1000)
+    audio_data: str | None = Field(default=None, max_length=3_000_000)
+    audio_type: str | None = Field(default=None, max_length=80)

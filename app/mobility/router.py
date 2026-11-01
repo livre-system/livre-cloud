@@ -5,6 +5,7 @@ Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente
 
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import date, datetime, timedelta
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, R
 
 from app.core.database import get_cursor_dep
 from app.core.jwt import optional_auth, require_auth, require_driver
+from app.crm.router import _require_crm_operator
 from app.core.rate_limit import client_key, gps_limiter, trip_action_limiter
 from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_distance_km, route_geometry
@@ -967,15 +969,16 @@ def send_handie_message(
     session = cur.fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Handie cerrado o inexistente")
-    if not payload.body.strip():
+    if not payload.body.strip() and not payload.audio_data:
         raise HTTPException(status_code=422, detail="El mensaje no puede estar vacío")
-    if session["trip_id"]:
-        cur.execute(
-            """INSERT INTO livre_trip_messages
-               (trip_id, channel, sender_role, sender_id, body)
-               VALUES (%s, 'base', 'driver', %s, %s)""",
-            (session["trip_id"], user["id"], payload.body.strip()),
-        )
+    if payload.audio_data and not re.fullmatch(r"data:audio/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+", payload.audio_data, re.IGNORECASE):
+        raise HTTPException(status_code=422, detail="Audio inválido")
+    cur.execute(
+        """INSERT INTO livre_trip_messages
+           (trip_id, channel, sender_role, sender_id, body, media_data, media_type, handie_session_id)
+           VALUES (%s, 'base', 'driver', %s, %s, %s, %s, %s)""",
+        (session["trip_id"], user["id"], payload.body.strip() or "Audio del handie", payload.audio_data, payload.audio_type, session_id),
+    )
     return {"sent": True, "session_id": session_id}
 
 
@@ -1011,9 +1014,9 @@ def driver_handie_messages(
     if not cur.fetchone():
         raise HTTPException(status_code=404, detail="Handie inexistente")
     cur.execute(
-        """SELECT m.id, m.trip_id, m.sender_role, m.sender_id, m.body, m.created_at
+        """SELECT m.id, m.trip_id, m.sender_role, m.sender_id, m.body, m.media_data, m.media_type, m.created_at
            FROM livre_trip_messages m
-           JOIN livre_handie_sessions s ON s.trip_id = m.trip_id
+           JOIN livre_handie_sessions s ON s.id = m.handie_session_id OR (s.trip_id IS NOT NULL AND s.trip_id = m.trip_id)
            WHERE s.id = %s AND m.channel = 'base'
            ORDER BY m.created_at ASC LIMIT 100""",
         (session_id,),
@@ -1022,13 +1025,13 @@ def driver_handie_messages(
 
 
 @router.get("/base/messages")
-def base_messages(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)):
+def base_messages(cur=Depends(get_cursor_dep), user: dict = Depends(_require_crm_operator)):
     """Bandeja del CRM para el canal base; no mezcla el chat del pasajero."""
     cur.execute(
-        """SELECT m.id, m.trip_id, m.sender_role, m.sender_id, m.body, m.created_at,
+        """SELECT m.id, m.trip_id, m.sender_role, m.sender_id, m.body, m.media_data, m.media_type, m.created_at,
                   t.origen, t.destino
            FROM livre_trip_messages m
-           JOIN livi_trips t ON t.id = m.trip_id
+           LEFT JOIN livi_trips t ON t.id = m.trip_id
            WHERE m.channel = 'base'
            ORDER BY m.created_at DESC LIMIT 100"""
     )
@@ -1039,7 +1042,7 @@ def base_messages(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth
 def base_send_message(
     payload: TripMessageCreate,
     cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
+    user: dict = Depends(_require_crm_operator),
 ):
     """Envio desde CRM al handie abierto del conductor."""
     cur.execute(
@@ -1053,10 +1056,10 @@ def base_send_message(
         raise HTTPException(status_code=422, detail="El mensaje no puede estar vacío")
     cur.execute(
         """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body)
-           VALUES (%s, 'base', 'base', %s, %s)
+           (trip_id, channel, sender_role, sender_id, body, handie_session_id)
+           VALUES (%s, 'base', 'base', %s, %s, %s)
            RETURNING id, trip_id, channel, sender_role, sender_id, body, created_at""",
-        (session["trip_id"], user["id"], payload.body.strip()),
+        (session["trip_id"], user["id"], payload.body.strip(), session["id"]),
     )
     return cur.fetchone()
 
