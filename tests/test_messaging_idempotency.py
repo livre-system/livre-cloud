@@ -12,6 +12,9 @@ def test_message_contract_accepts_idempotency_keys():
     assert "ON CONFLICT DO NOTHING" in ROUTER
     assert "uq_livre_trip_messages_client_id" in MIGRATION
     assert "uq_livre_trip_messages_handie_client_id" in MIGRATION
+    assert "livre-ia-front.vercel.app" in (ROOT / "app/main.py").read_text()
+    assert "driver_name" in ROUTER
+    assert "payload.session_id" in ROUTER
 
 
 def test_duplicate_messages_do_not_schedule_again():

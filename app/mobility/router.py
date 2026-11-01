@@ -1079,9 +1079,13 @@ def base_messages(cur=Depends(get_cursor_dep), user: dict = Depends(_require_crm
     """Bandeja del CRM para el canal base; no mezcla el chat del pasajero."""
     cur.execute(
         """SELECT m.id, m.trip_id, m.sender_role, m.sender_id, m.body, m.media_data, m.media_type, m.created_at,
-                  t.origen, t.destino
+                  t.origen, t.destino, s.id AS session_id, s.status AS session_status,
+                  s.driver_user_id, COALESCE(NULLIF(u.name, ''), NULLIF(dp.phone_number, ''), s.driver_user_id) AS driver_name
            FROM livre_trip_messages m
            LEFT JOIN livi_trips t ON t.id = m.trip_id
+           LEFT JOIN livre_handie_sessions s ON s.id = m.handie_session_id
+           LEFT JOIN livre_users u ON u.id = s.driver_user_id
+           LEFT JOIN livre_crm_driver_profiles dp ON dp.driver_user_id = s.driver_user_id
            WHERE m.channel = 'base'
            ORDER BY m.created_at DESC LIMIT 100"""
     )
@@ -1095,10 +1099,17 @@ def base_send_message(
     user: dict = Depends(_require_crm_operator),
 ):
     """Envio desde CRM al handie abierto del conductor."""
-    cur.execute(
-        """SELECT id, trip_id FROM livre_handie_sessions
-           WHERE status = 'open' ORDER BY created_at DESC LIMIT 1"""
-    )
+    if payload.session_id:
+        cur.execute(
+            """SELECT id, trip_id FROM livre_handie_sessions
+               WHERE id::text = %s AND status = 'open' LIMIT 1""",
+            (payload.session_id,),
+        )
+    else:
+        cur.execute(
+            """SELECT id, trip_id FROM livre_handie_sessions
+               WHERE status = 'open' ORDER BY created_at DESC LIMIT 1"""
+        )
     session = cur.fetchone()
     if not session:
         raise HTTPException(status_code=409, detail="No hay un handie abierto")
@@ -1106,10 +1117,11 @@ def base_send_message(
         raise HTTPException(status_code=422, detail="El mensaje no puede estar vacío")
     cur.execute(
         """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body, handie_session_id)
-           VALUES (%s, 'base', 'base', %s, %s, %s)
+           (trip_id, channel, sender_role, sender_id, body, handie_session_id, client_message_id)
+           VALUES (%s, 'base', 'base', %s, %s, %s, %s)
+           ON CONFLICT DO NOTHING
            RETURNING id, trip_id, channel, sender_role, sender_id, body, created_at""",
-        (session["trip_id"], user["id"], payload.body.strip(), session["id"]),
+        (session["trip_id"], user["id"], payload.body.strip(), session["id"], payload.client_message_id),
     )
     return cur.fetchone()
 
