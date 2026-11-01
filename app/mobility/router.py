@@ -21,6 +21,7 @@ from app.core.rate_limit import client_key, gps_limiter, trip_action_limiter
 from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_distance_km, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare, historical_options
+from app.memory.structured_ingestion import schedule_conversation_message
 from app.mobility.schemas import (
     DriverTrip,
     DriverHistoryResponse,
@@ -435,7 +436,9 @@ def public_send_trip_message(
            RETURNING id, trip_id, channel, sender_role, sender_id, body, created_at""",
         (trip["id"], payload.body.strip()),
     )
-    return cur.fetchone()
+    message = cur.fetchone()
+    schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+    return message
 
 
 def _driver_trip_or_404(cur, trip_id: int, user: dict, include_terminal: bool = False):
@@ -934,7 +937,9 @@ def driver_send_trip_message(
            RETURNING id, trip_id, channel, sender_role, sender_id, body, created_at""",
         (trip_id, user["id"], payload.body.strip()),
     )
-    return cur.fetchone()
+    message = cur.fetchone()
+    schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+    return message
 
 
 @router.post("/driver/handie", status_code=201)
@@ -976,9 +981,12 @@ def send_handie_message(
     cur.execute(
         """INSERT INTO livre_trip_messages
            (trip_id, channel, sender_role, sender_id, body, media_data, media_type, handie_session_id)
-           VALUES (%s, 'base', 'driver', %s, %s, %s, %s, %s)""",
+           VALUES (%s, 'base', 'driver', %s, %s, %s, %s, %s)
+           RETURNING id, trip_id, channel, sender_role, body, created_at""",
         (session["trip_id"], user["id"], payload.body.strip() or "Audio del handie", payload.audio_data, payload.audio_type, session_id),
     )
+    message = cur.fetchone()
+    schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
     return {"sent": True, "session_id": session_id}
 
 

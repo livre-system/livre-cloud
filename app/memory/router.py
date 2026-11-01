@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import Response
 from app.core.jwt import require_auth
+from app.crm.router import _require_crm_operator
 from app.memory.service import (
     check_memory_status,
     create_user_memory,
@@ -14,6 +15,7 @@ from app.memory.service import (
 from app.memory.structured_ingestion import (
     structured_knowledge_status,
     sync_structured_knowledge,
+    sync_conversation_knowledge,
 )
 from pydantic import BaseModel
 
@@ -37,18 +39,27 @@ def memory_status(user: dict = Depends(require_auth)):
 
 
 @router.get("/structured/status")
-def structured_status(user: dict = Depends(require_auth)):
+def structured_status(user: dict = Depends(_require_crm_operator)):
     """Estado del corpus empresarial común de LIVI IA."""
     return structured_knowledge_status()
 
 
 @router.post("/structured/sync")
-def structured_sync(user: dict = Depends(require_auth)):
+def structured_sync(user: dict = Depends(_require_crm_operator)):
     """Carga todas las tablas de negocio en chunks estructurados con embeddings."""
     try:
         return sync_structured_knowledge()
     except Exception as exc:
         raise HTTPException(status_code=502, detail="No se pudo actualizar el corpus estructurado") from exc
+
+
+@router.post("/structured/conversations/sync")
+def structured_conversations_sync(user: dict = Depends(_require_crm_operator)):
+    """Backfill de chats de viajes al índice semántico común de LIVI."""
+    try:
+        return sync_conversation_knowledge()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="No se pudieron indexar las conversaciones") from exc
 
 
 @router.get("")

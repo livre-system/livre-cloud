@@ -11,6 +11,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -35,6 +36,8 @@ EXCLUDED_TABLES = {
     "schema_migrations",
     "chat_messages",
     "chats",
+    "livre_trip_messages",
+    "livre_handie_sessions",
     "payment_pending",
 }
 SENSITIVE_KEY = re.compile(
@@ -175,6 +178,68 @@ def _upsert_chunk(
             [source_table, chunk_index, encrypted_content, content_hash, str(embedding), row_count],
         )
     return "updated" if existing else "created"
+
+
+def index_conversation_message(
+    message_id: int,
+    trip_id: int | None,
+    channel: str,
+    sender_role: str,
+    body: str,
+    created_at: Any = None,
+) -> None:
+    """Indexa texto de conversaciones operativas sin copiar audio/base64."""
+    text = (body or "").strip()[:MAX_CHARS]
+    if not text:
+        return
+    source = f"conversation.message:{message_id}"
+    content = (
+        "FUENTE: conversación operativa de Livre\n"
+        f"MENSAJE_ID: {message_id}\n"
+        f"VIAJE_ID: {trip_id if trip_id is not None else 'sin_viaje'}\n"
+        f"CANAL: {channel}\n"
+        f"ROL: {sender_role}\n"
+        f"FECHA: {created_at.isoformat() if hasattr(created_at, 'isoformat') else created_at or 'sin_fecha'}\n"
+        f"TEXTO: {text}"
+    )
+    try:
+        _upsert_chunk(source, 0, content, 1)
+        log.info("Conversación indexada para LIVI IA: message_id=%s", message_id)
+    except Exception:
+        log.exception("No se pudo indexar conversación message_id=%s", message_id)
+
+
+def schedule_conversation_message(
+    message_id: int,
+    trip_id: int | None,
+    channel: str,
+    sender_role: str,
+    body: str,
+    created_at: Any = None,
+) -> None:
+    """Indexa fuera del request: la persistencia no depende del proveedor de embeddings."""
+    threading.Thread(
+        target=index_conversation_message,
+        args=(message_id, trip_id, channel, sender_role, body, created_at),
+        daemon=True,
+    ).start()
+
+
+def sync_conversation_knowledge() -> dict[str, int]:
+    """Backfill seguro: indexa texto histórico, nunca media_data."""
+    with get_cursor() as cur:
+        cur.execute("""
+            SELECT id, trip_id, channel, sender_role, body, created_at
+            FROM livre_trip_messages
+            WHERE body IS NOT NULL AND btrim(body) <> ''
+            ORDER BY id ASC
+        """)
+        rows = cur.fetchall()
+    indexed = 0
+    for row in rows:
+        index_conversation_message(row["id"], row["trip_id"], row["channel"], row["sender_role"], row["body"], row["created_at"])
+        indexed += 1
+    return {"messages_seen": len(rows), "messages_indexed": indexed}
 
 
 def sync_structured_knowledge() -> dict[str, Any]:
