@@ -17,6 +17,13 @@ def test_message_contract_accepts_idempotency_keys():
     assert "payload.session_id" in ROUTER
 
 
+def test_crm_passenger_inbox_is_read_only_and_separate_from_handie():
+    assert '@router.get("/crm/passenger-messages")' in ROUTER
+    assert "channel = 'passenger_chat'" in ROUTER
+    assert "_require_crm_operator" in ROUTER
+    assert "@router.post(\"/crm/passenger-messages\")" not in ROUTER
+
+
 def test_duplicate_messages_do_not_schedule_again():
     assert "inserted = message is not None" in ROUTER
     assert ROUTER.count("if inserted:\n        schedule_conversation_message") >= 2

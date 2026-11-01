@@ -454,6 +454,21 @@ def public_send_trip_message(
     return message
 
 
+@router.get("/crm/passenger-messages")
+def crm_passenger_messages(cur=Depends(get_cursor_dep), user: dict = Depends(_require_crm_operator)):
+    """Bandeja de solo lectura del chat del pasajero para el CRM."""
+    cur.execute(
+        """SELECT m.id, m.trip_id, m.channel, m.sender_role, m.sender_id, m.body, m.created_at,
+                  t.origen, t.destino, t.status AS trip_status, t.whatsapp_user AS passenger_key,
+                  t.tracking_driver_name AS driver_name
+           FROM livre_trip_messages m
+           JOIN livi_trips t ON t.id = m.trip_id
+           WHERE m.channel = 'passenger_chat'
+           ORDER BY m.created_at DESC LIMIT 200"""
+    )
+    return cur.fetchall()
+
+
 def _driver_trip_or_404(cur, trip_id: int, user: dict, include_terminal: bool = False):
     """Returns a trip assigned to the authenticated driver."""
     terminal_statuses = ", 'completed', 'cancelled', 'conflict'" if include_terminal else ""
