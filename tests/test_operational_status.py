@@ -128,6 +128,8 @@ def test_driver_trips_returns_available_open_trips_and_own_assignments():
         call for call in cur.calls if "t.status IN ('scheduled', 'searching')" in call[0]
     )
     assert "active_driver.operational_status = 'available'" in query
+    assert "active_driver.active = TRUE" in query
+    assert "active_driver.location_updated_at >= NOW() - INTERVAL '2 minutes'" not in query
     assert "t.assigned_driver_user_id IS NULL" in query
     assert "t.assigned_driver_user_id = %s" in query
     assert "t.status IN ('assigned', 'arriving', 'in_progress')" in query
