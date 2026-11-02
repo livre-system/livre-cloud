@@ -1046,10 +1046,10 @@ async def handie_voice_token(
         raise HTTPException(status_code=503, detail="Asistente de voz no configurado")
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(
+            response = await client.get(
                 ELEVENLABS_CONVAI_SIGNED_URL,
-                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-                json={"agent_id": ELEVENLABS_DRIVER_AGENT_ID},
+                headers={"xi-api-key": api_key},
+                params={"agent_id": ELEVENLABS_DRIVER_AGENT_ID},
             )
     except httpx.RequestError as exc:
         log.warning("driver_voice_signed_url_unreachable error=%s", type(exc).__name__)
