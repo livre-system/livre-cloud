@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 
 from app.core.database import get_cursor_dep
@@ -31,7 +32,10 @@ from app.mobility.schemas import (
     DriverOperationalStatusUpdate,
     HandieMessageCreate,
     HandieOpenRequest,
+    HandieReassignRequest,
+    HandieVoiceEventCreate,
     LocationUpdate,
+    PassengerTrackingTrip,
     PublicTrip,
     StatusUpdate,
     TripMessageCreate,
@@ -52,6 +56,11 @@ PUBLIC_TRACKING_TOKEN_TTL_HOURS = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
 log = logging.getLogger("uvicorn.error")
+ELEVENLABS_CONVAI_SIGNED_URL = "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url"
+ELEVENLABS_DRIVER_AGENT_ID = os.getenv(
+    "ELEVENLABS_DRIVER_AGENT_ID",
+    os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv"),
+)
 
 
 def _require_current_driver_device(cur, user: dict, device_id: str | None) -> None:
@@ -98,6 +107,11 @@ def _trip_or_404(cur, trip_id: int):
     if not trip:
         raise HTTPException(status_code=404, detail="Viaje no encontrado")
     return trip
+
+
+def _public_driver_first_name(value: str | None) -> str | None:
+    name = " ".join(str(value or "").split()).strip()
+    return name.split(" ", 1)[0] if name else None
 
 
 def _public_trip(trip) -> PublicTrip:
@@ -295,15 +309,20 @@ def update_trip_location(
     return _public_trip(cur.fetchone())
 
 
-@router.get("/tracking/{tracking_token}", response_model=PublicTrip)
+@router.get("/tracking/{tracking_token}", response_model=PassengerTrackingTrip)
 def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Vista pública mínima para el pasajero; solo acepta el token privado del viaje."""
     cur.execute(
         """
         SELECT id, origen, destino, status, created_at, tracking_driver_name, tracking_plate,
                tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
-                              tracking_longitude, tracking_location_updated_at, fare, original_fare,
-                              discount_percentage, discount_amount, final_fare, fare_source
+               tracking_longitude, tracking_location_updated_at, fare, original_fare,
+               discount_percentage, discount_amount, final_fare, fare_source,
+               EXISTS (
+                   SELECT 1 FROM livre_trip_audit_events e
+                   WHERE e.trip_id = livi_trips.id
+                     AND e.event_type = 'trip_reassigned_by_driver'
+               ) AND livi_trips.status IN ('searching', 'scheduled') AS driver_reassignment_pending
         FROM livi_trips
         WHERE tracking_token = %s
           AND created_at > NOW() - (%s * INTERVAL '1 hour')
@@ -313,7 +332,12 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     trip = cur.fetchone()
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
-    return _public_trip(trip)
+    public_trip = _public_trip(trip)
+    return PassengerTrackingTrip(
+        **public_trip.model_dump(),
+        driver_name=_public_driver_first_name(public_trip.driver_name),
+        driver_reassignment_pending=bool(trip.get("driver_reassignment_pending", False)),
+    )
 
 
 @router.post("/tracking/{tracking_token}/cancel")
@@ -998,6 +1022,137 @@ def open_handie(
         (user["id"], payload.trip_id),
     )
     return cur.fetchone()
+
+
+@router.get("/driver/handie/{session_id}/voice-token")
+async def handie_voice_token(
+    session_id: str,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    """Creates a short-lived ElevenLabs URL without exposing the API key."""
+    cur.execute(
+        """SELECT s.id, s.trip_id, t.origen, t.destino, t.status
+           FROM livre_handie_sessions s
+           LEFT JOIN livi_trips t ON t.id = s.trip_id
+           WHERE s.id = %s AND s.driver_user_id = %s AND s.status = 'open'""",
+        (session_id, user["id"]),
+    )
+    session = cur.fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Handie cerrado o inexistente")
+    api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Asistente de voz no configurado")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                ELEVENLABS_CONVAI_SIGNED_URL,
+                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+                json={"agent_id": ELEVENLABS_DRIVER_AGENT_ID},
+            )
+    except httpx.RequestError as exc:
+        log.warning("driver_voice_signed_url_unreachable error=%s", type(exc).__name__)
+        raise HTTPException(status_code=502, detail="No se pudo conectar con el asistente de voz") from exc
+    if response.status_code >= 400:
+        log.warning("driver_voice_signed_url_rejected status=%s", response.status_code)
+        raise HTTPException(status_code=502, detail="El asistente de voz rechazó la sesión")
+    signed_url = response.json().get("signed_url")
+    if not signed_url:
+        raise HTTPException(status_code=502, detail="El asistente de voz no devolvió una sesión")
+    return {
+        "signed_url": signed_url,
+        "session_id": session_id,
+        "trip_id": session["trip_id"],
+        "trip_status": session["status"],
+        "dynamic_variables": {
+            "driver_user_id": str(user["id"]),
+            "handie_session_id": session_id,
+            "trip_id": str(session["trip_id"] or ""),
+            "trip_origin": session["origen"] or "",
+            "trip_destination": session["destino"] or "",
+            "trip_status": session["status"] or "sin_viaje",
+        },
+    }
+
+
+@router.post("/driver/handie/{session_id}/voice-events", status_code=201)
+def save_handie_voice_event(
+    session_id: str,
+    payload: HandieVoiceEventCreate,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    cur.execute(
+        """SELECT id, trip_id FROM livre_handie_sessions
+           WHERE id = %s AND driver_user_id = %s""",
+        (session_id, user["id"]),
+    )
+    session = cur.fetchone()
+    if not session:
+        raise HTTPException(status_code=404, detail="Handie inexistente")
+    client_id = payload.event_id or str(uuid.uuid4())
+    cur.execute(
+        """INSERT INTO livre_trip_messages
+           (trip_id, channel, sender_role, sender_id, body, handie_session_id, client_message_id)
+           VALUES (%s, 'base', %s, %s, %s, %s, %s)
+           ON CONFLICT DO NOTHING
+           RETURNING id, created_at""",
+        (session["trip_id"], payload.role, user["id"] if payload.role == "driver" else None,
+         payload.body.strip(), session_id, client_id),
+    )
+    message = cur.fetchone()
+    if message:
+        schedule_conversation_message(
+            message["id"], session["trip_id"], "base", payload.role,
+            payload.body.strip(), message["created_at"],
+        )
+    return {"saved": True, "duplicate": message is None, "message_id": message["id"] if message else None}
+
+
+@router.post("/driver/handie/{session_id}/reassign")
+def handie_reassign_trip(
+    session_id: str,
+    payload: HandieReassignRequest,
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    """Releases only the current driver's still-pending assignment."""
+    if not payload.confirmed:
+        raise HTTPException(status_code=422, detail="La reasignación requiere confirmación explícita")
+    cur.execute(
+        """SELECT s.trip_id, t.status, t.scheduled_at
+           FROM livre_handie_sessions s
+           JOIN livi_trips t ON t.id = s.trip_id
+           WHERE s.id = %s AND s.driver_user_id = %s AND s.status = 'open'""",
+        (session_id, user["id"]),
+    )
+    session = cur.fetchone()
+    if not session or session["trip_id"] is None:
+        raise HTTPException(status_code=409, detail="El handie no tiene un viaje activo")
+    if session["status"] != "assigned":
+        raise HTTPException(status_code=409, detail="Sólo se puede reasignar un viaje todavía asignado")
+    new_status = "scheduled" if session["scheduled_at"] is not None and session["scheduled_at"] > datetime.now(session["scheduled_at"].tzinfo) else "searching"
+    cur.execute(
+        """UPDATE livi_trips
+           SET status = %s, assigned_driver_user_id = NULL,
+               tracking_driver_name = NULL, tracking_plate = NULL,
+               tracking_vehicle_model = NULL, tracking_vehicle_color = NULL,
+               tracking_latitude = NULL, tracking_longitude = NULL,
+               tracking_location_updated_at = NULL, updated_at = NOW()
+           WHERE id = %s AND assigned_driver_user_id = %s AND status = 'assigned'
+           RETURNING id, status""",
+        (new_status, session["trip_id"], user["id"]),
+    )
+    released = cur.fetchone()
+    if not released:
+        raise HTTPException(status_code=409, detail="El viaje ya cambió de estado")
+    record_trip_event(
+        cur, trip_id=session["trip_id"], actor_user_id=user["id"], actor_role="driver",
+        event_type="trip_reassigned_by_driver", previous_status="assigned",
+        new_status=new_status, metadata={"reason": payload.reason.strip(), "source": "driver_voice"},
+    )
+    return {"reassigned": True, "trip_id": released["id"], "status": released["status"], "reason": payload.reason.strip()}
 
 
 @router.post("/driver/handie/{session_id}/messages", status_code=201)

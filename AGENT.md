@@ -719,5 +719,14 @@ Pendientes explícitos:
 ### Pendientes agregados
 
 - Probar el endpoint con una sesión CRM autenticada y datos reales, sin crear ni modificar conversaciones.
+
+## Handie de voz Livi para reasignación (2026-11-02)
+
+- `GET /mobility/driver/handie/{session_id}/voice-token` entrega una URL firmada corta de ElevenLabs sin exponer la API key; requiere `ELEVENLABS_DRIVER_AGENT_ID` (o `ELEVENLABS_AGENT_ID`) y `ELEVENLABS_API_KEY`.
+- `POST /mobility/driver/handie/{session_id}/voice-events` guarda transcripciones del conductor y de Livi en el canal `base`, para que el CRM las muestre como `Chofer` y `Livi`.
+- `POST /mobility/driver/handie/{session_id}/reassign` sólo permite reasignar el viaje actual en estado `assigned`, exige confirmación explícita y registra `trip_reassigned_by_driver` con motivo y fuente `driver_voice`. No atiende emergencias ni consultas generales.
+- El tracking público marca `driver_reassignment_pending` mientras el viaje busca otro conductor y expone sólo el primer nombre del conductor.
+- La notificación WhatsApp de reasignación queda pendiente de Meta/plantilla autorizada; el evento queda auditado y visible para el CRM, sin inventar un envío.
+- Pendiente de configuración externa: registrar en el agente ElevenLabs el client tool `reassign_trip(reason, confirmed)` y el prompt operativo restringido a reasignación.
 - Definir el contrato autorizado de respuesta de pasajeros antes de agregar escritura, incluyendo identidad del operador, auditoría e idempotencia.
 - Mantener separadas las rutas, permisos y almacenamiento de `passenger_chat` y Base / Handie.

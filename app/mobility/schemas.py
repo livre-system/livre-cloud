@@ -86,6 +86,10 @@ class PublicTrip(BaseModel):
     fare_source: str | None = None
 
 
+class PassengerTrackingTrip(PublicTrip):
+    driver_reassignment_pending: bool = False
+
+
 class DriverTrip(PublicTrip):
     """Viaje asignado al conductor autenticado."""
     service_type_id: int | None = None
@@ -164,3 +168,15 @@ class HandieMessageCreate(BaseModel):
     audio_data: str | None = Field(default=None, max_length=3_000_000)
     audio_type: str | None = Field(default=None, max_length=80)
     client_message_id: str | None = Field(default=None, min_length=8, max_length=100)
+
+
+class HandieVoiceEventCreate(BaseModel):
+    role: Literal["driver", "assistant"]
+    body: str = Field(min_length=1, max_length=2000)
+    conversation_id: str | None = Field(default=None, max_length=120)
+    event_id: str | None = Field(default=None, min_length=8, max_length=120)
+
+
+class HandieReassignRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    confirmed: bool = False
