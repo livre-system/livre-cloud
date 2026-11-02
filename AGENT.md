@@ -707,3 +707,17 @@ Pendientes explícitos:
 - Si aparece un error de pago, separar en este orden: identidad/autenticación → cotización y `service_type_id` → creación de preferencia Mercado Pago → webhook/notificación → consulta de estado → creación del viaje. Registrar HTTP status/body sanitizado y efecto persistido; no exponer tokens.
 - Si aparece un problema en Meta/Facebook, no modificar configuración ni pedir credenciales por iniciativa propia. Primero identificar si corresponde a Meta Business, WhatsApp, Facebook Login o tracking y documentar la pantalla exacta; ElevenLabs y WhatsApp mantienen contratos separados.
 - Orden de trabajo al retomar: observar producción y logs read-only → reproducir sin datos artificiales → comparar contrato real con código → cambiar sólo el repositorio afectado → tests/checks → commit/push → verificar Railway y asset HTTPS → actualizar este archivo sólo si cambia un contrato, estado o pendiente importante.
+
+## Actualización CRM y Handie (2026-11-01)
+
+- `livre-cloud` expone `GET /crm/passenger-messages` para que el CRM consulte conversaciones de pasajeros agrupadas por viaje. Requiere autenticación CRM y es sólo lectura: no existe un POST de respuesta de pasajeros.
+- El historial de mensajes se persiste/lee desde el modelo propio de Livre Cloud; no se consulta MAGIIS ni se mezclan identidades de pasajero, chofer y operador CRM.
+- Commit backend publicado: `71fdf2f` (`Expose CRM passenger chat history`). La prueba específica de idempotencia/contrato de mensajería pasa junto con `python -m compileall -q app`.
+- El frontend `livre-chatbot` consume esta bandeja en commit `9896175` y separa visualmente Pasajeros de Base / Handie. Las respuestas desde CRM quedan bloqueadas hasta definir un canal autorizado.
+- El Handie usa notificaciones deduplicadas y un aviso sonoro opt-in en el frontend; no requiere cambios de backend ni debe interpretarse como validación física de audio en todos los dispositivos.
+
+### Pendientes agregados
+
+- Probar el endpoint con una sesión CRM autenticada y datos reales, sin crear ni modificar conversaciones.
+- Definir el contrato autorizado de respuesta de pasajeros antes de agregar escritura, incluyendo identidad del operador, auditoría e idempotencia.
+- Mantener separadas las rutas, permisos y almacenamiento de `passenger_chat` y Base / Handie.
