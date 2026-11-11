@@ -28,7 +28,7 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token inválido")
 
 
-def require_auth(authorization: Optional[str] = Header(default=None)) -> dict:
+def require_auth(authorization: str | None = Header(default=None)) -> dict:
     if not authorization:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token requerido")
     token = authorization.removeprefix("Bearer ")
@@ -42,7 +42,7 @@ def require_auth(authorization: Optional[str] = Header(default=None)) -> dict:
     }
 
 
-def optional_auth(authorization: Optional[str] = Header(default=None)) -> dict | None:
+def optional_auth(authorization: str | None = Header(default=None)) -> dict | None:
     """Read an optional passenger session without making guest flows fail."""
     if not authorization:
         return None
