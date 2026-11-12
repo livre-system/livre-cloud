@@ -163,39 +163,93 @@ def requires_advance_payment(service_type_id: str, source: str) -> bool:
     return str(service_type_id) == "2" and str(source or "").strip().lower() not in {"panel", "crm"}
 
 
+def _clean_whatsapp_user(raw: str) -> str:
+    """ElevenLabs espera el número en E.164 sin prefijo 'whatsapp:'."""
+    return raw.removeprefix("whatsapp:").strip()
+
+
+ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME = os.getenv(
+    "ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME", "tracking_link"
+).strip()
+
+
 def send_tracking_message(trip: dict) -> str:
-    """Envía el aviso aprobado al mismo usuario que originó el viaje."""
+    """Envía la plantilla aprobada tracking_link con el botón URL dinámico.
+
+    La plantilla tracking_link tiene un botón URL con parámetro {{1}}.
+    Se pasa únicamente la URL de tracking como parámetro del botón;
+    el cuerpo del template ya viene fijo en Meta.
+    """
     api_key = os.getenv("ELEVENLABS_API_KEY")
-    whatsapp_user = str(trip.get("whatsapp_user") or "").strip()
+    raw_user = str(trip.get("whatsapp_user") or "").strip()
+    whatsapp_user = _clean_whatsapp_user(raw_user)
+    trip_id = trip.get("id")
+    tracking_token = trip.get("tracking_token")
+
+    # --- Validaciones con logs específicos por causa ---
     if not api_key:
+        log.error("[ELEVEN TRACKING] trip=%s fallo=config_api_key falta ELEVENLABS_API_KEY", trip_id)
         raise RuntimeError("ELEVENLABS_API_KEY no configurada")
     if not whatsapp_user:
-        raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user")
-    if not ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME:
-        raise RuntimeError(
-            "Bloqueado: falta ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME; "
-            "Meta debe aprobar/configurar una plantilla para el aviso assigned→arriving"
-        )
+        log.error("[ELEVEN TRACKING] trip=%s fallo=destinatario whatsapp_user vacío (raw=%r)", trip_id, raw_user)
+        raise RuntimeError(f"El viaje {trip_id} no tiene whatsapp_user")
+    if not tracking_token:
+        log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
+        raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
+
+    template_name = ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME
+    if not template_name:
+        log.error("[ELEVEN TRACKING] trip=%s fallo=config_template ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME vacío", trip_id)
+        raise RuntimeError("Bloqueado: falta ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME")
+
+    tracking_url = _tracking_url(tracking_token)
+    log.info(
+        "[ELEVEN TRACKING] preparando envío trip=%s destinatario=%s template=%s lang=%s url=%s",
+        trip_id, whatsapp_user, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE, tracking_url,
+    )
+
+    # La plantilla tracking_link tiene {{1}} en el cuerpo del mensaje.
+    # El parámetro es la URL de tracking como texto plano.
     payload = {
         "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
         "whatsapp_user_id": whatsapp_user,
-        "template_name": ELEVENLABS_WHATSAPP_ARRIVING_TEMPLATE_NAME,
+        "template_name": template_name,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [{"type": "body", "parameters": [{"text": arriving_message(trip)}]}],
+        "template_params": [
+            {
+                "type": "body",
+                "parameters": [{"type": "text", "text": tracking_url}],
+            }
+        ],
         "agent_id": ELEVENLABS_AGENT_ID,
     }
-    response = httpx.post(
-        ELEVENLABS_API_URL,
-        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-        json=payload,
-        timeout=20.0,
-    )
+
+    try:
+        response = httpx.post(
+            ELEVENLABS_API_URL,
+            headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=20.0,
+        )
+    except httpx.TimeoutException as exc:
+        log.error("[ELEVEN TRACKING] trip=%s fallo=timeout ElevenLabs no respondió en 20s", trip_id)
+        raise RuntimeError(f"Timeout enviando tracking trip={trip_id}") from exc
+
     if response.is_error:
-        log.error("[ELEVEN OUTBOUND] trip=%s status=%s body=%s", trip.get("id"), response.status_code, response.text[:500])
+        log.error(
+            "[ELEVEN TRACKING] trip=%s fallo=elevenlabs_api status=%s body=%s "
+            "destinatario=%s template=%s",
+            trip_id, response.status_code, response.text[:500],
+            whatsapp_user, template_name,
+        )
         response.raise_for_status()
+
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
-    log.info("[ELEVEN OUTBOUND] aviso assigned→arriving enviado trip=%s conversation_id=%s", trip.get("id"), conversation_id)
+    log.info(
+        "[ELEVEN TRACKING] ok trip=%s conversation_id=%s destinatario=%s",
+        trip_id, conversation_id, whatsapp_user,
+    )
     return conversation_id
 
 

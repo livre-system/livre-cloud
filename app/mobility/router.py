@@ -1423,15 +1423,42 @@ def driver_update_status(
             "DELETE FROM livre_trip_location_history WHERE trip_id = %s",
             (trip_id,),
         )
-    if previous_status in {"scheduled", "searching"} and payload.status in {"assigned", "arriving"}:
-        cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
-        accepted_trip = cur.fetchone()
-    elif previous_status == "assigned" and payload.status == "arriving":
+    # Cargar el viaje para decidir si hay que enviar el tracking.
+    # Se carga en la transición searching/scheduled→assigned/arriving (envío principal)
+    # y también en assigned→arriving para reintentar si el envío anterior falló.
+    _needs_trip_load = (
+        (previous_status in {"scheduled", "searching"} and payload.status in {"assigned", "arriving"})
+        or (previous_status == "assigned" and payload.status == "arriving")
+    )
+    if _needs_trip_load:
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
         accepted_trip = cur.fetchone()
     else:
         accepted_trip = None
-    if should_send_tracking_message(previous_status, payload.status) and accepted_trip and not accepted_trip.get("tracking_message_sent_at"):
+
+    # Envío principal: primera transición que convierte el viaje en asignado.
+    _should_send_now = (
+        should_send_tracking_message(previous_status, payload.status)
+        and accepted_trip
+        and not accepted_trip.get("tracking_message_sent_at")
+    )
+    # Reintento: conductor marcó "llegué" (assigned→arriving) y el envío previo falló.
+    _should_retry = (
+        not _should_send_now
+        and previous_status == "assigned"
+        and payload.status == "arriving"
+        and accepted_trip
+        and not accepted_trip.get("tracking_message_sent_at")
+        and accepted_trip.get("tracking_message_error")
+    )
+
+    if _should_send_now or _should_retry:
+        reason = "envío_principal" if _should_send_now else "reintento_arriving"
+        log.info(
+            "[MOBILITY TRACKING] trip=%s transición=%s→%s motivo=%s whatsapp_user=%s",
+            trip_id, previous_status, payload.status, reason,
+            accepted_trip.get("whatsapp_user") or "sin_usuario",
+        )
         try:
             conversation_id = send_tracking_message(accepted_trip)
             cur.execute(
@@ -1443,7 +1470,12 @@ def driver_update_status(
                    WHERE id = %s""",
                 (conversation_id or None, trip_id),
             )
+            log.info("[MOBILITY TRACKING] ok trip=%s motivo=%s conversation_id=%s", trip_id, reason, conversation_id)
         except Exception as exc:
+            log.error(
+                "[MOBILITY TRACKING] fallo trip=%s motivo=%s error=%s",
+                trip_id, reason, str(exc)[:300],
+            )
             cur.execute(
                 """UPDATE livi_trips
                    SET tracking_message_error = %s, updated_at = NOW()
