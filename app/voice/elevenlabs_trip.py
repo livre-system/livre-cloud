@@ -26,6 +26,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -163,69 +164,44 @@ def requires_advance_payment(service_type_id: str, source: str) -> bool:
     return str(service_type_id) == "2" and str(source or "").strip().lower() not in {"panel", "crm"}
 
 
-def _clean_whatsapp_user(raw: str) -> str:
-    """ElevenLabs espera el número en E.164 sin prefijo 'whatsapp:'."""
-    return raw.removeprefix("whatsapp:").strip()
+_E164_RE = re.compile(r"^\+\d{7,15}$")
 
 
-def _is_internal_id(value: str) -> bool:
-    """Devuelve True si el valor parece un ID interno de ElevenLabs, no un teléfono."""
-    if not value:
-        return False
-    # UUIDs con o sin prefijo "user:" — nunca son teléfonos
-    if value.startswith("user:"):
-        return True
-    # UUID puro: 8-4-4-4-12 hex
-    import re
-    if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value, re.IGNORECASE):
-        return True
-    return False
+def _normalize_e164(raw: str) -> str:
+    """Limpia prefijo 'whatsapp:' y agrega '+' si falta. Devuelve '' si no es un teléfono."""
+    cleaned = str(raw or "").strip().removeprefix("whatsapp:").strip()
+    if not cleaned:
+        return ""
+    if not cleaned.startswith("+"):
+        cleaned = f"+{cleaned}"
+    return cleaned if _E164_RE.match(cleaned) else ""
 
 
-def _resolve_phone_from_conversation(conversation_id: str, api_key: str) -> str:
-    """Consulta la API de ElevenLabs para obtener el teléfono real del participante.
+def _whatsapp_phone(body: dict, parameters: dict | None = None, data: dict | None = None) -> str:
+    """Extrae el teléfono real del pasajero desde el campo dedicado whatsapp_phone.
 
-    ElevenLabs almacena el número de WhatsApp real en los metadatos de la
-    conversación. Lo usamos cuando whatsapp_user en DB es un ID interno.
+    Solo lee el campo explícito `whatsapp_phone` enviado por el agente de
+    ElevenLabs. No usa system__caller_id ni whatsapp_user como fallback
+    porque en producción esos campos contienen UUIDs internos (user:<UUID>),
+    no teléfonos reales.
 
-    Devuelve el número en formato E.164 con '+' o '' si no se puede resolver.
+    El agente debe enviar whatsapp_phone con el número E.164 del pasajero
+    (+549...) en parameters, en raíz o en data.
     """
-    if not conversation_id or not api_key:
-        return ""
-    try:
-        resp = httpx.get(
-            f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}",
-            headers={"xi-api-key": api_key},
-            timeout=10.0,
-        )
-        if resp.is_error:
-            log.warning(
-                "[ELEVEN TRACKING] no se pudo obtener conversación %s: status=%s",
-                conversation_id, resp.status_code,
-            )
-            return ""
-        data = resp.json()
-        # El número real viene en metadata.phone_number o en el campo caller_id
-        # dependiendo de la versión de la API de ElevenLabs.
-        metadata = data.get("metadata") or {}
-        phone = (
-            metadata.get("phone_number")
-            or metadata.get("caller_id")
-            or data.get("caller_id")
-            or data.get("phone_number")
-            or ""
-        )
-        phone = str(phone).strip().removeprefix("whatsapp:")
-        if phone and not phone.startswith("+"):
-            phone = f"+{phone}"
-        log.info(
-            "[ELEVEN TRACKING] teléfono resuelto desde conversación %s → %s",
-            conversation_id, phone or "(vacío)",
-        )
-        return phone
-    except Exception as exc:
-        log.warning("[ELEVEN TRACKING] error resolviendo teléfono de conversación %s: %s", conversation_id, exc)
-        return ""
+    parameters = parameters or body.get("parameters", {}) or {}
+    data = data or body.get("data", {}) or {}
+    candidates = [
+        parameters.get("whatsapp_phone"),
+        body.get("whatsapp_phone"),
+        data.get("whatsapp_phone"),
+    ]
+    for raw in candidates:
+        if not raw:
+            continue
+        normalized = _normalize_e164(str(raw))
+        if normalized:
+            return normalized
+    return ""
 
 
 ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME = os.getenv(
@@ -236,47 +212,35 @@ ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME = os.getenv(
 def send_tracking_message(trip: dict) -> str:
     """Envía la plantilla aprobada tracking_link al pasajero por WhatsApp.
 
-    El campo whatsapp_user en livi_trips puede contener el ID interno de
-    ElevenLabs (user:UUID). En ese caso se resuelve el teléfono real
-    consultando la conversación de ElevenLabs antes de enviar.
+    Usa exclusivamente el campo whatsapp_phone (teléfono real en E.164).
+    Si ese campo está vacío o ausente, aborta y registra el error — nunca
+    intenta convertir UUIDs ni consultar conversaciones externas.
     """
     api_key = os.getenv("ELEVENLABS_API_KEY")
-    raw_user = str(trip.get("whatsapp_user") or "").strip()
     trip_id = trip.get("id")
     tracking_token = trip.get("tracking_token")
-    conversation_id = str(trip.get("conversation_id") or "").strip()
+    whatsapp_phone = str(trip.get("whatsapp_phone") or "").strip()
 
-    # --- Validaciones con logs específicos por causa ---
     if not api_key:
         log.error("[ELEVEN TRACKING] trip=%s fallo=config_api_key falta ELEVENLABS_API_KEY", trip_id)
         raise RuntimeError("ELEVENLABS_API_KEY no configurada")
     if not tracking_token:
         log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
-
-    # --- Resolver teléfono real ---
-    whatsapp_user = _clean_whatsapp_user(raw_user)
-
-    if _is_internal_id(whatsapp_user):
-        log.warning(
-            "[ELEVEN TRACKING] trip=%s whatsapp_user es ID interno (%r), "
-            "resolviendo teléfono real desde conversación %s",
-            trip_id, raw_user, conversation_id,
-        )
-        whatsapp_user = _resolve_phone_from_conversation(conversation_id, api_key)
-
-    if not whatsapp_user:
+    if not whatsapp_phone:
         log.error(
-            "[ELEVEN TRACKING] trip=%s fallo=destinatario no se pudo resolver teléfono "
-            "(raw=%r conversation_id=%s)",
-            trip_id, raw_user, conversation_id,
+            "[ELEVEN TRACKING] trip=%s fallo=sin_telefono whatsapp_phone vacío — "
+            "el agente de ElevenLabs debe enviar el campo whatsapp_phone con el número E.164",
+            trip_id,
         )
-        raise RuntimeError(f"El viaje {trip_id} no tiene teléfono WhatsApp válido")
-
-    # Asegurar formato E.164
-    if not whatsapp_user.startswith("+"):
-        whatsapp_user = f"+{whatsapp_user}"
-        log.info("[ELEVEN TRACKING] trip=%s teléfono normalizado a E.164: %s", trip_id, whatsapp_user)
+        raise RuntimeError(f"El viaje {trip_id} no tiene whatsapp_phone válido")
+    if not _E164_RE.match(whatsapp_phone):
+        log.error(
+            "[ELEVEN TRACKING] trip=%s fallo=formato_invalido whatsapp_phone=%r "
+            "no cumple E.164 (+NNNN...)",
+            trip_id, whatsapp_phone,
+        )
+        raise RuntimeError(f"whatsapp_phone del viaje {trip_id} no tiene formato E.164")
 
     template_name = ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME
     if not template_name:
@@ -286,14 +250,14 @@ def send_tracking_message(trip: dict) -> str:
     tracking_url = _tracking_url(tracking_token)
     log.info(
         "[ELEVEN TRACKING] preparando envío trip=%s destinatario=%s template=%s lang=%s url=%s",
-        trip_id, whatsapp_user, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE, tracking_url,
+        trip_id, whatsapp_phone, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE, tracking_url,
     )
 
     # La plantilla tracking_link tiene {{1}} en el cuerpo del mensaje.
     # El parámetro es la URL de tracking como texto plano.
     payload = {
         "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "whatsapp_user_id": whatsapp_user,
+        "whatsapp_user_id": whatsapp_phone,
         "template_name": template_name,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
         "template_params": [
@@ -329,7 +293,7 @@ def send_tracking_message(trip: dict) -> str:
     conversation_id = result.get("conversation_id") or ""
     log.info(
         "[ELEVEN TRACKING] ok trip=%s conversation_id=%s destinatario=%s",
-        trip_id, conversation_id, whatsapp_user,
+        trip_id, conversation_id, whatsapp_phone,
     )
     return conversation_id
 
@@ -368,18 +332,18 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
 
 
 def _save_whatsapp_quote(
-    *, conversation_id: str, whatsapp_user: str, origen: str, destino: str,
-    options: list[dict], source: str = "whatsapp",
+    *, conversation_id: str, whatsapp_user: str, whatsapp_phone: str = "",
+    origen: str, destino: str, options: list[dict], source: str = "whatsapp",
 ) -> str:
     quote_id = str(uuid.uuid4())
     with get_cursor() as cur:
         cur.execute(
             """
             INSERT INTO livi_whatsapp_quotes
-                (quote_id, conversation_id, whatsapp_user, source, origen, destino, options)
-            VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
-            """
-            , (quote_id, conversation_id, whatsapp_user, source, origen, destino, json.dumps(options))
+                (quote_id, conversation_id, whatsapp_user, whatsapp_phone, source, origen, destino, options)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+            """,
+            (quote_id, conversation_id, whatsapp_user, whatsapp_phone or "", source, origen, destino, json.dumps(options)),
         )
     return quote_id
 
@@ -404,6 +368,7 @@ def _save_trip(
     origen: str,
     destino: str,
     whatsapp_user: str = "",
+    whatsapp_phone: str = "",
     user_id: str | None = None,
     tool_call_id: str = "",
     service_type_id: str = "2",
@@ -440,13 +405,13 @@ def _save_trip(
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, whatsapp_user, tool_call_id,
+                (conversation_id, origen, destino, whatsapp_user, whatsapp_phone, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  activity_type, source, status, scheduled_at, payment_status, payment_method,
                  payment_provider, paid_at, payment_reference, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
@@ -454,6 +419,7 @@ def _save_trip(
                 origen,
                 destino,
                 whatsapp_user or "",
+                whatsapp_phone or "",
                 tool_call_id or "",
                 tracking_token,
                 service_type_id,
@@ -571,6 +537,7 @@ async def elevenlabs_quote(request: Request):
         parameters.get("destino") or body.get("destino") or data.get("destino") or ""
     ).strip()
     whatsapp_user = _whatsapp_user(body, parameters, data)
+    whatsapp_phone = _whatsapp_phone(body, parameters, data)
     conversation_id = str(
         body.get("conversation_id")
         or parameters.get("conversation_id")
@@ -580,8 +547,8 @@ async def elevenlabs_quote(request: Request):
     ).strip()
 
     log.info(
-        "[ELEVEN QUOTE] origen=%r destino=%r whatsapp=%r",
-        origen, destino, whatsapp_user,
+        "[ELEVEN QUOTE] origen=%r destino=%r whatsapp_user=%r whatsapp_phone=%r",
+        origen, destino, whatsapp_user, whatsapp_phone,
     )
     if not origen:
         return {"result": "Error: el origen no puede estar vacío."}
@@ -602,6 +569,7 @@ async def elevenlabs_quote(request: Request):
     quote_id = _save_whatsapp_quote(
         conversation_id=conversation_id,
         whatsapp_user=whatsapp_user,
+        whatsapp_phone=whatsapp_phone,
         origen=origen,
         destino=destino,
         options=options,
@@ -848,6 +816,7 @@ async def elevenlabs_trip(request: Request):
     ).strip() or None
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
+    whatsapp_phone = _whatsapp_phone(body, parameters, data)
     activity_type = str(
         parameters.get("activity_type")
         or body.get("activity_type")
@@ -884,7 +853,9 @@ async def elevenlabs_trip(request: Request):
     log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
     log.info(f"[ELEVEN TRIP] origen={origen!r}")
     log.info(f"[ELEVEN TRIP] destino={destino!r}")
-    log.info(f"[ELEVEN TRIP] tool_name={tool_name!r} tool_call_id={tool_call_id!r} whatsapp={whatsapp_user!r}")
+    log.info(f"[ELEVEN TRIP] tool_name={tool_name!r} tool_call_id={tool_call_id!r} whatsapp_user={whatsapp_user!r} whatsapp_phone={whatsapp_phone!r}")
+    if not whatsapp_phone:
+        log.warning("[ELEVEN TRIP] whatsapp_phone ausente — el tracking de WhatsApp no podrá enviarse para este viaje")
 
     # ── 3. Validaciones ──────────────────────────────────────────────────────
     if not origen:
@@ -997,6 +968,7 @@ async def elevenlabs_trip(request: Request):
             origen=origen,
             destino=destino,
             whatsapp_user=whatsapp_user,
+            whatsapp_phone=whatsapp_phone,
             tool_call_id=tool_call_id,
             service_type_id=service_type_id,
             fare=fare_value,
