@@ -47,8 +47,13 @@ from app.voice.elevenlabs_trip import send_tracking_message
 
 
 def should_send_tracking_message(previous_status: str | None, new_status: str) -> bool:
-    """El aviso sale cuando el conductor toma un viaje abierto o ya asignado."""
-    return previous_status in {"searching", "assigned"} and new_status == "arriving"
+    """El link de seguimiento sale una sola vez, cuando el conductor toma el viaje (assigned).
+
+    `arriving` se acepta como destino solo por compatibilidad con apps de conductor
+    anteriores que tomaban el viaje directamente en ese estado. assigned -> arriving
+    ("llegué") es otro evento y no reenvía el link.
+    """
+    return previous_status in {"searching", "scheduled"} and new_status in {"assigned", "arriving"}
 
 
 PUBLIC_TRACKING_TOKEN_TTL_HOURS = max(1, int(os.getenv("PASSENGER_TRACKING_TOKEN_TTL_HOURS", "24")))
@@ -376,8 +381,8 @@ def public_tracking_route(
         """SELECT t.id, t.origen, t.destino, t.status,
                   t.origen_latitude, t.origen_longitude,
                   t.destino_latitude, t.destino_longitude,
-                  COALESCE(t.tracking_latitude, a.current_latitude),
-                  COALESCE(t.tracking_longitude, a.current_longitude)
+                  COALESCE(t.tracking_latitude, a.current_latitude) AS current_latitude,
+                  COALESCE(t.tracking_longitude, a.current_longitude) AS current_longitude
            FROM livi_trips t
            LEFT JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
            WHERE t.tracking_token = %s
