@@ -338,9 +338,10 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
     public_trip = _public_trip(trip)
+    data = public_trip.model_dump()
+    data["driver_name"] = _public_driver_first_name(public_trip.driver_name)
     return PassengerTrackingTrip(
-        **public_trip.model_dump(),
-        driver_name=_public_driver_first_name(public_trip.driver_name),
+        **data,
         driver_reassignment_pending=bool(trip.get("driver_reassignment_pending", False)),
     )
 
