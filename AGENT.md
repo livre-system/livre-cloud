@@ -722,11 +722,29 @@ Pendientes explícitos:
 
 ## Handie de voz Livi para reasignación (2026-11-02)
 
-- `GET /mobility/driver/handie/{session_id}/voice-token` entrega una URL firmada corta de ElevenLabs sin exponer la API key; requiere `ELEVENLABS_DRIVER_AGENT_ID` (o `ELEVENLABS_AGENT_ID`) y `ELEVENLABS_API_KEY`.
-- `POST /mobility/driver/handie/{session_id}/voice-events` guarda transcripciones del conductor y de Livi en el canal `base`, para que el CRM las muestre como `Chofer` y `Livi`.
-- `POST /mobility/driver/handie/{session_id}/reassign` sólo permite reasignar el viaje actual en estado `assigned`, exige confirmación explícita y registra `trip_reassigned_by_driver` con motivo y fuente `driver_voice`. No atiende emergencias ni consultas generales.
-- El tracking público marca `driver_reassignment_pending` mientras el viaje busca otro conductor y expone sólo el primer nombre del conductor.
-- ElevenLabs quedó configurado con un agente separado para conductores (`agent_6801m6e6h6p6emwv2e79wxs9btwk`) y el client tool `reassign_trip` (`tool_9901m6e6gsyvfdyv9d17cs66k09h`) verificado por lectura de API.
-- La notificación WhatsApp de reasignación sigue bloqueada hasta tener acceso a Meta y el nombre exacto de una plantilla aprobada; el evento queda auditado y visible para el CRM, sin inventar un envío.
-- Definir el contrato autorizado de respuesta de pasajeros antes de agregar escritura, incluyendo identidad del operador, auditoría e idempotencia.
-- Mantener separadas las rutas, permisos y almacenamiento de `passenger_chat` y Base / Handie.
+|- `GET /mobility/driver/handie/{session_id}/voice-token` entrega una URL firmada corta de ElevenLabs sin exponer la API key; requiere `ELEVENLABS_DRIVER_AGENT_ID` (o `ELEVENLABS_AGENT_ID`) y `ELEVENLABS_API_KEY`.
+|- `POST /mobility/driver/handie/{session_id}/voice-events` guarda transcripciones del conductor y de Livi en el canal `base`, para que el CRM las muestre como `Chofer` y `Livi`.
+|- `POST /mobility/driver/handie/{session_id}/reassign` sólo permite reasignar el viaje actual en estado `assigned`, exige confirmación explícita y registra `trip_reassigned_by_driver` con motivo y fuente `driver_voice`. No atiende emergencias ni consultas generales.
+|- El tracking público marca `driver_reassignment_pending` mientras el viaje busca otro conductor y expone sólo el primer nombre del conductor.
+|- ElevenLabs quedó configurado con un agente separado para conductores (`agent_6801m6e6h6p6emwv2e79wxs9btwk`) y el client tool `reassign_trip` (`tool_9901m6e6gsyvfdyv9d17cs66k09h`) verificado por lectura de API.
+|- La notificación WhatsApp de reasignación sigue bloqueada hasta tener acceso a Meta y el nombre exacto de una plantilla aprobada; el evento queda auditado y visible para el CRM, sin inventar un envío.
+|- Definir el contrato autorizado de respuesta de pasajeros antes de agregar escritura, incluyendo identidad del operador, auditoría e idempotencia.
+|- Mantener separadas las rutas, permisos y almacenamiento de `passenger_chat` y Base / Handie.
+
+## Corrección de sintaxis en `livre-pasajeros` (2026-11-12)
+
+|- El archivo `index.html` de `livre-pasajeros` tenía errores de sintaxis JavaScript que impedían la ejecución del IIFE y la exportación de funciones globales.
+|- **Error identificado:** la función `renderServiceOptions` cerraba incorrectamente con `}))};` en lugar de `}));}`; faltaba el cierre de la función misma.
+|- **Correccionó realizada:** se agregó el `}` final para cerrar completamente la función. Sintaxis validada con `node --check`.
+|- **Exportación de funciones:** se verificó que las funciones `$`, `submitTripRequest`, `refreshQuote`, `showTracking`, `resetTrackingView`, `currentQuote`, `passengerSession` y `renderServiceOptions` estén asignadas a `window` al final del IIFE, permitiendo que los event listeners y el frontend accedan a ellas desde el scope global.
+|- **Commits publicados:** `50e4f04` (correct parentheses), `3bc2eaa` (add missing closing brace).
+|- **Validación:** Railway production desplegó exitosamente; `GET /` devuelve HTTP 200 y el asset contiene las funciones globales exportadas correctamente. Las funciones están disponibles en la consola del navegador como `window.submitTripRequest`, etc.
+|- **Pendiente operativo:** confirmar el flujo de solicitud de viaje de punta a punta (origen/destino → cotización → selección de Premium/Ahorro → login → POST `/mobility/requests`) y la creación real del viaje en la base de datos.
+
+## Reglas de flujo de código y despliegue (2026-11-12)
+
+|- **GitHub es la fuente autoritativa:** todos los cambios validados deben estar en `main` de GitHub antes de ser desplegados en Railway.
+|- **Cada cambio necesita commit y push:** validar localmente con tests, checks sintácticos y contratos HTTP → ejecutar `git add` y `git commit -m "mensaje breve"` → ejecutar `git push` a `origin/main`.
+|- **Validar primero, desplegar después:** no confiar en que `git push` dispare el deploy de Railway automáticamente sin verificar que el servicio ha quedado `Online` y que `/health` responde correctamente.
+|- **No volver a asumir que el caché del navegador refleja el código desplegado:** limpiar sesiones, usar parámetros no-cache (`?v=timestamp`) y revisar el asset HTTPS con `curl`/navegador antes de informar que el cambio está disponible.
+|- **Sanitizar reportes:** nunca exponer tokens, credenciales, secretos ni valores productivos en logs ni capturas. Reportar HTTP status, body sanitizado (sin datos sensibles), si hubo efecto persistido y exactamente qué se validó.
