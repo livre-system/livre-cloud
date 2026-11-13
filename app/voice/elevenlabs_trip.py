@@ -271,10 +271,22 @@ def send_tracking_message(trip: dict) -> str:
         raise RuntimeError("Bloqueado: falta ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME")
 
     tracking_url = _tracking_url(tracking_token)
+    recipient_fingerprint = hashlib.sha256(recipient.encode()).hexdigest()[:12]
     log.info(
-        "[ELEVEN TRACKING] preparando envío trip=%s destinatario=%s template=%s lang=%s",
-        trip_id, recipient, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        "[TRACKING TRACE] stage=ready trip=%s recipient_fp=%s recipient_is_business_id=%s "
+        "template=%s language=%s url_host=%s",
+        trip_id,
+        recipient_fingerprint,
+        recipient == ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        template_name,
+        ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        TRACKING_BASE_URL.split('/', 3)[2] if '://' in TRACKING_BASE_URL else TRACKING_BASE_URL,
     )
+    log.info(
+        "[TRACKING TRACE] stage=dispatch trip=%s provider=elevenlabs endpoint=%s",
+        trip_id, ELEVENLABS_API_URL,
+    )
+
 
     # La plantilla tracking_link tiene {{1}} en el cuerpo del mensaje.
     # El parámetro es la URL de tracking como texto plano.
@@ -304,7 +316,10 @@ def send_tracking_message(trip: dict) -> str:
         raise RuntimeError(f"Timeout enviando tracking trip={trip_id}") from exc
 
     if response.is_error:
-        # Registrar body completo para diagnóstico; ocultar tracking_url del log
+        log.error(
+            "[TRACKING TRACE] stage=provider_rejected trip=%s provider=elevenlabs http_status=%s",
+            trip_id, response.status_code,
+        )
         safe_body = response.text[:800].replace(tracking_url or "", "<tracking_url>")
         log.error(
             "[ELEVEN TRACKING] trip=%s fallo=elevenlabs_api status=%s body=%s "
@@ -317,6 +332,11 @@ def send_tracking_message(trip: dict) -> str:
 
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
+    log.info(
+        "[TRACKING TRACE] stage=provider_accepted trip=%s provider=elevenlabs http_status=%s "
+        "conversation_id_present=%s response_keys=%s",
+        trip_id, response.status_code, bool(conversation_id), sorted(result.keys()),
+    )
     log.info(
         "[ELEVEN TRACKING] ok trip=%s conversation_id=%s destinatario=%s",
         trip_id, conversation_id, recipient,
@@ -853,6 +873,11 @@ async def elevenlabs_trip(request: Request):
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
+    log.info(
+        "[TRACKING TRACE] stage=trip_input identity_present=%s phone_present=%s "
+        "conversation_id_present=%s",
+        bool(whatsapp_user), bool(whatsapp_phone), bool(conversation_id),
+    )
     activity_type = str(
         parameters.get("activity_type")
         or body.get("activity_type")

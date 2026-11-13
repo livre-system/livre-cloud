@@ -1471,6 +1471,11 @@ def driver_update_status(
                    WHERE id = %s""",
                 (conversation_id or None, trip_id),
             )
+            log.info(
+                "[TRACKING TRACE] stage=livre_persisted trip=%s status=accepted "
+                "conversation_id_present=%s",
+                trip_id, bool(conversation_id),
+            )
             log.info("[MOBILITY TRACKING] ok trip=%s motivo=%s conversation_id=%s", trip_id, reason, conversation_id)
         except Exception as exc:
             log.error(
