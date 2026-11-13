@@ -23,6 +23,7 @@ from app.voice.elevenlabs_trip import router as elevenlabs_trip_router
 from app.crm.router import router as crm_router
 from app.mobility.router import router as mobility_router
 from app.payments.router import router as payments_router, whatsapp_router as whatsapp_payments_router
+from app.integrations.meta_webhook import router as meta_webhook_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_runtime_config()
@@ -76,6 +77,7 @@ app.include_router(crm_router)
 app.include_router(mobility_router)
 app.include_router(payments_router)
 app.include_router(whatsapp_payments_router)
+app.include_router(meta_webhook_router)
 
 
 # Servir imágenes subidas al volumen
