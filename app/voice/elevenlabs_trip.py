@@ -168,34 +168,115 @@ def _clean_whatsapp_user(raw: str) -> str:
     return raw.removeprefix("whatsapp:").strip()
 
 
+def _is_internal_id(value: str) -> bool:
+    """Devuelve True si el valor parece un ID interno de ElevenLabs, no un teléfono."""
+    if not value:
+        return False
+    # UUIDs con o sin prefijo "user:" — nunca son teléfonos
+    if value.startswith("user:"):
+        return True
+    # UUID puro: 8-4-4-4-12 hex
+    import re
+    if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", value, re.IGNORECASE):
+        return True
+    return False
+
+
+def _resolve_phone_from_conversation(conversation_id: str, api_key: str) -> str:
+    """Consulta la API de ElevenLabs para obtener el teléfono real del participante.
+
+    ElevenLabs almacena el número de WhatsApp real en los metadatos de la
+    conversación. Lo usamos cuando whatsapp_user en DB es un ID interno.
+
+    Devuelve el número en formato E.164 con '+' o '' si no se puede resolver.
+    """
+    if not conversation_id or not api_key:
+        return ""
+    try:
+        resp = httpx.get(
+            f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}",
+            headers={"xi-api-key": api_key},
+            timeout=10.0,
+        )
+        if resp.is_error:
+            log.warning(
+                "[ELEVEN TRACKING] no se pudo obtener conversación %s: status=%s",
+                conversation_id, resp.status_code,
+            )
+            return ""
+        data = resp.json()
+        # El número real viene en metadata.phone_number o en el campo caller_id
+        # dependiendo de la versión de la API de ElevenLabs.
+        metadata = data.get("metadata") or {}
+        phone = (
+            metadata.get("phone_number")
+            or metadata.get("caller_id")
+            or data.get("caller_id")
+            or data.get("phone_number")
+            or ""
+        )
+        phone = str(phone).strip().removeprefix("whatsapp:")
+        if phone and not phone.startswith("+"):
+            phone = f"+{phone}"
+        log.info(
+            "[ELEVEN TRACKING] teléfono resuelto desde conversación %s → %s",
+            conversation_id, phone or "(vacío)",
+        )
+        return phone
+    except Exception as exc:
+        log.warning("[ELEVEN TRACKING] error resolviendo teléfono de conversación %s: %s", conversation_id, exc)
+        return ""
+
+
 ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME = os.getenv(
     "ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME", "tracking_link"
 ).strip()
 
 
 def send_tracking_message(trip: dict) -> str:
-    """Envía la plantilla aprobada tracking_link con el botón URL dinámico.
+    """Envía la plantilla aprobada tracking_link al pasajero por WhatsApp.
 
-    La plantilla tracking_link tiene un botón URL con parámetro {{1}}.
-    Se pasa únicamente la URL de tracking como parámetro del botón;
-    el cuerpo del template ya viene fijo en Meta.
+    El campo whatsapp_user en livi_trips puede contener el ID interno de
+    ElevenLabs (user:UUID). En ese caso se resuelve el teléfono real
+    consultando la conversación de ElevenLabs antes de enviar.
     """
     api_key = os.getenv("ELEVENLABS_API_KEY")
     raw_user = str(trip.get("whatsapp_user") or "").strip()
-    whatsapp_user = _clean_whatsapp_user(raw_user)
     trip_id = trip.get("id")
     tracking_token = trip.get("tracking_token")
+    conversation_id = str(trip.get("conversation_id") or "").strip()
 
     # --- Validaciones con logs específicos por causa ---
     if not api_key:
         log.error("[ELEVEN TRACKING] trip=%s fallo=config_api_key falta ELEVENLABS_API_KEY", trip_id)
         raise RuntimeError("ELEVENLABS_API_KEY no configurada")
-    if not whatsapp_user:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=destinatario whatsapp_user vacío (raw=%r)", trip_id, raw_user)
-        raise RuntimeError(f"El viaje {trip_id} no tiene whatsapp_user")
     if not tracking_token:
         log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
+
+    # --- Resolver teléfono real ---
+    whatsapp_user = _clean_whatsapp_user(raw_user)
+
+    if _is_internal_id(whatsapp_user):
+        log.warning(
+            "[ELEVEN TRACKING] trip=%s whatsapp_user es ID interno (%r), "
+            "resolviendo teléfono real desde conversación %s",
+            trip_id, raw_user, conversation_id,
+        )
+        whatsapp_user = _resolve_phone_from_conversation(conversation_id, api_key)
+
+    if not whatsapp_user:
+        log.error(
+            "[ELEVEN TRACKING] trip=%s fallo=destinatario no se pudo resolver teléfono "
+            "(raw=%r conversation_id=%s)",
+            trip_id, raw_user, conversation_id,
+        )
+        raise RuntimeError(f"El viaje {trip_id} no tiene teléfono WhatsApp válido")
+
+    # Asegurar formato E.164
+    if not whatsapp_user.startswith("+"):
+        whatsapp_user = f"+{whatsapp_user}"
+        log.info("[ELEVEN TRACKING] trip=%s teléfono normalizado a E.164: %s", trip_id, whatsapp_user)
 
     template_name = ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME
     if not template_name:
