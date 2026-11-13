@@ -340,11 +340,16 @@ def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None
         data.get("user_id"),
         (data.get("metadata") or {}).get("system__caller_id"),
     )
-    value = next((str(value).strip() for value in candidates if value), "")
-    if value.startswith("user:"):
-        log.warning("[ELEVEN TRIP] ignorando identidad interna como WhatsApp User ID")
-        return ""
-    return value
+    phone_number_id = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "").strip()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        value = str(candidate).strip()
+        if value.startswith("user:") or (phone_number_id and value == phone_number_id):
+            continue
+        return value
+    log.warning("[ELEVEN TRIP] no se encontró WhatsApp User ID del pasajero")
+    return ""
 
 
 def _get_existing_trip(conversation_id: str) -> dict | None:
