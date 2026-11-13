@@ -256,19 +256,14 @@ def send_tracking_message(trip: dict) -> str:
         log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
 
-    recipient = _resolve_recipient(trip)
+    recipient = str(trip.get("whatsapp_user_id") or "").strip()
     if not recipient:
-        raw_phone = str(trip.get("whatsapp_phone") or "")
-        raw_user = str(trip.get("whatsapp_user") or "")
-        log.error(
-            "[ELEVEN TRACKING] trip=%s fallo=sin_telefono_valido "
-            "whatsapp_phone=%r whatsapp_user=%r — "
-            "ninguno contiene un número E.164 válido",
-            trip_id,
-            raw_phone[:20] if raw_phone else "(vacío)",
-            raw_user[:20] if raw_user else "(vacío)",
-        )
-        raise RuntimeError(f"El viaje {trip_id} no tiene teléfono WhatsApp válido para enviar el tracking")
+        recipient = _resolve_recipient(trip)
+    if recipient.startswith("user:"):
+        recipient = ""
+    if not recipient:
+        log.error("[ELEVEN TRACKING] trip=%s fallo=whatsapp_user_id ausente_o_interno", trip_id)
+        raise RuntimeError(f"El viaje {trip_id} no tiene WhatsApp User ID reutilizable")
 
     template_name = ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME
     if not template_name:
@@ -330,7 +325,7 @@ def send_tracking_message(trip: dict) -> str:
 
 
 def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None = None) -> str:
-    """Obtiene la identidad de WhatsApp del contrato de LIVI/ElevenLabs."""
+    """Obtiene el WhatsApp User ID/BSUID de ElevenLabs, nunca un user:<UUID>."""
     parameters = parameters or body.get("parameters", {}) or {}
     data = data or body.get("data", {}) or {}
     candidates = (
@@ -345,7 +340,11 @@ def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None
         data.get("user_id"),
         (data.get("metadata") or {}).get("system__caller_id"),
     )
-    return next((str(value).strip() for value in candidates if value), "")
+    value = next((str(value).strip() for value in candidates if value), "")
+    if value.startswith("user:"):
+        log.warning("[ELEVEN TRIP] ignorando identidad interna como WhatsApp User ID")
+        return ""
+    return value
 
 
 def _get_existing_trip(conversation_id: str) -> dict | None:
@@ -436,19 +435,20 @@ def _save_trip(
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, whatsapp_user, whatsapp_phone, tool_call_id,
+                (conversation_id, origen, destino, whatsapp_user, whatsapp_user_id, whatsapp_phone, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  activity_type, source, status, scheduled_at, payment_status, payment_method,
                  payment_provider, paid_at, payment_reference, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 conversation_id,
                 origen,
                 destino,
+                whatsapp_user or "",
                 whatsapp_user or "",
                 whatsapp_phone or "",
                 tool_call_id or "",

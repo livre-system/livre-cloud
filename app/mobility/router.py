@@ -1464,6 +1464,7 @@ def driver_update_status(
             cur.execute(
                 """UPDATE livi_trips
                    SET tracking_message_sent_at = NOW(),
+                       tracking_message_status = 'accepted',
                        tracking_message_conversation_id = %s,
                        tracking_message_error = NULL,
                        updated_at = NOW()

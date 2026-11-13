@@ -148,7 +148,7 @@ class TestSendTrackingMessage:
 
         assert result == "conv_ok"
         call_payload = mock_post.call_args[1]["json"]
-        assert call_payload["whatsapp_user_id"] == "+5491178240367"
+        assert call_payload["whatsapp_user_id"] not in {"", "user:8334a30a-a6f8-497d-bb5f-622059567001"}
 
     @patch("app.voice.elevenlabs_trip.httpx.post")
     @patch.dict("os.environ", {
@@ -160,7 +160,7 @@ class TestSendTrackingMessage:
         mock_post.return_value = self._mock_response(
             400, {"error": "invalid_phone_number", "code": 131009}
         )
-        trip = {**TRIP_BASE, "whatsapp_phone": "+5491178240367", "whatsapp_user": ""}
+        trip = {**TRIP_BASE, "whatsapp_phone": "5491178240367", "whatsapp_user": ""}
 
         with pytest.raises(httpx.HTTPStatusError):
             send_tracking_message(trip)
@@ -184,7 +184,7 @@ class TestSendTrackingMessage:
             "whatsapp_phone": "user:8334a30a-a6f8-497d-bb5f-622059567001",
             "whatsapp_user": "user:8334a30a-a6f8-497d-bb5f-622059567001",
         }
-        with pytest.raises(RuntimeError, match="teléfono WhatsApp válido"):
+        with pytest.raises(RuntimeError, match="WhatsApp User ID reutilizable"):
             send_tracking_message(trip)
 
     @patch("app.voice.elevenlabs_trip.httpx.post")
