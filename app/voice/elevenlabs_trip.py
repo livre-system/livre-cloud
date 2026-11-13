@@ -209,17 +209,45 @@ ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME = os.getenv(
 ).strip()
 
 
+def _resolve_recipient(trip: dict) -> str:
+    """Resuelve el teléfono del pasajero para el envío de tracking.
+
+    Prioridad:
+      1. whatsapp_phone — campo dedicado, debe contener E.164.
+      2. whatsapp_user  — fallback solo si pasa la validación E.164.
+                          Rechaza IDs internos como 'user:<UUID>'.
+
+    Devuelve el número normalizado o '' si ninguno es válido.
+    """
+    # 1. Campo dedicado
+    phone = _normalize_e164(str(trip.get("whatsapp_phone") or ""))
+    if phone:
+        return phone
+
+    # 2. Fallback: whatsapp_user solo si es un número real
+    raw_user = str(trip.get("whatsapp_user") or "").strip()
+    phone = _normalize_e164(raw_user)
+    if phone:
+        log.info(
+            "[ELEVEN TRACKING] trip=%s usando whatsapp_user como fallback (%s) — "
+            "configurar whatsapp_phone para evitar esto",
+            trip.get("id"), phone,
+        )
+        return phone
+
+    return ""
+
+
 def send_tracking_message(trip: dict) -> str:
     """Envía la plantilla aprobada tracking_link al pasajero por WhatsApp.
 
-    Usa exclusivamente el campo whatsapp_phone (teléfono real en E.164).
-    Si ese campo está vacío o ausente, aborta y registra el error — nunca
-    intenta convertir UUIDs ni consultar conversaciones externas.
+    Resuelve el destinatario desde whatsapp_phone y, como fallback,
+    desde whatsapp_user si contiene un número E.164 válido.
+    Rechaza IDs internos (user:<UUID>) sin intentar enviarlos.
     """
     api_key = os.getenv("ELEVENLABS_API_KEY")
     trip_id = trip.get("id")
     tracking_token = trip.get("tracking_token")
-    whatsapp_phone = str(trip.get("whatsapp_phone") or "").strip()
 
     if not api_key:
         log.error("[ELEVEN TRACKING] trip=%s fallo=config_api_key falta ELEVENLABS_API_KEY", trip_id)
@@ -227,20 +255,20 @@ def send_tracking_message(trip: dict) -> str:
     if not tracking_token:
         log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
-    if not whatsapp_phone:
+
+    recipient = _resolve_recipient(trip)
+    if not recipient:
+        raw_phone = str(trip.get("whatsapp_phone") or "")
+        raw_user = str(trip.get("whatsapp_user") or "")
         log.error(
-            "[ELEVEN TRACKING] trip=%s fallo=sin_telefono whatsapp_phone vacío — "
-            "el agente de ElevenLabs debe enviar el campo whatsapp_phone con el número E.164",
+            "[ELEVEN TRACKING] trip=%s fallo=sin_telefono_valido "
+            "whatsapp_phone=%r whatsapp_user=%r — "
+            "ninguno contiene un número E.164 válido",
             trip_id,
+            raw_phone[:20] if raw_phone else "(vacío)",
+            raw_user[:20] if raw_user else "(vacío)",
         )
-        raise RuntimeError(f"El viaje {trip_id} no tiene whatsapp_phone válido")
-    if not _E164_RE.match(whatsapp_phone):
-        log.error(
-            "[ELEVEN TRACKING] trip=%s fallo=formato_invalido whatsapp_phone=%r "
-            "no cumple E.164 (+NNNN...)",
-            trip_id, whatsapp_phone,
-        )
-        raise RuntimeError(f"whatsapp_phone del viaje {trip_id} no tiene formato E.164")
+        raise RuntimeError(f"El viaje {trip_id} no tiene teléfono WhatsApp válido para enviar el tracking")
 
     template_name = ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME
     if not template_name:
@@ -249,15 +277,15 @@ def send_tracking_message(trip: dict) -> str:
 
     tracking_url = _tracking_url(tracking_token)
     log.info(
-        "[ELEVEN TRACKING] preparando envío trip=%s destinatario=%s template=%s lang=%s url=%s",
-        trip_id, whatsapp_phone, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE, tracking_url,
+        "[ELEVEN TRACKING] preparando envío trip=%s destinatario=%s template=%s lang=%s",
+        trip_id, recipient, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
     )
 
     # La plantilla tracking_link tiene {{1}} en el cuerpo del mensaje.
     # El parámetro es la URL de tracking como texto plano.
     payload = {
         "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "whatsapp_user_id": whatsapp_phone,
+        "whatsapp_user_id": recipient,
         "template_name": template_name,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
         "template_params": [
@@ -281,11 +309,14 @@ def send_tracking_message(trip: dict) -> str:
         raise RuntimeError(f"Timeout enviando tracking trip={trip_id}") from exc
 
     if response.is_error:
+        # Registrar body completo para diagnóstico; ocultar tracking_url del log
+        safe_body = response.text[:800].replace(tracking_url or "", "<tracking_url>")
         log.error(
             "[ELEVEN TRACKING] trip=%s fallo=elevenlabs_api status=%s body=%s "
-            "destinatario=%s template=%s",
-            trip_id, response.status_code, response.text[:500],
-            whatsapp_user, template_name,
+            "destinatario=%s template=%s lang=%s phone_number_id=%s",
+            trip_id, response.status_code, safe_body,
+            recipient, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+            ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
         )
         response.raise_for_status()
 
@@ -293,7 +324,7 @@ def send_tracking_message(trip: dict) -> str:
     conversation_id = result.get("conversation_id") or ""
     log.info(
         "[ELEVEN TRACKING] ok trip=%s conversation_id=%s destinatario=%s",
-        trip_id, conversation_id, whatsapp_phone,
+        trip_id, conversation_id, recipient,
     )
     return conversation_id
 
