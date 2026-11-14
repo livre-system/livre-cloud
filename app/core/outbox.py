@@ -63,8 +63,13 @@ def mark_failed(event_id: int, error: str, attempts: int) -> None:
             )
 
 
+from app.voice.elevenlabs_admin import send_arrival_whatsapp
+
 def dispatch_event(event: dict[str, Any]) -> None:
     """Entrega al sink configurado; no marca éxito si no hay sink."""
+    if event["event_type"] == "status_changed" and event["payload"].get("new_status") == "arriving":
+        send_arrival_whatsapp(event["trip_id"])
+
     if not OUTBOX_WEBHOOK_URL:
         raise RuntimeError("OUTBOX_WEBHOOK_URL no está configurada")
     response = requests.post(
