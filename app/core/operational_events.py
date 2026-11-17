@@ -9,6 +9,9 @@ from typing import Any
 from app.memory.structured_ingestion import schedule_operational_event
 
 
+import logging
+log = logging.getLogger(__name__)
+
 def record_trip_event(
     cur,
     *,
