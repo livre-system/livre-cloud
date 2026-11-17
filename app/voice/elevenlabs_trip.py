@@ -227,7 +227,9 @@ def _resolve_recipient(trip: dict) -> str:
         return user_norm
 
     log.error("[ELEVEN TRACKING] fallo=resolucion_datos_contacto trip=%s user=%r phone=%r", trip.get("id"), user, phone)
-    return "" def send_tracking_message(trip: dict) -> str:
+    return ""
+
+def send_tracking_message(trip: dict) -> str:
     """Envía la plantilla aprobada tracking_link al pasajero por WhatsApp.
 
     Resuelve el destinatario desde whatsapp_phone y, como fallback,
