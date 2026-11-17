@@ -52,10 +52,20 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
     payload = {
         "phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
         "to": trip["whatsapp_user"],
-        "template_name": TEMPLATE_NAME,
-        "template_params": [
-            {"type": "body", "parameters": [{"text": first_name}, {"text": plate}]}
-        ]
+        "type": "template",
+        "template": {
+            "name": TEMPLATE_NAME,
+            "language": {"code": "es"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": first_name},
+                        {"type": "text", "text": plate}
+                    ]
+                }
+            ]
+        }
     }
 
     try:
