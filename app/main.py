@@ -5,6 +5,7 @@ from pathlib import Path
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
 from app.core.config import AUTO_MIGRATE, SESSION_SECRET, validate_runtime_config
+from app.core.outbox import run_once
 from app.core.database import get_cursor, init_db, run_migrations
 from app.chat.repository import ensure_tables
 from app.auth.router import router as auth_router
@@ -34,10 +35,7 @@ async def lifespan(app: FastAPI):
         run_migrations()
     ensure_tables()
     await patch_agent_voice()
-    # Ejecutar outbox al inicio para limpiar eventos pendientes
-    run_once()
     yield
-
 
 app = FastAPI(title="Livre Cloud", lifespan=lifespan)
 
