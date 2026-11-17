@@ -76,7 +76,7 @@ def dispatch_event(event: dict[str, Any]) -> None:
         
         log.info("[OUTBOX DIAGNOSTIC] Evento recibido: trip=%s, status=%s", event.get("trip_id"), new_status)
         if new_status == "arriving":
-            log.info("[OUTBOX DIAGNOSTIC] Disparando aviso de llegada para trip=%s", event.get("trip_id"))
+            log.info("[DIAGNOSTICO OUTBOX] Evento arriving detectado para trip=%s. Intentando enviar aviso.", event.get("trip_id"))
             send_arrival_whatsapp(event.get("trip_id"))
 
     if not OUTBOX_WEBHOOK_URL:

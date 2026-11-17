@@ -33,6 +33,8 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
         WHERE t.id = %s
     """, [trip_id])
     trip = my_cur.fetchone()
+    # Log de diagnóstico: ¿Qué encontramos?
+    log.info("[DIAGNOSTICO LLEGADA] trip=%s found=%s whatsapp_user=%r", trip_id, bool(trip), trip.get("whatsapp_user") if trip else "N/A")
         
     if not trip or not trip.get("whatsapp_user"):
         log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
