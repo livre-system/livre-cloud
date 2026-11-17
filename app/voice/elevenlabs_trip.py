@@ -860,11 +860,17 @@ async def elevenlabs_trip(request: Request):
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
-    log.info(
-        "[TRACKING TRACE] stage=trip_input identity_present=%s phone_present=%s "
-        "conversation_id_present=%s",
-        bool(whatsapp_user), bool(whatsapp_phone), bool(conversation_id),
-    )
+
+    # Seguro de vida: recuperar de cotizaciones previas si faltan
+    if not whatsapp_user or not whatsapp_phone:
+        log.info("[ELEVEN TRIP] Datos incompletos, buscando en quotes: conv_id=%s", conversation_id)
+        with get_cursor() as cur:
+            cur.execute("SELECT whatsapp_user, whatsapp_phone FROM livi_whatsapp_quotes WHERE conversation_id = %s ORDER BY created_at DESC LIMIT 1", [conversation_id])
+            row = cur.fetchone()
+            if row:
+                if not whatsapp_user: whatsapp_user = row["whatsapp_user"]
+                if not whatsapp_phone: whatsapp_phone = row["whatsapp_phone"]
+                log.info("[ELEVEN TRIP] Recuperado de quotes: user=%s phone=%s", whatsapp_user, whatsapp_phone)
     activity_type = str(
         parameters.get("activity_type")
         or body.get("activity_type")
