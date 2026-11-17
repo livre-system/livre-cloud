@@ -205,6 +205,10 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     conversation_id = f"web_{uuid.uuid4()}"
     passenger_identity = f"user:{user['id']}" if user else payload.whatsapp_user.strip()
+    if not passenger_identity or passenger_identity == "user:None":
+        log.error("[TRIP CREATION] Fallo por identidad de pasajero ausente")
+        raise HTTPException(status_code=400, detail="Identificador de pasajero requerido")
+
     cur.execute(
         """
         INSERT INTO livi_trips
