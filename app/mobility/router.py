@@ -204,6 +204,7 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     # Validación estricta: si falta whatsapp_user, el viaje es inoperable
+    log.info("[TRIP REQUEST DEBUG] Payload recibido: %s", payload.model_dump())
     if not passenger_identity:
         log.error("[TRIP REQUEST] Intento de creación sin identificador de pasajero")
         raise HTTPException(status_code=400, detail="Identificador de pasajero (WhatsApp) es obligatorio")
