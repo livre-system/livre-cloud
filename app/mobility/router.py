@@ -208,6 +208,8 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     if not passenger_identity:
         log.error("[TRIP REQUEST] Intento de creación sin identificador de pasajero")
         raise HTTPException(status_code=400, detail="Identificador de pasajero (WhatsApp) es obligatorio")
+
+    cur.execute(
         """
         INSERT INTO livi_trips
             (conversation_id, user_id, origen, destino, whatsapp_user, tracking_token,
