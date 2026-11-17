@@ -36,8 +36,8 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
             log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
             return None, None
 
-        first_name = trip.get("first_name") or "Pasajero"
-        plate = trip.get("tracking_plate") or "tu conductor"
+        first_name = params[0] if params else "Pasajero"
+        plate = params[1] if params else "tu conductor"
         return trip, (first_name, plate)
 
     if cur:
