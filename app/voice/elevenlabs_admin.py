@@ -10,36 +10,49 @@ ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-mess
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
 ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "1364913613361192")
-TEMPLATE_NAME = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "").strip()
+# Forzar plantilla si la variable de entorno no la resuelve correctamente
+TEMPLATE_NAME = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip()
+if not TEMPLATE_NAME:
+    TEMPLATE_NAME = "livre_admin_notice"
+log.info("[ELEVEN ADMIN] Configuración de plantilla: %s", TEMPLATE_NAME)
 
-def send_arrival_whatsapp(trip_id: int):
+def send_arrival_whatsapp(trip_id: int, cur=None):
     """Envía WhatsApp de aviso de llegada usando plantilla administrativa."""
     if not TEMPLATE_NAME:
         log.warning("[ELEVEN ADMIN] Plantilla no configurada, omitiendo envío para trip=%s", trip_id)
         return
 
-    with get_cursor() as cur:
-        # Intentar obtener datos del CRM, pero ser flexibles
-        cur.execute("""
+    # Usar el cursor proporcionado o abrir uno nuevo
+    def _do_work(cursor):
+        cursor.execute("""
             SELECT t.whatsapp_user, p.first_name, t.tracking_plate 
             FROM livi_trips t
             LEFT JOIN livre_crm_passengers p ON t.whatsapp_user = p.phone
             WHERE t.id = %s
         """, [trip_id])
-        trip = cur.fetchone()
+        trip = cursor.fetchone()
         
-    if not trip or not trip.get("whatsapp_user"):
-        log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
-        return
+        if not trip or not trip.get("whatsapp_user"):
+            log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
+            return None, None
 
-    # Usar valores por defecto seguros si falta info del CRM
-    first_name = trip.get("first_name") or "Pasajero"
-    plate = trip.get("tracking_plate") or "tu conductor"
+        first_name = trip.get("first_name") or "Pasajero"
+        plate = trip.get("tracking_plate") or "tu conductor"
+        return trip, (first_name, plate)
 
-    # Idempotencia: Verificar si ya se envió este aviso de llegada para este trip
-    with get_cursor() as cur:
-        cur.execute("SELECT id FROM livre_trip_event_outbox WHERE trip_id = %s AND event_type = 'arrival_notice_sent' AND status = 'sent'", [trip_id])
-        if cur.fetchone():
+    if cur:
+        trip, params = _do_work(cur)
+    else:
+        with get_cursor() as conn_cur:
+            trip, params = _do_work(conn_cur)
+            
+    if not trip: return
+
+    # Idempotencia: Verificar si ya se envió este aviso
+    check_cur = cur if cur else get_cursor()
+    with check_cur as c:
+        c.execute("SELECT id FROM livre_trip_event_outbox WHERE trip_id = %s AND event_type = 'arrival_notice_sent' AND status = 'sent'", [trip_id])
+        if c.fetchone():
             log.info("[ELEVEN ADMIN] Aviso de llegada ya enviado, trip=%s, omitiendo.", trip_id)
             return
 

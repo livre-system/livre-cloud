@@ -1419,11 +1419,22 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
-    record_trip_event(
-        cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
-        event_type="status_changed", previous_status=previous_status,
-        new_status=payload.status,
-    )
+        # Forzar evento de outbox y envío síncrono del aviso de llegada
+        from app.voice.elevenlabs_admin import send_arrival_whatsapp
+        try:
+            # Pasamos el cursor actual 'cur' a la función de envío
+            send_arrival_whatsapp(trip_id, cur=cur)
+            log.info("[ROUTER DIAGNOSTIC] Aviso de llegada enviado sincrónicamente para trip=%s", trip_id)
+        except Exception as e:
+            log.error("[ROUTER DIAGNOSTIC] Fallo en aviso de llegada sincrónico para trip=%s: %s", trip_id, str(e))
+        
+        record_trip_event(
+            cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
+            event_type="status_changed", previous_status="assigned",
+            new_status="arriving",
+        )
+        log.info("[ROUTER DIAGNOSTIC] Evento de llegada forzado en outbox para trip=%s", trip_id)
+
     if payload.status in ("cancelled", "conflict", "lost"):
         # Un viaje que no termina correctamente no deja historial GPS persistido.
         cur.execute(
