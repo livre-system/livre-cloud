@@ -24,6 +24,8 @@ from app.crm.router import router as crm_router
 from app.mobility.router import router as mobility_router
 from app.payments.router import router as payments_router, whatsapp_router as whatsapp_payments_router
 from app.integrations.meta_webhook import router as meta_webhook_router
+from app.core.outbox import run_once
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_runtime_config()
@@ -32,6 +34,8 @@ async def lifespan(app: FastAPI):
         run_migrations()
     ensure_tables()
     await patch_agent_voice()
+    # Ejecutar outbox al inicio para limpiar eventos pendientes
+    run_once()
     yield
 
 
