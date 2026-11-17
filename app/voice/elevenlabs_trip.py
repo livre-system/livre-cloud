@@ -265,10 +265,10 @@ def send_tracking_message(trip: dict) -> str:
         log.error("[ELEVEN TRACKING] trip=%s fallo=whatsapp_user_id ausente_o_interno", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene WhatsApp User ID reutilizable")
 
-    template_name = ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME
+    template_name = os.getenv("ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME", "tracking_link").strip()
     if not template_name:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=config_template ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME vacío", trip_id)
-        raise RuntimeError("Bloqueado: falta ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME")
+        log.warning("[ELEVEN TRACKING] Template vacío en ENV, usando fallback 'tracking_link'")
+        template_name = "tracking_link"
 
     tracking_url = _tracking_url(tracking_token)
     recipient_fingerprint = hashlib.sha256(recipient.encode()).hexdigest()[:12]
