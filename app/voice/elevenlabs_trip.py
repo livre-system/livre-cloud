@@ -210,34 +210,24 @@ ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME = os.getenv(
 
 
 def _resolve_recipient(trip: dict) -> str:
-    """Resuelve el teléfono del pasajero para el envío de tracking.
-
-    Prioridad:
-      1. whatsapp_phone — campo dedicado, debe contener E.164.
-      2. whatsapp_user  — fallback solo si pasa la validación E.164.
-                          Rechaza IDs internos como 'user:<UUID>'.
-
-    Devuelve el número normalizado o '' si ninguno es válido.
-    """
+    """Resuelve el teléfono del pasajero para el envío de tracking."""
+    user = trip.get("whatsapp_user")
+    phone = trip.get("whatsapp_phone")
+    log.info("[DEBUG TELEFONO] trip=%s | whatsapp_user=%r | whatsapp_phone=%r", trip.get("id"), user, phone)
+    
     # 1. Campo dedicado
-    phone = _normalize_e164(str(trip.get("whatsapp_phone") or ""))
-    if phone:
-        log.info("[ELEVEN TRACKING] trip=%s resolvió whatsapp_phone: %s", trip.get("id"), phone)
-        return phone
+    phone_norm = _normalize_e164(str(phone or ""))
+    if phone_norm:
+        return phone_norm
 
     # 2. Fallback: whatsapp_user
-    raw_user = str(trip.get("whatsapp_user") or "").strip()
-    phone = _normalize_e164(raw_user)
-    if phone:
-        log.info("[ELEVEN TRACKING] trip=%s resolvió whatsapp_user: %s", trip.get("id"), phone)
-        return phone
+    raw_user = str(user or "").strip()
+    user_norm = _normalize_e164(raw_user)
+    if user_norm:
+        return user_norm
 
-    log.error("[ELEVEN TRACKING] trip=%s fallo=datos_contacto_invalidos user=%s phone=%s", 
-              trip.get("id"), trip.get("whatsapp_user"), trip.get("whatsapp_phone"))
-    return ""
-
-
-def send_tracking_message(trip: dict) -> str:
+    log.error("[ELEVEN TRACKING] fallo=resolucion_datos_contacto trip=%s user=%r phone=%r", trip.get("id"), user, phone)
+    return "" def send_tracking_message(trip: dict) -> str:
     """Envía la plantilla aprobada tracking_link al pasajero por WhatsApp.
 
     Resuelve el destinatario desde whatsapp_phone y, como fallback,
