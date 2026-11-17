@@ -347,7 +347,12 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     )
 
 
-@router.post("/tracking/{tracking_token}/cancel")
+@router.post("/admin/force-cancel/{trip_id}")
+def force_cancel_trip(trip_id: int, cur=Depends(get_cursor_dep)):
+    """Parche de emergencia para liberar viajes colgados."""
+    cur.execute("UPDATE livi_trips SET status = 'cancelled', conflict_reason = 'manual_admin_cleanup' WHERE id = %s", (trip_id,))
+    return {"status": "ok", "trip_id": trip_id}
+
 def passenger_cancel_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Cancela un pedido sólo mientras todavía no fue tomado por un conductor."""
     cur.execute(
