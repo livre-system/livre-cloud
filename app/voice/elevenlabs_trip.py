@@ -222,19 +222,18 @@ def _resolve_recipient(trip: dict) -> str:
     # 1. Campo dedicado
     phone = _normalize_e164(str(trip.get("whatsapp_phone") or ""))
     if phone:
+        log.info("[ELEVEN TRACKING] trip=%s resolvió whatsapp_phone: %s", trip.get("id"), phone)
         return phone
 
-    # 2. Fallback: whatsapp_user solo si es un número real
+    # 2. Fallback: whatsapp_user
     raw_user = str(trip.get("whatsapp_user") or "").strip()
     phone = _normalize_e164(raw_user)
     if phone:
-        log.info(
-            "[ELEVEN TRACKING] trip=%s usando whatsapp_user como fallback (%s) — "
-            "configurar whatsapp_phone para evitar esto",
-            trip.get("id"), phone,
-        )
+        log.info("[ELEVEN TRACKING] trip=%s resolvió whatsapp_user: %s", trip.get("id"), phone)
         return phone
 
+    log.error("[ELEVEN TRACKING] trip=%s fallo=datos_contacto_invalidos user=%s phone=%s", 
+              trip.get("id"), trip.get("whatsapp_user"), trip.get("whatsapp_phone"))
     return ""
 
 
@@ -256,14 +255,10 @@ def send_tracking_message(trip: dict) -> str:
         log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
 
-    recipient = str(trip.get("whatsapp_user_id") or "").strip()
+    recipient = _resolve_recipient(trip)
     if not recipient:
-        recipient = _resolve_recipient(trip)
-    if recipient.startswith("user:"):
-        recipient = ""
-    if not recipient:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=whatsapp_user_id ausente_o_interno", trip_id)
-        raise RuntimeError(f"El viaje {trip_id} no tiene WhatsApp User ID reutilizable")
+        log.error("[ELEVEN TRACKING] trip=%s fallo=datos_contacto_inconsistentes", trip_id)
+        return "" # Silencioso para no romper el flujo síncrono del router
 
     template_name = os.getenv("ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME", "tracking_link").strip()
     if not template_name:
