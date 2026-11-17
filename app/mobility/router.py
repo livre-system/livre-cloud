@@ -1440,9 +1440,12 @@ def driver_update_status(
     if _needs_trip_load:
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
         accepted_trip = cur.fetchone()
+        if accepted_trip and not accepted_trip.get("whatsapp_user"):
+            # Si el SELECT falla, recuperamos del objeto trip original cargado al inicio
+            accepted_trip["whatsapp_user"] = trip.get("whatsapp_user")
+            
         if not accepted_trip or not accepted_trip.get("whatsapp_user"):
-            log.error("[MOBILITY TRACKING] Fallo: viaje %s asignado sin whatsapp_user", trip_id)
-            raise HTTPException(status_code=400, detail="Identificador de pasajero requerido para seguimiento")
+            log.warning("[MOBILITY TRACKING] Advertencia: viaje %s sin whatsapp_user, tracking/aviso omitido", trip_id)
     else:
         accepted_trip = None
 
