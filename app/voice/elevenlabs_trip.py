@@ -864,16 +864,11 @@ async def elevenlabs_trip(request: Request):
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
 
-    # Seguro de vida: recuperar de cotizaciones previas si faltan
+    # Si faltan datos críticos, forzamos un error 429 o mensaje de reintento para ElevenLabs.
+    # ElevenLabs detectará el error y reintentará el webhook en unos segundos.
     if not whatsapp_user or not whatsapp_phone:
-        log.info("[ELEVEN TRIP] Datos incompletos, buscando en quotes: conv_id=%s", conversation_id)
-        with get_cursor() as cur:
-            cur.execute("SELECT whatsapp_user, whatsapp_phone FROM livi_whatsapp_quotes WHERE conversation_id = %s ORDER BY created_at DESC LIMIT 1", [conversation_id])
-            row = cur.fetchone()
-            if row:
-                if not whatsapp_user: whatsapp_user = row["whatsapp_user"]
-                if not whatsapp_phone: whatsapp_phone = row["whatsapp_phone"]
-                log.info("[ELEVEN TRIP] Recuperado de quotes: user=%s phone=%s", whatsapp_user, whatsapp_phone)
+        log.warning("[ELEVEN TRIP] Datos incompletos, forzando reintento: conv_id=%s", conversation_id)
+        raise HTTPException(status_code=429, detail="Retry_needed: Datos de usuario incompletos")
     activity_type = str(
         parameters.get("activity_type")
         or body.get("activity_type")
