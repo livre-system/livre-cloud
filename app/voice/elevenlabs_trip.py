@@ -858,6 +858,9 @@ async def elevenlabs_trip(request: Request):
         or ""
     ).strip() or None
 
+    # Log de diagnóstico profundo: ¿Qué recibimos al intentar registrar el viaje?
+    log.info("[DIAGNOSTICO REGISTRO] Payload recibido: %s", data)
+    
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
 
