@@ -1411,6 +1411,7 @@ def driver_update_status(
             (payload.status, payload.reason, trip_id, user["id"]),
         )
     elif trip["status"] == "assigned":
+        log.info("[ROUTER DIAGNOSTIC] Procesando transición a arriving para trip=%s", trip_id)
         cur.execute(
             """
             UPDATE livi_trips SET status = 'arriving', conflict_reason = NULL, updated_at = NOW()
