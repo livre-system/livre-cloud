@@ -19,17 +19,22 @@ def send_arrival_whatsapp(trip_id: int):
         return
 
     with get_cursor() as cur:
+        # Intentar obtener datos del CRM, pero ser flexibles
         cur.execute("""
             SELECT t.whatsapp_user, p.first_name, t.tracking_plate 
             FROM livi_trips t
-            JOIN livre_crm_passengers p ON t.whatsapp_user = p.phone
+            LEFT JOIN livre_crm_passengers p ON t.whatsapp_user = p.phone
             WHERE t.id = %s
         """, [trip_id])
         trip = cur.fetchone()
         
     if not trip or not trip.get("whatsapp_user"):
-        log.error("[ELEVEN ADMIN] Pasajero no encontrado para trip=%s", trip_id)
+        log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
         return
+
+    # Usar valores por defecto seguros si falta info del CRM
+    first_name = trip.get("first_name") or "Pasajero"
+    plate = trip.get("tracking_plate") or "tu conductor"
 
     # Idempotencia: Verificar si ya se envió este aviso de llegada para este trip
     with get_cursor() as cur:
@@ -44,7 +49,7 @@ def send_arrival_whatsapp(trip_id: int):
         "to": trip["whatsapp_user"],
         "template_name": TEMPLATE_NAME,
         "template_params": [
-            {"type": "body", "parameters": [{"text": trip.get("first_name", "Pasajero")}, {"text": trip.get("tracking_plate", "tu conductor")}]}
+            {"type": "body", "parameters": [{"text": first_name}, {"text": plate}]}
         ]
     }
 
