@@ -61,6 +61,7 @@ def record_trip_event(
             ),
         ),
     )
+    log.info("[OUTBOX DIAGNOSTIC] Evento insertado en outbox: trip=%s, event=%s, status=%s", trip_id, event_type, new_status)
     schedule_operational_event(
         event_key, trip_id, actor_role, event_type,
         previous_status, new_status, safe_metadata,
