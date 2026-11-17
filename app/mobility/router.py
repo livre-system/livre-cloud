@@ -203,10 +203,10 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
         raise HTTPException(status_code=422, detail="El origen y el destino deben ser distintos")
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
-    conversation_id = f"web_{uuid.uuid4()}"
-    passenger_identity = f"user:{user['id']}" if user else payload.whatsapp_user.strip()
-
-    cur.execute(
+    # Validación estricta: si falta whatsapp_user, el viaje es inoperable
+    if not passenger_identity:
+        log.error("[TRIP REQUEST] Intento de creación sin identificador de pasajero")
+        raise HTTPException(status_code=400, detail="Identificador de pasajero (WhatsApp) es obligatorio")
         """
         INSERT INTO livi_trips
             (conversation_id, user_id, origen, destino, whatsapp_user, tracking_token,
@@ -1419,14 +1419,16 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
-        # Forzar evento de outbox y envío síncrono del aviso de llegada
-        from app.voice.elevenlabs_admin import send_arrival_whatsapp
-        try:
-            # Pasamos el cursor actual 'cur' a la función de envío
-            send_arrival_whatsapp(trip_id, cur=cur)
-            log.info("[ROUTER DIAGNOSTIC] Aviso de llegada enviado sincrónicamente para trip=%s", trip_id)
-        except Exception as e:
-            log.error("[ROUTER DIAGNOSTIC] Fallo en aviso de llegada sincrónico para trip=%s: %s", trip_id, str(e))
+    # Forzar evento de outbox y envío síncrono del aviso de llegada, desacoplado de CRM y Embeddings
+    from app.voice.elevenlabs_admin import send_arrival_whatsapp
+    try:
+        log.info("[ROUTER DIAGNOSTIC] Iniciando envío de aviso de llegada directo para trip=%s", trip_id)
+        # Usamos el whatsapp_user del objeto 'trip' original (que ya tiene el número)
+        # y forzamos el envío sin consultar CRM ni OpenAI
+        send_arrival_whatsapp(trip_id, cur=cur)
+        log.info("[ROUTER DIAGNOSTIC] Aviso de llegada enviado exitosamente para trip=%s", trip_id)
+    except Exception as e:
+        log.error("[ROUTER DIAGNOSTIC] Fallo crítico en aviso de llegada para trip=%s: %s", trip_id, str(e))
         
         record_trip_event(
             cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
