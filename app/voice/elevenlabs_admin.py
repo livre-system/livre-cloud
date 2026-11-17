@@ -31,34 +31,48 @@ def send_arrival_whatsapp(trip_id: int):
         log.error("[ELEVEN ADMIN] Pasajero no encontrado para trip=%s", trip_id)
         return
 
-    # Evitar duplicados (idempotencia simple mediante evento)
-    event_key = hashlib.sha256(f"arrival_{trip_id}".encode()).hexdigest()
-    
+    # Idempotencia: Verificar si ya se envió este aviso de llegada para este trip
+    with get_cursor() as cur:
+        cur.execute("SELECT id FROM livre_trip_event_outbox WHERE trip_id = %s AND event_type = 'arrival_notice_sent' AND status = 'sent'", [trip_id])
+        if cur.fetchone():
+            log.info("[ELEVEN ADMIN] Aviso de llegada ya enviado, trip=%s, omitiendo.", trip_id)
+            return
+
+    # Preparar envío
     payload = {
-        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "whatsapp_user_id": trip["whatsapp_user"],
+        "phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        "to": trip["whatsapp_user"],
         "template_name": TEMPLATE_NAME,
-        "template_language_code": "es_AR",
         "template_params": [
-            {
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": trip.get("first_name", "Pasajero")},
-                    {"type": "text", "text": f"Tu conductor llegó y te espera en el vehículo patente {trip.get('tracking_plate', 'asignado')}."}
-                ]
-            }
-        ],
-        "agent_id": ELEVENLABS_AGENT_ID,
+            {"type": "body", "parameters": [{"text": trip.get("first_name", "Pasajero")}, {"text": trip.get("tracking_plate", "tu conductor")}]}
+        ]
     }
 
     try:
         response = httpx.post(
             ELEVENLABS_API_URL,
-            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
             json=payload,
-            timeout=10.0,
+            headers={"xi-api-key": ELEVENLABS_API_KEY},
+            timeout=10.0
         )
         response.raise_for_status()
-        log.info("[ELEVEN ADMIN] Aviso de llegada enviado, trip=%s, convo=%s", trip_id, response.json().get("conversation_id"))
+        
+        # Registrar éxito en outbox
+        with get_cursor() as cur:
+            cur.execute("""
+                INSERT INTO livre_trip_event_outbox 
+                (trip_id, event_type, status, created_at, processing_at)
+                VALUES (%s, 'arrival_notice_sent', 'sent', NOW(), NOW())
+            """, [trip_id])
+        
+        log.info("[ELEVEN ADMIN] Aviso de llegada enviado, trip=%s", trip_id)
     except Exception as e:
+        # Registrar fallo
+        with get_cursor() as cur:
+             cur.execute("""
+                INSERT INTO livre_trip_event_outbox 
+                (trip_id, event_type, status, last_error, created_at)
+                VALUES (%s, 'arrival_notice_sent', 'failed', %s, NOW())
+            """, [trip_id, str(e)[:255]])
         log.error("[ELEVEN ADMIN] Fallo en envío, trip=%s, error=%s", trip_id, str(e))
+
