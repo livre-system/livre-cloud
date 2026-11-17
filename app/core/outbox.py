@@ -68,11 +68,16 @@ from app.voice.elevenlabs_admin import send_arrival_whatsapp
 def dispatch_event(event: dict[str, Any]) -> None:
     """Entrega al sink configurado; no marca éxito si no hay sink."""
     if event["event_type"] == "status_changed":
-        new_status = event["payload"].get("new_status")
-        log.info("[OUTBOX DIAGNOSTIC] Evento recibido: trip=%s, status=%s", event["trip_id"], new_status)
+        # Manejo de formato híbrido: el nuevo payload tiene estructura anidada, el viejo no
+        payload = event.get("payload", {})
+        new_status = payload.get("new_status")
+        if not new_status and isinstance(payload, dict) and "payload" in payload:
+             new_status = payload["payload"].get("new_status")
+        
+        log.info("[OUTBOX DIAGNOSTIC] Evento recibido: trip=%s, status=%s", event.get("trip_id"), new_status)
         if new_status == "arriving":
-            log.info("[OUTBOX DIAGNOSTIC] Disparando aviso de llegada para trip=%s", event["trip_id"])
-            send_arrival_whatsapp(event["trip_id"])
+            log.info("[OUTBOX DIAGNOSTIC] Disparando aviso de llegada para trip=%s", event.get("trip_id"))
+            send_arrival_whatsapp(event.get("trip_id"))
 
     if not OUTBOX_WEBHOOK_URL:
         raise RuntimeError("OUTBOX_WEBHOOK_URL no está configurada")
