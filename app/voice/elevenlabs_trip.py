@@ -369,6 +369,9 @@ def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None
         body.get("livre_whatsapp_user"),
         parameters.get("livre_whatsapp_user"),
         data.get("livre_whatsapp_user"),
+        body.get("passenger_id"),
+        parameters.get("passenger_id"),
+        data.get("passenger_id"),
     )
     phone_number_id = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "").strip()
     for candidate in candidates:
@@ -601,13 +604,13 @@ async def conversation_init(request: Request):
         _diag_identity(caller_id), called_number or "missing", conversation_id or "missing",
     )
     return {
-        "conversation_initiation_client_data": {
-            "dynamic_variables": {
-                "livre_whatsapp_user": caller_id,
-                "livre_whatsapp_phone": caller_id,
-                "livre_conversation_id": conversation_id,
-            }
-        }
+        "type": "conversation_initiation_client_data",
+        "dynamic_variables": {
+            "passenger_id": caller_id,
+            "livre_whatsapp_user": caller_id,
+            "livre_whatsapp_phone": caller_id,
+            "livre_conversation_id": conversation_id,
+        },
     }
 
 
