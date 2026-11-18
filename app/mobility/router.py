@@ -126,9 +126,9 @@ def _public_trip(trip) -> PublicTrip:
         destination=trip["destino"],
         status=trip["status"],
         driver_name=trip["tracking_driver_name"],
-        plate=trip["tracking_plate"],
-        vehicle_model=trip["tracking_vehicle_model"],
-        vehicle_color=trip["tracking_vehicle_color"],
+        plate=trip.get("tracking_plate"),
+        vehicle_model=trip.get("tracking_vehicle_model"),
+        vehicle_color=trip.get("tracking_vehicle_color"),
         latitude=trip["tracking_latitude"],
         longitude=trip["tracking_longitude"],
         location_updated_at=trip["tracking_location_updated_at"],
@@ -139,6 +139,42 @@ def _public_trip(trip) -> PublicTrip:
         final_fare=float(trip["final_fare"]) if trip.get("final_fare") is not None else None,
         fare_source=trip.get("fare_source"),
     )
+
+
+def _backfill_public_vehicle_snapshot(cur, trip):
+    """Completa datos públicos faltantes desde la cuenta/vehículo asignado."""
+    if not trip.get("assigned_driver_user_id"):
+        return trip
+    if all(trip.get(key) for key in ("tracking_plate", "tracking_vehicle_model", "tracking_vehicle_color")):
+        return trip
+    cur.execute(
+        """SELECT a.plate, a.vehicle_model, a.vehicle_color,
+                  cv.plate AS crm_plate, cv.model AS crm_model, cv.color AS crm_color
+           FROM livre_driver_accounts a
+           LEFT JOIN livre_crm_vehicles cv ON UPPER(cv.plate) = UPPER(a.plate)
+          WHERE a.user_id = %s AND a.active = TRUE
+          LIMIT 1""",
+        (trip["assigned_driver_user_id"],),
+    )
+    vehicle = cur.fetchone()
+    if not vehicle:
+        return trip
+    values = {
+        "tracking_plate": trip.get("tracking_plate") or vehicle.get("plate") or vehicle.get("crm_plate"),
+        "tracking_vehicle_model": trip.get("tracking_vehicle_model") or vehicle.get("vehicle_model") or vehicle.get("crm_model"),
+        "tracking_vehicle_color": trip.get("tracking_vehicle_color") or vehicle.get("vehicle_color") or vehicle.get("crm_color"),
+    }
+    if any(values.values()):
+        cur.execute(
+            """UPDATE livi_trips
+                  SET tracking_plate = COALESCE(tracking_plate, %s),
+                      tracking_vehicle_model = COALESCE(tracking_vehicle_model, %s),
+                      tracking_vehicle_color = COALESCE(tracking_vehicle_color, %s)
+                WHERE id = %s""",
+            (values["tracking_plate"], values["tracking_vehicle_model"], values["tracking_vehicle_color"], trip["id"]),
+        )
+        trip.update(values)
+    return trip
 
 
 @router.post("/quote")
@@ -323,8 +359,9 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Vista pública mínima para el pasajero; solo acepta el token privado del viaje."""
     cur.execute(
         """
-        SELECT id, origen, destino, status, created_at, tracking_driver_name, tracking_plate,
-               tracking_vehicle_model, tracking_vehicle_color, tracking_latitude,
+        SELECT id, origen, destino, status, created_at, assigned_driver_user_id,
+               tracking_driver_name, tracking_plate, tracking_vehicle_model,
+               tracking_vehicle_color, tracking_latitude,
                tracking_longitude, tracking_location_updated_at, fare, original_fare,
                discount_percentage, discount_amount, final_fare, fare_source,
                EXISTS (
@@ -341,6 +378,7 @@ def public_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     trip = cur.fetchone()
     if not trip:
         raise HTTPException(status_code=404, detail="Seguimiento no encontrado")
+    trip = _backfill_public_vehicle_snapshot(cur, trip)
     public_trip = _public_trip(trip)
     data = public_trip.model_dump()
     data["driver_name"] = _public_driver_first_name(public_trip.driver_name)
