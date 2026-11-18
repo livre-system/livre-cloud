@@ -4,6 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
+import asyncio
+import logging
 from app.core.config import AUTO_MIGRATE, SESSION_SECRET, validate_runtime_config
 from app.core.outbox import run_once
 from app.core.database import get_cursor, init_db, run_migrations
@@ -35,7 +37,25 @@ async def lifespan(app: FastAPI):
         run_migrations()
     ensure_tables()
     await patch_agent_voice()
-    yield
+    outbox_task = asyncio.create_task(_outbox_loop())
+    try:
+        yield
+    finally:
+        outbox_task.cancel()
+        await asyncio.gather(outbox_task, return_exceptions=True)
+
+
+async def _outbox_loop():
+    while True:
+        try:
+            result = await asyncio.to_thread(run_once)
+            if result["claimed"]:
+                logging.getLogger("uvicorn.error").info("[OUTBOX TRACE] worker_result=%s", result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("uvicorn.error").exception("[OUTBOX TRACE] worker_loop_error")
+        await asyncio.sleep(5)
 
 app = FastAPI(title="Livre Cloud", lifespan=lifespan)
 

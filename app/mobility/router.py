@@ -1398,6 +1398,8 @@ def driver_update_status(
         "arriving": {"in_progress", "cancelled", "conflict"},
         "in_progress": {"completed", "cancelled", "conflict"},
     }
+    if previous_status == "arriving" and payload.status == "arriving":
+        raise HTTPException(status_code=409, detail="El viaje ya está marcado como llegando")
     if previous_status in {"scheduled", "searching"} and payload.status in {"assigned", "arriving"}:
         pass
     elif payload.status not in allowed_transitions.get(previous_status, set()):
