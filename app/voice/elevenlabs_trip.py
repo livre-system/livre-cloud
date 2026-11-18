@@ -399,7 +399,28 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
         return None
 
 
+def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
+    if not conversation_id:
+        return "", ""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT whatsapp_user, whatsapp_phone FROM livi_whatsapp_quotes "
+            "WHERE conversation_id = %s ORDER BY created_at DESC LIMIT 1",
+            [conversation_id],
+        )
+        row = cur.fetchone() or {}
+    return str(row.get("whatsapp_user") or ""), str(row.get("whatsapp_phone") or "")
+
+
+def _identity_for_conversation(conversation_id: str, whatsapp_user: str, whatsapp_phone: str) -> tuple[str, str]:
+    saved_user, saved_phone = _get_saved_identity(conversation_id)
+    user = whatsapp_user or saved_user
+    phone = whatsapp_phone or saved_phone or user
+    return user, phone
+
+
 def _save_whatsapp_quote(
+
     *, conversation_id: str, whatsapp_user: str, whatsapp_phone: str = "",
     origen: str, destino: str, options: list[dict], source: str = "whatsapp",
 ) -> str:
@@ -914,6 +935,9 @@ async def elevenlabs_trip(request: Request):
     
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
+    saved_user, saved_phone = _get_saved_identity(conversation_id)
+    whatsapp_user = whatsapp_user or saved_user
+    whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
     log.info("[ELEVEN TRACE] stage=webhook_received conversation_id=%s payload=%s", conversation_id or "missing", _diag_payload(body, parameters, data))
     log.info("[ELEVEN TRACE] stage=identity_resolved conversation_id=%s whatsapp_user_fp=%s whatsapp_phone_fp=%s has_quote=%s service_type_id=%s", conversation_id or "missing", _diag_identity(whatsapp_user), _diag_identity(whatsapp_phone), bool(quote_id), service_type_id or "missing")
 
