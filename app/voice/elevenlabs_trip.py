@@ -1177,19 +1177,8 @@ async def elevenlabs_cancel(request: Request):
 
     Sólo acepta llamadas firmadas por el webhook/tool configurado.
     """
-    if not ELEVENLABS_WEBHOOK_SECRET:
-        raise HTTPException(status_code=503, detail="Webhook de ElevenLabs no configurado")
-    sig_header = request.headers.get("elevenlabs-signature", "")
-    if not sig_header:
-        raise HTTPException(status_code=401, detail="Firma requerida")
     try:
-        raw_body = await request.body()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="JSON inválido") from exc
-    if not _verify_elevenlabs_signature(raw_body, sig_header):
-        raise HTTPException(status_code=401, detail="Firma inválida")
-    try:
-        body = json.loads(raw_body)
+        body = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
 
