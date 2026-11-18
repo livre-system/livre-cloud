@@ -489,7 +489,10 @@ def public_send_trip_message(
     if message is None:
         raise HTTPException(status_code=409, detail="No se pudo registrar el mensaje")
     if inserted:
-        schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+        try:
+            schedule_conversation_message(message["id"], message["trip_id"], message["channel"], message["sender_role"], message["body"], message["created_at"])
+        except Exception:
+            log.exception("No se pudo indexar mensaje público; no se bloquea el chat")
     return message
 
 
