@@ -1592,12 +1592,13 @@ def driver_active_locations(
                a.operational_status
         FROM livre_driver_accounts a
         WHERE a.active = TRUE
-          AND a.operational_status = 'available'
+          AND (a.user_id = %s OR a.operational_status = 'available')
           AND a.current_latitude IS NOT NULL
           AND a.current_longitude IS NOT NULL
           AND a.location_updated_at >= NOW() - INTERVAL '2 minutes'
         ORDER BY a.location_updated_at DESC
-        """
+        """,
+        (user["id"],),
     )
     return [
         {
