@@ -243,7 +243,7 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     passenger_identity = (payload.whatsapp_user or "").strip()
-    conversation_id = None
+    conversation_id = f"web-{tracking_token}"
     # La app de conductores crea pedidos operativos desde la web; no tiene
     # identidad WhatsApp, por lo que usamos su identificador explícito.
     if passenger_identity in {"web", "web-test"}:
