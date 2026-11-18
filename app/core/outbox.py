@@ -31,7 +31,7 @@ def claim_batch(limit: int = 25) -> list[dict[str, Any]]:
                    SET status = 'processing', processing_at = now(), attempts = attempts + 1
                   FROM claimed
                  WHERE o.id = claimed.id
-                RETURNING o.id, o.event_key, o.event_type, o.payload, o.attempts
+                RETURNING o.id, o.trip_id, o.event_key, o.event_type, o.payload, o.attempts
                 """,
                 [limit],
             )
