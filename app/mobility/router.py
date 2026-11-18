@@ -1150,6 +1150,10 @@ def save_handie_voice_event(
     session = cur.fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Handie inexistente")
+    # Las sesiones sin viaje sirven para hablar con Livi, pero no pertenecen
+    # al historial de viajes: no intentar insertarlas en livre_trip_messages.
+    if session["trip_id"] is None:
+        return {"saved": False, "duplicate": False, "message_id": None, "reason": "session_without_trip"}
     client_id = payload.event_id or str(uuid.uuid4())
     cur.execute(
         """INSERT INTO livre_trip_messages
