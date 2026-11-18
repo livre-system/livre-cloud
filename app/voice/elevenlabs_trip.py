@@ -1212,4 +1212,6 @@ async def elevenlabs_cancel(request: Request):
             [trip["id"]],
         )
     log.info("[ELEVEN CANCEL] cancelled local trip_id=%s", trip["id"])
+    if conversation_id:
+        _delete_outbound_conversation(conversation_id)
     return {"result": "El viaje fue cancelado correctamente en Livre."}
