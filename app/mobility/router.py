@@ -1373,6 +1373,9 @@ def driver_update_status(
             UPDATE livi_trips t
             SET assigned_driver_user_id = %s,
                 tracking_driver_name = u.name,
+                tracking_plate = a.plate,
+                tracking_vehicle_model = a.vehicle_model,
+                tracking_vehicle_color = a.vehicle_color,
                 tracking_latitude = a.current_latitude,
                 tracking_longitude = a.current_longitude,
                 tracking_location_updated_at = a.location_updated_at,

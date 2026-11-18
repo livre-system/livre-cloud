@@ -584,6 +584,9 @@ def assign_trip_to_driver(
              UPDATE livi_trips t
                 SET assigned_driver_user_id = %s,
                     tracking_driver_name = u.name,
+                    tracking_plate = a.plate,
+                    tracking_vehicle_model = a.vehicle_model,
+                    tracking_vehicle_color = a.vehicle_color,
                     status = 'assigned',
                     updated_at = NOW()
                FROM current
