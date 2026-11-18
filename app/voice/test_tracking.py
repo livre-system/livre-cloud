@@ -137,22 +137,22 @@ class TestSendTrackingMessage:
 
     @patch("app.voice.elevenlabs_trip.httpx.post")
     @patch.dict("os.environ", {
-        "META_ACCESS_TOKEN": "test_key",
+        "ELEVENLABS_API_KEY": "test_key",
         "ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME": "tracking_link",
     })
     def test_trip_330_fallback_whatsapp_user(self, mock_post):
         """Trip 330: whatsapp_phone=NULL, usa whatsapp_user como fallback y envía OK."""
-        mock_post.return_value = self._mock_response(200, {"messages": [{"id": "wamid_ok"}]})
+        mock_post.return_value = self._mock_response(200, {"conversation_id": "conv_ok"})
 
         result = send_tracking_message(TRIP_BASE)
 
-        assert result == "wamid_ok"
+        assert result == "conv_ok"
         call_payload = mock_post.call_args[1]["json"]
-        assert call_payload["to"] not in {"", "user:8334a30a-a6f8-497d-bb5f-622059567001"}
+        assert call_payload["whatsapp_user_id"] not in {"", "user:8334a30a-a6f8-497d-bb5f-622059567001"}
 
     @patch("app.voice.elevenlabs_trip.httpx.post")
     @patch.dict("os.environ", {
-        "META_ACCESS_TOKEN": "test_key",
+        "ELEVENLABS_API_KEY": "test_key",
         "ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME": "tracking_link",
     })
     def test_trip_326_http_400_lanza_excepcion_con_log(self, mock_post):
@@ -167,7 +167,7 @@ class TestSendTrackingMessage:
 
     @patch.dict("os.environ", {"ELEVENLABS_API_KEY": ""})
     def test_sin_api_key_lanza_error(self):
-        with pytest.raises(RuntimeError, match="META_ACCESS_TOKEN"):
+        with pytest.raises(RuntimeError, match="ELEVENLABS_API_KEY"):
             send_tracking_message(TRIP_BASE)
 
     @patch.dict("os.environ", {"ELEVENLABS_API_KEY": "test_key"})
@@ -189,28 +189,29 @@ class TestSendTrackingMessage:
 
     @patch("app.voice.elevenlabs_trip.httpx.post")
     @patch.dict("os.environ", {
-        "META_ACCESS_TOKEN": "test_key",
+        "ELEVENLABS_API_KEY": "test_key",
         "ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME": "tracking_link",
     })
     def test_payload_contiene_campos_correctos(self, mock_post):
         """Verifica que el payload que se manda a ElevenLabs tiene la estructura correcta."""
-        mock_post.return_value = self._mock_response(200, {"messages": [{"id": "wamid_xyz"}]})
+        mock_post.return_value = self._mock_response(200, {"conversation_id": "conv_xyz"})
         trip = {**TRIP_BASE, "whatsapp_phone": "+5491178240367"}
 
         send_tracking_message(trip)
 
         payload = mock_post.call_args[1]["json"]
-        assert payload["messaging_product"] == "whatsapp"
-        assert payload["to"] == "+5491178240367"
-        assert payload["type"] == "template"
-        assert payload["template"]["name"] == "tracking_link"
-        assert payload["template"]["language"]["code"] == "es_AR"
-        assert payload["template"]["components"][0]["type"] == "body"
-        assert payload["template"]["components"][0]["parameters"][0]["type"] == "text"
+        assert "whatsapp_phone_number_id" in payload
+        assert "whatsapp_user_id" in payload
+        assert "template_name" in payload
+        assert "template_language_code" in payload
+        assert "template_params" in payload
+        assert "agent_id" in payload
+        assert payload["template_params"][0]["type"] == "body"
+        assert "text" in payload["template_params"][0]["parameters"][0]
 
     @patch("app.voice.elevenlabs_trip.httpx.post", side_effect=httpx.TimeoutException("timeout"))
     @patch.dict("os.environ", {
-        "META_ACCESS_TOKEN": "test_key",
+        "ELEVENLABS_API_KEY": "test_key",
         "ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME": "tracking_link",
     })
     def test_timeout_lanza_error(self, mock_post):
