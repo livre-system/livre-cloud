@@ -19,10 +19,15 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
         log.warning("[ELEVEN ADMIN] Plantilla no configurada, omitiendo envío para trip=%s", trip_id)
         return
 
-    # Usar cursor proporcionado o nuevo
-    my_cur = cur if cur else get_cursor()
-    
-    # Obtener datos de forma directa y plana
+    # El worker usa su propia conexión; el router puede pasar un cursor transaccional.
+    if cur is not None:
+        return _send_arrival_with_cursor(trip_id, cur)
+    with get_cursor() as managed_cur:
+        return _send_arrival_with_cursor(trip_id, managed_cur)
+
+
+def _send_arrival_with_cursor(trip_id: int, my_cur):
+    """Realiza el envío usando un cursor ya abierto."""
     my_cur.execute("""
         SELECT t.whatsapp_user, p.first_name, t.tracking_plate 
         FROM livi_trips t
