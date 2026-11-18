@@ -404,8 +404,7 @@ def passenger_cancel_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
               SET status = 'cancelled', updated_at = NOW()
             WHERE tracking_token = %s
               AND created_at > NOW() - (%s * INTERVAL '1 hour')
-              AND status IN ('pending', 'searching', 'scheduled')
-              AND assigned_driver_user_id IS NULL
+              AND status IN ('pending', 'searching', 'scheduled', 'assigned', 'arriving', 'waiting', 'in_progress')
             RETURNING id, status""",
         (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
     )
