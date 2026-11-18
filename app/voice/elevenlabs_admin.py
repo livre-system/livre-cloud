@@ -5,8 +5,9 @@ from app.core.database import get_cursor
 
 log = logging.getLogger(__name__)
 
-ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message"
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v21.0")
+META_WHATSAPP_API_URL = "https://graph.facebook.com/{}/messages"
+META_WHATSAPP_ACCESS_TOKEN = os.getenv("META_WHATSAPP_ACCESS_TOKEN", "")
 ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
 ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "1364913613361192")
 ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv("ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE", "es_AR").strip() or "es_AR"
@@ -50,20 +51,23 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
     if my_cur.fetchone():
         return
 
+    if not META_WHATSAPP_ACCESS_TOKEN:
+        raise RuntimeError("META_WHATSAPP_ACCESS_TOKEN no configurado")
     payload = {
-        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "whatsapp_user_id": trip["whatsapp_user"],
-        "template_name": TEMPLATE_NAME,
-        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [],
-        "agent_id": ELEVENLABS_AGENT_ID,
+        "messaging_product": "whatsapp",
+        "to": trip["whatsapp_user"],
+        "type": "template",
+        "template": {
+            "name": TEMPLATE_NAME,
+            "language": {"code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE},
+        },
     }
 
     try:
         response = httpx.post(
-            ELEVENLABS_API_URL,
+            META_WHATSAPP_API_URL.format(f"{META_GRAPH_API_VERSION}/{ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID}"),
             json=payload,
-            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
+            headers={"Authorization": f"Bearer {META_WHATSAPP_ACCESS_TOKEN}", "Content-Type": "application/json"},
             timeout=10.0
         )
         if response.is_error:
