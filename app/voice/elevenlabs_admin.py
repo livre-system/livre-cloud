@@ -84,4 +84,5 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
         log.info("[ELEVEN ADMIN] Aviso de llegada aceptado, trip=%s", trip_id)
     except Exception as e:
         log.error("[ELEVEN ADMIN] Fallo en envío, trip=%s, error=%s", trip_id, str(e))
+        raise
 
