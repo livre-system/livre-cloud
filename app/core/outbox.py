@@ -35,7 +35,9 @@ def claim_batch(limit: int = 25) -> list[dict[str, Any]]:
                 """,
                 [limit],
             )
-            return [dict(row) for row in cur.fetchall()]
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in (cur.description or [])]
+            return [dict(zip(columns, row)) for row in rows]
 
 
 def mark_sent(event_id: int) -> None:
