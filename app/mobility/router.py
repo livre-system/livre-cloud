@@ -1418,9 +1418,9 @@ def driver_update_status(
             UPDATE livi_trips t
             SET assigned_driver_user_id = %s,
                 tracking_driver_name = u.name,
-                tracking_plate = a.plate,
-                tracking_vehicle_model = a.vehicle_model,
-                tracking_vehicle_color = a.vehicle_color,
+                tracking_plate = COALESCE(dv.vehicle_label, NULL),
+                tracking_vehicle_model = cv.model,
+                tracking_vehicle_color = cv.color,
                 tracking_latitude = a.current_latitude,
                 tracking_longitude = a.current_longitude,
                 tracking_location_updated_at = a.location_updated_at,
@@ -1428,6 +1428,8 @@ def driver_update_status(
                 updated_at = NOW()
             FROM livre_users u
             JOIN livre_driver_accounts a ON a.user_id = u.id
+            LEFT JOIN livre_driver_vehicles dv ON dv.driver_user_id = a.user_id AND dv.is_primary = TRUE
+            LEFT JOIN livre_crm_vehicles cv ON UPPER(cv.plate) = UPPER(dv.vehicle_label)
             WHERE t.id = %s
               AND t.status IN ('searching', 'scheduled', 'assigned')
                               AND t.assigned_driver_user_id IS NULL
