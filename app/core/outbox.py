@@ -67,6 +67,8 @@ from app.voice.elevenlabs_admin import send_arrival_whatsapp
 
 def dispatch_event(event: dict[str, Any]) -> None:
     """Entrega al sink configurado; no marca éxito si no hay sink."""
+    if not event.get("event_key"):
+        raise RuntimeError(f"outbox event {event.get('id')} missing event_key")
     if event["event_type"] == "status_changed":
         # Manejo de formato híbrido: el nuevo payload tiene estructura anidada, el viejo no
         payload = event.get("payload", {})
@@ -80,7 +82,8 @@ def dispatch_event(event: dict[str, Any]) -> None:
             send_arrival_whatsapp(event.get("trip_id"))
 
     if not OUTBOX_WEBHOOK_URL:
-        raise RuntimeError("OUTBOX_WEBHOOK_URL no está configurada")
+        # El envío de llegada ya fue procesado; no hay sink externo obligatorio.
+        return
     response = requests.post(
         OUTBOX_WEBHOOK_URL,
         json={

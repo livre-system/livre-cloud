@@ -31,6 +31,8 @@ def record_trip_event(
          "previous_status": previous_status, "new_status": new_status,
          "metadata": safe_metadata}, sort_keys=True, default=str,
     ).encode()).hexdigest()
+    if not event_key:
+        raise RuntimeError("event_key generation failed")
     cur.execute(
         """INSERT INTO livre_trip_audit_events
            (trip_id, actor_user_id, actor_role, event_type, previous_status,
