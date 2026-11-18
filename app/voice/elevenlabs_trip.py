@@ -366,6 +366,9 @@ def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None
         data.get("whatsapp_user"),
         data.get("user_id"),
         (data.get("metadata") or {}).get("system__caller_id"),
+        body.get("livre_whatsapp_user"),
+        parameters.get("livre_whatsapp_user"),
+        data.get("livre_whatsapp_user"),
     )
     phone_number_id = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "").strip()
     for candidate in candidates:
@@ -581,6 +584,31 @@ def _format_quote_message(options: list[dict]) -> str:
         lines.append(f"{index}. {service_name}: ${price} ({payment})")
     lines.append("Elegí 1 o 2. 🚕")
     return "\n".join(lines)
+
+
+@router.post("/conversation-init")
+async def conversation_init(request: Request):
+    """Returns safe initiation data for inbound WhatsApp conversations."""
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
+    caller_id = str(body.get("caller_id") or "").strip()
+    called_number = str(body.get("called_number") or "").strip()
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    log.info(
+        "[ELEVEN TRACE] stage=conversation_init caller_fp=%s called_number=%s conversation_id=%s",
+        _diag_identity(caller_id), called_number or "missing", conversation_id or "missing",
+    )
+    return {
+        "conversation_initiation_client_data": {
+            "dynamic_variables": {
+                "livre_whatsapp_user": caller_id,
+                "livre_whatsapp_phone": caller_id,
+                "livre_conversation_id": conversation_id,
+            }
+        }
+    }
 
 
 @router.post("/quote")
