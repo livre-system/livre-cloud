@@ -682,9 +682,6 @@ async def elevenlabs_quote(request: Request):
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
     )[:2]]
     option_text = _format_quote_message(options)
-    if not whatsapp_user or not whatsapp_phone:
-        log.warning("[ELEVEN QUOTE] identidad ausente conversation_id=%s", conversation_id)
-        raise HTTPException(status_code=429, detail="Retry_needed: Datos de usuario incompletos")
     quote_id = _save_whatsapp_quote(
         conversation_id=conversation_id,
         whatsapp_user=whatsapp_user,
