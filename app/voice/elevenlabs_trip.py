@@ -249,6 +249,22 @@ def _resolve_recipient(trip: dict) -> str:
     log.error("[ELEVEN TRACKING] fallo=resolucion_datos_contacto trip=%s user=%r phone=%r", trip.get("id"), user, phone)
     return ""
 
+def _delete_outbound_conversation(conversation_id: str) -> None:
+    if not conversation_id or not conversation_id.startswith("conv_"):
+        return
+    api_key = os.getenv("ELEVENLABS_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY no configurada para cerrar outbound")
+    response = httpx.delete(
+        f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}",
+        headers={"xi-api-key": api_key},
+        timeout=10.0,
+    )
+    if response.status_code not in {204, 404}:
+        log.warning("[ELEVEN OUTBOUND] no se pudo purgar conversation_id=%s status=%s", conversation_id, response.status_code)
+    log.info("[ELEVEN OUTBOUND] conversación purgada conversation_id=%s status=%s", conversation_id, response.status_code)
+
+
 def send_tracking_message(trip: dict) -> str:
     """Envía la plantilla aprobada tracking_link al pasajero por WhatsApp.
 
@@ -339,6 +355,7 @@ def send_tracking_message(trip: dict) -> str:
 
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
+    _delete_outbound_conversation(conversation_id)
     log.info(
         "[TRACKING TRACE] stage=provider_accepted trip=%s provider=elevenlabs http_status=%s "
         "conversation_id_present=%s response_keys=%s",
