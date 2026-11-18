@@ -1,7 +1,6 @@
 import os
 import httpx
 import logging
-import hashlib
 from app.core.database import get_cursor
 
 log = logging.getLogger(__name__)
@@ -10,10 +9,8 @@ ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-mess
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "")
 ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
 ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "1364913613361192")
-# Forzar plantilla si la variable de entorno no la resuelve correctamente
-TEMPLATE_NAME = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip()
-if not TEMPLATE_NAME:
-    TEMPLATE_NAME = "livre_admin_notice"
+ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv("ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE", "es_AR").strip() or "es_AR"
+TEMPLATE_NAME = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip() or "livre_admin_notice"
 log.info("[ELEVEN ADMIN] Configuración de plantilla: %s", TEMPLATE_NAME)
 
 def send_arrival_whatsapp(trip_id: int, cur=None):
@@ -50,39 +47,41 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
         return
 
     payload = {
-        "phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "to": trip["whatsapp_user"],
-        "type": "template",
-        "template": {
-            "name": TEMPLATE_NAME,
-            "language": {"code": "es"},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": first_name},
-                        {"type": "text", "text": plate}
-                    ]
-                }
-            ]
-        }
+        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        "whatsapp_user_id": trip["whatsapp_user"],
+        "template_name": TEMPLATE_NAME,
+        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        "template_params": [
+            {
+                "type": "body",
+                "parameters": [
+                    {"type": "text", "text": first_name},
+                    {"type": "text", "text": plate},
+                ],
+            }
+        ],
+        "agent_id": ELEVENLABS_AGENT_ID,
     }
 
     try:
         response = httpx.post(
             ELEVENLABS_API_URL,
             json=payload,
-            headers={"xi-api-key": ELEVENLABS_API_KEY},
+            headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"},
             timeout=10.0
         )
-        response.raise_for_status()
-        
+        if response.is_error:
+            log.error("[ELEVEN ADMIN] proveedor rechazó trip=%s status=%s body=%s", trip_id, response.status_code, response.text[:800])
+            response.raise_for_status()
+        result = response.json()
+        conversation_id = result.get("conversation_id") or ""
+        log.info("[ELEVEN ADMIN] proveedor aceptó trip=%s conversation_id_present=%s", trip_id, bool(conversation_id))
         my_cur.execute("""
-            INSERT INTO livre_trip_event_outbox 
+            INSERT INTO livre_trip_event_outbox
             (trip_id, event_type, status, created_at, processing_at)
             VALUES (%s, 'arrival_notice_sent', 'sent', NOW(), NOW())
         """, [trip_id])
-        log.info("[ELEVEN ADMIN] Aviso de llegada enviado, trip=%s", trip_id)
+        log.info("[ELEVEN ADMIN] Aviso de llegada aceptado, trip=%s", trip_id)
     except Exception as e:
         log.error("[ELEVEN ADMIN] Fallo en envío, trip=%s, error=%s", trip_id, str(e))
 
