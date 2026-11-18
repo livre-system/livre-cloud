@@ -397,6 +397,7 @@ def force_cancel_trip(trip_id: int, cur=Depends(get_cursor_dep)):
     cur.execute("UPDATE livi_trips SET status = 'cancelled', conflict_reason = 'manual_admin_cleanup' WHERE id = %s", (trip_id,))
     return {"status": "ok", "trip_id": trip_id}
 
+@router.post("/tracking/{tracking_token}/cancel")
 def passenger_cancel_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Cancela un pedido sólo mientras todavía no fue tomado por un conductor."""
     cur.execute(
