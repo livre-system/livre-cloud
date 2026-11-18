@@ -1565,6 +1565,40 @@ def driver_update_status(
     return _driver_trip(_driver_trip_or_404(cur, trip_id, user, include_terminal=True))
 
 
+@router.get("/driver/active-locations")
+def driver_active_locations(
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_driver),
+):
+    """Returns fresh locations of active drivers for the dispatch map."""
+    cur.execute(
+        """
+        SELECT a.user_id AS driver_user_id,
+               a.current_latitude AS latitude,
+               a.current_longitude AS longitude,
+               a.location_updated_at,
+               a.operational_status
+        FROM livre_driver_accounts a
+        WHERE a.active = TRUE
+          AND a.operational_status = 'available'
+          AND a.current_latitude IS NOT NULL
+          AND a.current_longitude IS NOT NULL
+          AND a.location_updated_at >= NOW() - INTERVAL '2 minutes'
+        ORDER BY a.location_updated_at DESC
+        """
+    )
+    return [
+        {
+            "driver_user_id": row["driver_user_id"],
+            "latitude": float(row["latitude"]),
+            "longitude": float(row["longitude"]),
+            "location_updated_at": row["location_updated_at"].isoformat() if row["location_updated_at"] else None,
+            "operational_status": row["operational_status"],
+        }
+        for row in cur.fetchall()
+    ]
+
+
 @router.post("/driver/location")
 def driver_update_live_location(
     payload: LocationUpdate,
