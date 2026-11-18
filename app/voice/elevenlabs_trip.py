@@ -88,7 +88,11 @@ TRACKING_BASE_URL = os.getenv(
     "PASSENGER_TRACKING_BASE_URL",
     "https://livre-pasajeros-production.up.railway.app",
 ).rstrip("/")
-ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message"
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v21.0")
+META_WHATSAPP_API_URL = "https://graph.facebook.com/{}/messages"
+def _meta_access_token():
+    return os.getenv("META_WHATSAPP_ACCESS_TOKEN") or os.getenv("META_ACCESS_TOKEN") or os.getenv("ELEVENLABS_API_KEY", "")
+
 ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
 ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv(
     "ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "1364913613361192"
@@ -256,25 +260,25 @@ def send_tracking_message(trip: dict) -> str:
     desde whatsapp_user si contiene un número E.164 válido.
     Rechaza IDs internos (user:<UUID>) sin intentar enviarlos.
     """
-    api_key = os.getenv("ELEVENLABS_API_KEY")
+    api_key = _meta_access_token()
     trip_id = trip.get("id")
     tracking_token = trip.get("tracking_token")
 
     if not api_key:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=config_api_key falta ELEVENLABS_API_KEY", trip_id)
-        raise RuntimeError("ELEVENLABS_API_KEY no configurada")
+        log.error("[META TRACKING] trip=%s fallo=config_api_key falta META_ACCESS_TOKEN", trip_id)
+        raise RuntimeError("META_ACCESS_TOKEN no configurada")
     if not tracking_token:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
+        log.error("[META TRACKING] trip=%s fallo=token tracking_token ausente", trip_id)
         raise RuntimeError(f"El viaje {trip_id} no tiene tracking_token")
 
     recipient = _resolve_recipient(trip)
     if not recipient:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=datos_contacto_inconsistentes", trip_id)
+        log.error("[META TRACKING] trip=%s fallo=datos_contacto_inconsistentes", trip_id)
         raise RuntimeError("WhatsApp User ID reutilizable no encontrado")
 
     template_name = os.getenv("ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME", "tracking_link").strip()
     if not template_name:
-        log.warning("[ELEVEN TRACKING] Template vacío en ENV, usando fallback 'tracking_link'")
+        log.warning("[META TRACKING] Template vacío en ENV, usando fallback 'tracking_link'")
         template_name = "tracking_link"
 
     tracking_url = _tracking_url(tracking_token)
@@ -290,46 +294,43 @@ def send_tracking_message(trip: dict) -> str:
         TRACKING_BASE_URL.split('/', 3)[2] if '://' in TRACKING_BASE_URL else TRACKING_BASE_URL,
     )
     log.info(
-        "[TRACKING TRACE] stage=dispatch trip=%s provider=elevenlabs endpoint=%s",
-        trip_id, ELEVENLABS_API_URL,
+        "[TRACKING TRACE] stage=dispatch trip=%s provider=meta endpoint=%s",
+        trip_id, META_WHATSAPP_API_URL.format(f"{META_GRAPH_API_VERSION}/{ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID}"),
     )
 
 
     # La plantilla tracking_link tiene {{1}} en el cuerpo del mensaje.
     # El parámetro es la URL de tracking como texto plano.
     payload = {
-        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "whatsapp_user_id": recipient,
-        "template_name": template_name,
-        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [
-            {
-                "type": "body",
-                "parameters": [{"type": "text", "text": tracking_url}],
-            }
-        ],
-        "agent_id": ELEVENLABS_AGENT_ID,
+        "messaging_product": "whatsapp",
+        "to": recipient,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE},
+            "components": [{"type": "body", "parameters": [{"type": "text", "text": tracking_url}]}],
+        },
     }
 
     try:
         response = httpx.post(
-            ELEVENLABS_API_URL,
-            headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+            META_WHATSAPP_API_URL.format(f"{META_GRAPH_API_VERSION}/{ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID}"),
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=payload,
             timeout=20.0,
         )
     except httpx.TimeoutException as exc:
-        log.error("[ELEVEN TRACKING] trip=%s fallo=timeout ElevenLabs no respondió en 20s", trip_id)
+        log.error("[META TRACKING] trip=%s fallo=timeout ElevenLabs no respondió en 20s", trip_id)
         raise RuntimeError(f"Timeout enviando tracking trip={trip_id}") from exc
 
     if response.is_error:
         log.error(
-            "[TRACKING TRACE] stage=provider_rejected trip=%s provider=elevenlabs http_status=%s",
+            "[TRACKING TRACE] stage=provider_rejected trip=%s provider=meta http_status=%s",
             trip_id, response.status_code,
         )
         safe_body = response.text[:800].replace(tracking_url or "", "<tracking_url>")
         log.error(
-            "[ELEVEN TRACKING] trip=%s fallo=elevenlabs_api status=%s body=%s "
+            "[META TRACKING] trip=%s fallo=elevenlabs_api status=%s body=%s "
             "destinatario=%s template=%s lang=%s phone_number_id=%s",
             trip_id, response.status_code, safe_body,
             recipient, template_name, ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
@@ -338,14 +339,14 @@ def send_tracking_message(trip: dict) -> str:
         response.raise_for_status()
 
     result = response.json()
-    conversation_id = result.get("conversation_id") or ""
+    conversation_id = result.get("messages", [{}])[0].get("id", "") if result.get("messages") else ""
     log.info(
-        "[TRACKING TRACE] stage=provider_accepted trip=%s provider=elevenlabs http_status=%s "
+        "[TRACKING TRACE] stage=provider_accepted trip=%s provider=meta http_status=%s "
         "conversation_id_present=%s response_keys=%s",
         trip_id, response.status_code, bool(conversation_id), sorted(result.keys()),
     )
     log.info(
-        "[ELEVEN TRACKING] ok trip=%s conversation_id=%s destinatario=%s",
+        "[META TRACKING] ok trip=%s conversation_id=%s destinatario=%s",
         trip_id, conversation_id, recipient,
     )
     return conversation_id
