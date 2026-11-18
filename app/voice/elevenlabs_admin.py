@@ -35,7 +35,7 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
         
     if not trip or not trip.get("whatsapp_user"):
         log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
-        return
+        raise RuntimeError(f"Viaje {trip_id} sin whatsapp_user")
 
     # Valores directos
     first_name = trip.get("first_name") or "Pasajero"
@@ -76,11 +76,6 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
         result = response.json()
         conversation_id = result.get("conversation_id") or ""
         log.info("[ELEVEN ADMIN] proveedor aceptó trip=%s conversation_id_present=%s", trip_id, bool(conversation_id))
-        my_cur.execute("""
-            INSERT INTO livre_trip_event_outbox
-            (trip_id, event_type, status, created_at, processing_at)
-            VALUES (%s, 'arrival_notice_sent', 'sent', NOW(), NOW())
-        """, [trip_id])
         log.info("[ELEVEN ADMIN] Aviso de llegada aceptado, trip=%s", trip_id)
     except Exception as e:
         log.error("[ELEVEN ADMIN] Fallo en envío, trip=%s, error=%s", trip_id, str(e))

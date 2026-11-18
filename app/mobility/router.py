@@ -1422,22 +1422,14 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
-    # Forzar evento de outbox y envío síncrono del aviso de llegada, desacoplado de CRM y Embeddings
-    from app.voice.elevenlabs_admin import send_arrival_whatsapp
-    try:
-        log.info("[ROUTER DIAGNOSTIC] Iniciando envío de aviso de llegada directo para trip=%s", trip_id)
-        send_arrival_whatsapp(trip_id, cur=cur)
-        log.info("[ROUTER DIAGNOSTIC] Aviso de llegada enviado exitosamente para trip=%s", trip_id)
-    except Exception as e:
-        log.error("[ROUTER DIAGNOSTIC] Fallo en aviso de llegada para trip=%s: %s", trip_id, str(e))
-    
+    # El aviso se despacha únicamente desde la outbox; evita duplicados y conserva event_key.
     try:
         record_trip_event(
             cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
-            event_type="status_changed", previous_status="assigned",
-            new_status="arriving",
+            event_type="status_changed", previous_status=previous_status,
+            new_status=payload.status,
         )
-        log.info("[ROUTER DIAGNOSTIC] Evento de llegada registrado en outbox para trip=%s", trip_id)
+        log.info("[ROUTER DIAGNOSTIC] Evento registrado en outbox para trip=%s", trip_id)
     except Exception as ev_err:
         log.error("[ROUTER DIAGNOSTIC] Error registrando evento outbox para trip=%s: %s", trip_id, str(ev_err))
 
