@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+import os
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
 import asyncio
@@ -37,12 +38,15 @@ async def lifespan(app: FastAPI):
         run_migrations()
     ensure_tables()
     await patch_agent_voice()
-    outbox_task = asyncio.create_task(_outbox_loop())
+    outbox_task = None
+    if os.getenv("OUTBOX_WORKER_ENABLED", "true").lower() == "true":
+        outbox_task = asyncio.create_task(_outbox_loop())
     try:
         yield
     finally:
-        outbox_task.cancel()
-        await asyncio.gather(outbox_task, return_exceptions=True)
+        if outbox_task is not None:
+            outbox_task.cancel()
+            await asyncio.gather(outbox_task, return_exceptions=True)
 
 
 async def _outbox_loop():
