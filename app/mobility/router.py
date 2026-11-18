@@ -242,11 +242,15 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
         raise HTTPException(status_code=422, detail="El origen y el destino deben ser distintos")
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
-    # Validación estricta: si falta whatsapp_user, el viaje es inoperable
-    log.info("[TRIP REQUEST DEBUG] Payload recibido: %s", payload.model_dump())
+    passenger_identity = (payload.whatsapp_user or "").strip()
+    conversation_id = None
+    # La app de conductores crea pedidos operativos desde la web; no tiene
+    # identidad WhatsApp, por lo que usamos su identificador explícito.
+    if passenger_identity in {"web", "web-test"}:
+        passenger_identity = (payload.passenger or "Pasajero web").strip()
     if not passenger_identity:
         log.error("[TRIP REQUEST] Intento de creación sin identificador de pasajero")
-        raise HTTPException(status_code=400, detail="Identificador de pasajero (WhatsApp) es obligatorio")
+        raise HTTPException(status_code=400, detail="Identificador de pasajero es obligatorio")
 
     cur.execute(
         """
