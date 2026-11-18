@@ -1,6 +1,9 @@
 ALTER TABLE livre_trip_messages
     ADD COLUMN IF NOT EXISTS client_message_id TEXT;
 
+ALTER TABLE livre_trip_messages
+    ADD COLUMN IF NOT EXISTS client_message_id TEXT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_livre_trip_messages_handie_client_id
     ON livre_trip_messages (handie_session_id, client_message_id)
     WHERE handie_session_id IS NOT NULL AND client_message_id IS NOT NULL;
