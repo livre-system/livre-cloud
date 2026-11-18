@@ -654,6 +654,7 @@ async def elevenlabs_quote(request: Request):
     ).strip()
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
+    whatsapp_phone = whatsapp_phone or whatsapp_user
     conversation_id = str(
         body.get("conversation_id")
         or parameters.get("conversation_id")
