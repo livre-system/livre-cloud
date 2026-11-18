@@ -148,11 +148,14 @@ def _backfill_public_vehicle_snapshot(cur, trip):
     if all(trip.get(key) for key in ("tracking_plate", "tracking_vehicle_model", "tracking_vehicle_color")):
         return trip
     cur.execute(
-        """SELECT a.plate, a.vehicle_model, a.vehicle_color,
+        """SELECT dv.vehicle_label AS plate,
+                  NULL::text AS vehicle_model, NULL::text AS vehicle_color,
                   cv.plate AS crm_plate, cv.model AS crm_model, cv.color AS crm_color
            FROM livre_driver_accounts a
-           LEFT JOIN livre_crm_vehicles cv ON UPPER(cv.plate) = UPPER(a.plate)
+           LEFT JOIN livre_driver_vehicles dv ON dv.driver_user_id = a.user_id
+           LEFT JOIN livre_crm_vehicles cv ON UPPER(cv.plate) = UPPER(dv.vehicle_label)
           WHERE a.user_id = %s AND a.active = TRUE
+          ORDER BY dv.is_primary DESC NULLS LAST
           LIMIT 1""",
         (trip["assigned_driver_user_id"],),
     )
