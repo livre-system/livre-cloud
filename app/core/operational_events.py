@@ -66,7 +66,7 @@ def record_trip_event(
             ),
         ),
     )
-    log.info("[OUTBOX DIAGNOSTIC] Evento insertado en outbox: trip=%s, event=%s, status=%s", trip_id, event_type, new_status)
+    log.info("[OUTBOX TRACE] stage=event_recorded conversation_id=%s trip_id=%s event_type=%s event_key=%s", safe_metadata.get("conversation_id", "missing"), trip_id, event_type, event_key[:12])
     schedule_operational_event(
         event_key, trip_id, actor_role, event_type,
         previous_status, new_status, safe_metadata,

@@ -46,6 +46,26 @@ from app.integrations.historical_quote import (
 
 log = logging.getLogger(__name__)
 
+
+def _diag_identity(value: object) -> str:
+    """Fingerprint only; never log raw WhatsApp identity."""
+    raw = str(value or "").strip()
+    return hashlib.sha256(raw.encode()).hexdigest()[:12] if raw else "missing"
+
+
+def _diag_payload(body: dict, parameters: dict, data: dict) -> dict:
+    keys = set(body) | set(parameters) | set(data)
+    return {
+        "body_keys": sorted(body),
+        "parameters_keys": sorted(parameters),
+        "data_keys": sorted(data),
+        "has_system_caller_id": any("system__caller_id" in obj for obj in (body, parameters, data)),
+        "has_whatsapp_user": any("whatsapp_user" in obj for obj in (body, parameters, data)),
+        "has_whatsapp_phone": any("whatsapp_phone" in obj for obj in (body, parameters, data)),
+        "has_conversation_id": "conversation_id" in keys,
+    }
+
+
 ELEVENLABS_WEBHOOK_SECRET = os.getenv("ELEVENLABS_WEBHOOK_SECRET", "")
 
 
@@ -863,10 +883,13 @@ async def elevenlabs_trip(request: Request):
     
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
+    log.info("[ELEVEN TRACE] stage=webhook_received conversation_id=%s payload=%s", conversation_id or "missing", _diag_payload(body, parameters, data))
+    log.info("[ELEVEN TRACE] stage=identity_resolved conversation_id=%s whatsapp_user_fp=%s whatsapp_phone_fp=%s has_quote=%s service_type_id=%s", conversation_id or "missing", _diag_identity(whatsapp_user), _diag_identity(whatsapp_phone), bool(quote_id), service_type_id or "missing")
 
     # Si faltan datos críticos, forzamos un error 429 o mensaje de reintento para ElevenLabs.
     # ElevenLabs detectará el error y reintentará el webhook en unos segundos.
     if not whatsapp_user or not whatsapp_phone:
+        log.warning("[ELEVEN TRACE] stage=validation_failed conversation_id=%s missing_user=%s missing_phone=%s has_quote=%s service_type_id=%s", conversation_id or "missing", not bool(whatsapp_user), not bool(whatsapp_phone), bool(quote_id), service_type_id or "missing")
         log.warning("[ELEVEN TRIP] Datos incompletos, forzando reintento: conv_id=%s", conversation_id)
         raise HTTPException(status_code=429, detail="Retry_needed: Datos de usuario incompletos")
     activity_type = str(
@@ -1015,6 +1038,7 @@ async def elevenlabs_trip(request: Request):
         payment_provider = payment_record.get("payment_provider") if payment_record else None
         paid_at = payment_record.get("paid_at") if payment_record else None
         payment_reference = payment_record.get("external_reference") if payment_record else None
+        log.info("[ELEVEN TRACE] stage=persist_start conversation_id=%s whatsapp_user_fp=%s quote_id=%s", conversation_id, _diag_identity(whatsapp_user), quote_id or "missing")
         trip_id, tracking_token = _save_trip(
             conversation_id=conversation_id,
             origen=origen,
@@ -1054,6 +1078,7 @@ async def elevenlabs_trip(request: Request):
                     (trip_id, tracking_token, int(payment_id)),
                 )
         log.info(f"[ELEVEN TRIP] quote consumed locally quote_id={quote_id!r}")
+        log.info("[ELEVEN TRACE] stage=persisted conversation_id=%s trip_id=%s whatsapp_user_fp=%s", conversation_id, trip_id, _diag_identity(whatsapp_user))
         log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")
     except Exception as e:
         log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
@@ -1061,7 +1086,7 @@ async def elevenlabs_trip(request: Request):
 
     _response = f"Viaje registrado en Livre y buscando conductor. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")
-    log.info(f"[ELEVEN TRIP] END trip_id={trip_id} conversation_id={conversation_id!r}")
+    log.info("[ELEVEN TRACE] stage=persisted conversation_id=%s trip_id=%s whatsapp_user_fp=%s", conversation_id, trip_id, _diag_identity(whatsapp_user))
 
     # ── 6. Respuesta para ElevenLabs ──────────────────────────────────────────
     # ElevenLabs Webhook Tool requiere { "result": "..." }

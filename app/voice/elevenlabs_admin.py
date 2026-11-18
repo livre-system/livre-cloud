@@ -71,11 +71,11 @@ def send_arrival_whatsapp(trip_id: int, cur=None):
             timeout=10.0
         )
         if response.is_error:
-            log.error("[ELEVEN ADMIN] proveedor rechazó trip=%s status=%s body=%s", trip_id, response.status_code, response.text[:800])
+            log.info("[ELEVEN ADMIN TRACE] stage=provider_rejected trip_id=%s status=%s", trip_id, response.status_code)
             response.raise_for_status()
         result = response.json()
         conversation_id = result.get("conversation_id") or ""
-        log.info("[ELEVEN ADMIN] proveedor aceptó trip=%s conversation_id_present=%s", trip_id, bool(conversation_id))
+        log.info("[ELEVEN ADMIN TRACE] stage=provider_accepted trip_id=%s conversation_id_present=%s", trip_id, bool(conversation_id))
         log.info("[ELEVEN ADMIN] Aviso de llegada aceptado, trip=%s", trip_id)
     except Exception as e:
         log.error("[ELEVEN ADMIN] Fallo en envío, trip=%s, error=%s", trip_id, str(e))

@@ -69,6 +69,7 @@ def dispatch_event(event: dict[str, Any]) -> None:
     """Entrega al sink configurado; no marca éxito si no hay sink."""
     if not event.get("event_key"):
         raise RuntimeError(f"outbox event {event.get('id')} missing event_key")
+    log.info("[OUTBOX TRACE] stage=dispatch_start event_id=%s event_key=%s trip_id=%s event_type=%s", event.get("id"), str(event.get("event_key"))[:12], event.get("trip_id"), event.get("event_type"))
     if event["event_type"] == "status_changed":
         # Manejo de formato híbrido: el nuevo payload tiene estructura anidada, el viejo no
         payload = event.get("payload", {})
@@ -80,6 +81,7 @@ def dispatch_event(event: dict[str, Any]) -> None:
         if new_status == "arriving":
             log.info("[DIAGNOSTICO OUTBOX] Evento arriving detectado para trip=%s. Intentando enviar aviso.", event.get("trip_id"))
             send_arrival_whatsapp(event.get("trip_id"))
+            log.info("[OUTBOX TRACE] stage=arrival_dispatch_accepted trip_id=%s", event.get("trip_id"))
 
     if not OUTBOX_WEBHOOK_URL:
         # El envío de llegada ya fue procesado; no hay sink externo obligatorio.
@@ -106,9 +108,11 @@ def run_once(limit: int = 25) -> dict[str, int]:
             failed += 1
             log.warning("outbox event %s failed: %s", event["id"], exc)
             mark_failed(event["id"], str(exc), event["attempts"])
+            log.warning("[OUTBOX TRACE] stage=retry_scheduled event_id=%s attempts=%s error_type=%s", event["id"], event["attempts"], type(exc).__name__)
         else:
             sent += 1
             mark_sent(event["id"])
+            log.info("[OUTBOX TRACE] stage=marked_sent event_id=%s attempts=%s", event["id"], event["attempts"])
     return {"claimed": len(events), "sent": sent, "failed": failed}
 
 
