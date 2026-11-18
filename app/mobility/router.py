@@ -1074,6 +1074,14 @@ def open_handie(
 ):
     if payload.trip_id is not None:
         _driver_trip_or_404(cur, payload.trip_id, user)
+    # Una sola sesión abierta por conductor. Esto evita que una conexión
+    # anterior quede viva cuando Android/WebView vuelve a iniciar Livi.
+    cur.execute(
+        """UPDATE livre_handie_sessions
+           SET status = 'closed', closed_at = NOW()
+           WHERE driver_user_id = %s AND status = 'open'""",
+        (user["id"],),
+    )
     cur.execute(
         """INSERT INTO livre_handie_sessions (driver_user_id, trip_id)
            VALUES (%s, %s)
