@@ -43,8 +43,7 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
         raise RuntimeError(f"Viaje {trip_id} sin whatsapp_user")
 
     # Valores directos
-    first_name = trip.get("first_name") or "Pasajero"
-    plate = trip.get("tracking_plate") or "tu conductor"
+    notice_text = "El conductor está afuera"
 
     # Idempotencia
     my_cur.execute("SELECT id FROM livre_trip_event_outbox WHERE trip_id = %s AND event_type = 'arrival_notice_sent' AND status = 'sent'", [trip_id])
@@ -56,15 +55,7 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
         "whatsapp_user_id": trip["whatsapp_user"],
         "template_name": TEMPLATE_NAME,
         "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [
-            {
-                "type": "body",
-                "parameters": [
-                    {"type": "text", "text": first_name},
-                    {"type": "text", "text": plate},
-                ],
-            }
-        ],
+        "template_params": [],
         "agent_id": ELEVENLABS_AGENT_ID,
     }
 
