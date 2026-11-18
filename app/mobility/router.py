@@ -1108,12 +1108,12 @@ def save_handie_voice_event(
     client_id = payload.event_id or str(uuid.uuid4())
     cur.execute(
         """INSERT INTO livre_trip_messages
-           (trip_id, channel, sender_role, sender_id, body, handie_session_id, client_message_id)
-           VALUES (%s, 'base', %s, %s, %s, %s, %s)
+           (trip_id, channel, sender_role, sender_id, body, client_message_id)
+           VALUES (%s, 'base', %s, %s, %s, %s)
            ON CONFLICT DO NOTHING
            RETURNING id, created_at""",
         (session["trip_id"], payload.role, user["id"] if payload.role == "driver" else None,
-         payload.body.strip(), session_id, client_id),
+         payload.body.strip(), client_id),
     )
     message = cur.fetchone()
     if message:
