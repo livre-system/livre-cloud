@@ -250,7 +250,7 @@ def send_tracking_message(trip: dict) -> str:
     recipient = _resolve_recipient(trip)
     if not recipient:
         log.error("[ELEVEN TRACKING] trip=%s fallo=datos_contacto_inconsistentes", trip_id)
-        return "" # Silencioso para no romper el flujo síncrono del router
+        raise RuntimeError("WhatsApp User ID reutilizable no encontrado")
 
     template_name = os.getenv("ELEVENLABS_WHATSAPP_TRACKING_TEMPLATE_NAME", "tracking_link").strip()
     if not template_name:
