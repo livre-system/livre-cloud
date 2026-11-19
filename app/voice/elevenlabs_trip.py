@@ -1007,8 +1007,7 @@ async def elevenlabs_trip(request: Request):
     # ElevenLabs detectará el error y reintentará el webhook en unos segundos.
     if not whatsapp_user or not whatsapp_phone:
         log.warning("[ELEVEN TRACE] stage=validation_failed conversation_id=%s missing_user=%s missing_phone=%s has_quote=%s service_type_id=%s", conversation_id or "missing", not bool(whatsapp_user), not bool(whatsapp_phone), bool(quote_id), service_type_id or "missing")
-        log.warning("[ELEVEN TRIP] Datos incompletos, forzando reintento: conv_id=%s", conversation_id)
-        raise HTTPException(status_code=429, detail="Retry_needed: Datos de usuario incompletos")
+        return {"result": "No pude identificar el número de WhatsApp para registrar el viaje. Volvé a enviar la confirmación desde el mismo chat."}
     activity_type = str(
         parameters.get("activity_type")
         or body.get("activity_type")
