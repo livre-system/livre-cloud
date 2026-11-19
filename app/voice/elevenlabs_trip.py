@@ -669,9 +669,12 @@ async def conversation_init(request: Request):
         body = await request.json()
     except Exception as exc:
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
-    caller_id = str(body.get("caller_id") or "").strip()
+    caller_id = str(body.get("caller_id") or body.get("system__caller_id") or body.get("whatsapp_user") or "").strip()
     called_number = str(body.get("called_number") or "").strip()
     conversation_id = str(body.get("conversation_id") or "").strip()
+    if not caller_id and conversation_id:
+        saved_user, saved_phone = _get_saved_identity(conversation_id)
+        caller_id = saved_user or saved_phone
     log.info(
         "[ELEVEN TRACE] stage=conversation_init caller_fp=%s called_number=%s conversation_id=%s",
         _diag_identity(caller_id), called_number or "missing", conversation_id or "missing",
