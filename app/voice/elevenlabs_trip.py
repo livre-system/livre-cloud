@@ -145,8 +145,10 @@ def send_arrival_template(trip: dict) -> str:
         response.raise_for_status()
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
-    # El aviso de llegada es una notificación separada; no debe cerrar la conversación
-    # activa del pasajero. El cierre correcto ocurre en el flujo de llamada entrante.
+    # El aviso de llegada se envía como mensaje separado, pero la conversación
+    # outbound usada para ese aviso se cierra después del envío. La conversación
+    # entrante del pasajero no se toca.
+    _delete_outbound_conversation(conversation_id)
     return conversation_id
 
 
