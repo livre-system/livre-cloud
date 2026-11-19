@@ -145,7 +145,8 @@ def send_arrival_template(trip: dict) -> str:
         response.raise_for_status()
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
-    # No cerrar/purgar la conversación del pasajero: debe seguir activa para próximos pedidos.
+    # El aviso de llegada es una notificación separada; no debe cerrar la conversación
+    # activa del pasajero. El cierre correcto ocurre en el flujo de llamada entrante.
     return conversation_id
 
 
@@ -388,7 +389,6 @@ def send_tracking_message(trip: dict) -> str:
 
     result = response.json()
     conversation_id = result.get("conversation_id") or ""
-    _delete_outbound_conversation(conversation_id)
     log.info(
         "[TRACKING TRACE] stage=provider_accepted trip=%s provider=elevenlabs http_status=%s "
         "conversation_id_present=%s response_keys=%s",
