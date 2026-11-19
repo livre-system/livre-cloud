@@ -14,17 +14,34 @@ ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE = os.getenv("ELEVENLABS_WHATSAPP_TEMPLATE_
 TEMPLATE_NAME = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip() or "livre_admin_notice"
 log.info("[ELEVEN ADMIN] Configuración de plantilla: %s", TEMPLATE_NAME)
 
-def send_arrival_whatsapp(trip_id: int, cur=None):
-    """Envía WhatsApp de aviso de llegada usando plantilla administrativa."""
-    if not TEMPLATE_NAME:
-        log.warning("[ELEVEN ADMIN] Plantilla no configurada, omitiendo envío para trip=%s", trip_id)
-        return
-
-    # El worker usa su propia conexión; el router puede pasar un cursor transaccional.
-    if cur is not None:
-        return _send_arrival_with_cursor(trip_id, cur)
-    with get_cursor() as managed_cur:
-        return _send_arrival_with_cursor(trip_id, managed_cur)
+def send_arrival_message(trip: dict) -> str:
+    """Envía el aviso de llegada por ElevenLabs usando la plantilla aprobada."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    recipient = str(trip.get("whatsapp_user") or "").strip()
+    template_name = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip()
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY no configurada")
+    if not recipient:
+        raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user")
+    payload = {
+        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        "whatsapp_user_id": recipient,
+        "template_name": template_name,
+        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        "template_params": [{"type": "body", "parameters": []}],
+        "agent_id": ELEVENLABS_AGENT_ID,
+    }
+    response = httpx.post(
+        "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message",
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=20.0,
+    )
+    if response.is_error:
+        log.error("[ELEVEN ARRIVAL] trip=%s status=%s body=%s", trip.get("id"), response.status_code, response.text[:500])
+        response.raise_for_status()
+    result = response.json()
+    return result.get("conversation_id") or ""
 
 
 def _send_arrival_with_cursor(trip_id: int, my_cur):
@@ -43,42 +60,13 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
         log.error("[ELEVEN ADMIN] Pasajero no encontrado o sin ID para trip=%s", trip_id)
         raise RuntimeError(f"Viaje {trip_id} sin whatsapp_user")
 
-    # Valores directos
-    notice_text = "El conductor está afuera"
+    return send_arrival_message(trip)
 
-    # Idempotencia
-    my_cur.execute("SELECT id FROM livre_trip_event_outbox WHERE trip_id = %s AND event_type = 'arrival_notice_sent' AND status = 'sent'", [trip_id])
-    if my_cur.fetchone():
-        return
 
-    if not META_WHATSAPP_ACCESS_TOKEN:
-        raise RuntimeError("META_WHATSAPP_ACCESS_TOKEN no configurado")
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": trip["whatsapp_user"],
-        "type": "template",
-        "template": {
-            "name": TEMPLATE_NAME,
-            "language": {"code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE},
-            "components": [{"type": "body", "parameters": []}],
-        },
-    }
-
-    try:
-        response = httpx.post(
-            META_WHATSAPP_API_URL.format(f"{META_GRAPH_API_VERSION}/{ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID}"),
-            json=payload,
-            headers={"Authorization": f"Bearer {META_WHATSAPP_ACCESS_TOKEN}", "Content-Type": "application/json"},
-            timeout=10.0
-        )
-        if response.is_error:
-            log.info("[ELEVEN ADMIN TRACE] stage=provider_rejected trip_id=%s status=%s body=%s", trip_id, response.status_code, response.text[:500])
-            response.raise_for_status()
-        result = response.json()
-        conversation_id = result.get("conversation_id") or ""
-        log.info("[ELEVEN ADMIN TRACE] stage=provider_accepted trip_id=%s conversation_id_present=%s", trip_id, bool(conversation_id))
-        log.info("[ELEVEN ADMIN] Aviso de llegada aceptado, trip=%s", trip_id)
-    except Exception as e:
-        log.error("[ELEVEN ADMIN] Fallo en envío, trip=%s, error=%s", trip_id, str(e))
-        raise
+def send_arrival_whatsapp(trip_id: int, cur=None):
+    """Compatibilidad: obtiene el viaje y envía siempre por ElevenLabs."""
+    if cur is not None:
+        return _send_arrival_with_cursor(trip_id, cur)
+    with get_cursor() as managed_cur:
+        return _send_arrival_with_cursor(trip_id, managed_cur)
 
