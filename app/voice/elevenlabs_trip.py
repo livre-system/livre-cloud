@@ -708,7 +708,6 @@ async def elevenlabs_quote(request: Request):
     ).strip()
     whatsapp_user = _whatsapp_user(body, parameters, data)
     whatsapp_phone = _whatsapp_phone(body, parameters, data)
-    whatsapp_phone = whatsapp_phone or whatsapp_user
     conversation_id = str(
         body.get("conversation_id")
         or parameters.get("conversation_id")
@@ -717,9 +716,12 @@ async def elevenlabs_quote(request: Request):
         or uuid.uuid4()
     ).strip()
 
+    saved_user, saved_phone = _get_saved_identity(conversation_id)
+    whatsapp_user = whatsapp_user or saved_user
+    whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
     log.info(
-        "[ELEVEN QUOTE] origen=%r destino=%r whatsapp_user=%r whatsapp_phone=%r",
-        origen, destino, whatsapp_user, whatsapp_phone,
+        "[ELEVEN QUOTE] origen=%r destino=%r whatsapp_user_fp=%s whatsapp_phone_fp=%s",
+        origen, destino, _diag_identity(whatsapp_user), _diag_identity(whatsapp_phone),
     )
     if not origen:
         return {"result": "Error: el origen no puede estar vacío."}
