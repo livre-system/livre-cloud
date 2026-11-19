@@ -117,6 +117,39 @@ def arriving_message(trip: dict) -> str:
     )
 
 
+def send_arrival_template(trip: dict) -> str:
+    """Envía la plantilla de llegada por el mismo canal ElevenLabs del tracking."""
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    recipient = _resolve_recipient(trip)
+    template_name = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip()
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY no configurada")
+    if not recipient:
+        raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user reutilizable")
+    payload = {
+        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
+        "whatsapp_user_id": recipient,
+        "template_name": template_name,
+        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
+        "template_params": [{"type": "body", "parameters": []}],
+        "agent_id": ELEVENLABS_AGENT_ID,
+    }
+    response = httpx.post(
+        ELEVENLABS_API_URL,
+        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
+        json=payload,
+        timeout=20.0,
+    )
+    if response.is_error:
+        log.error("[ELEVEN ARRIVAL] trip=%s status=%s body=%s", trip.get("id"), response.status_code, response.text[:500])
+        response.raise_for_status()
+    result = response.json()
+    conversation_id = result.get("conversation_id") or ""
+    # No cerrar/purgar la conversación del pasajero: debe seguir activa para próximos pedidos.
+    return conversation_id
+
+
+
 def send_rejection_message(trip: dict) -> str:
     """Avisa al pasajero que el conductor rechazó el viaje."""
     api_key = os.getenv("ELEVENLABS_API_KEY")

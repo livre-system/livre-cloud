@@ -16,32 +16,9 @@ log.info("[ELEVEN ADMIN] Configuración de plantilla: %s", TEMPLATE_NAME)
 
 def send_arrival_message(trip: dict) -> str:
     """Envía el aviso de llegada por ElevenLabs usando la plantilla aprobada."""
-    api_key = os.getenv("ELEVENLABS_API_KEY")
-    recipient = str(trip.get("whatsapp_user") or "").strip()
-    template_name = os.getenv("ELEVENLABS_WHATSAPP_ADMIN_NOTICE_TEMPLATE_NAME", "livre_admin_notice").strip()
-    if not api_key:
-        raise RuntimeError("ELEVENLABS_API_KEY no configurada")
-    if not recipient:
-        raise RuntimeError(f"El viaje {trip.get('id')} no tiene whatsapp_user")
-    payload = {
-        "whatsapp_phone_number_id": ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID,
-        "whatsapp_user_id": recipient,
-        "template_name": template_name,
-        "template_language_code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE,
-        "template_params": [{"type": "body", "parameters": []}],
-        "agent_id": ELEVENLABS_AGENT_ID,
-    }
-    response = httpx.post(
-        "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message",
-        headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-        json=payload,
-        timeout=20.0,
-    )
-    if response.is_error:
-        log.error("[ELEVEN ARRIVAL] trip=%s status=%s body=%s", trip.get("id"), response.status_code, response.text[:500])
-        response.raise_for_status()
-    result = response.json()
-    return result.get("conversation_id") or ""
+    from app.voice.elevenlabs_trip import send_arrival_template
+    return send_arrival_template(trip)
+
 
 
 def _send_arrival_with_cursor(trip_id: int, my_cur):
