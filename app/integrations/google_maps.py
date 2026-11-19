@@ -1,6 +1,7 @@
 """Geocodificación y distancia vial para cotizaciones locales."""
 
 import os
+import re
 from urllib.parse import quote_plus
 
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
@@ -13,8 +14,8 @@ class GeocodingError(RuntimeError):
     """La dirección o la ruta no pudo resolverse de forma segura."""
 
 
-def parse_geocode_response(data: dict) -> dict:
-    """Extrae coordenadas de una respuesta Google inequívoca."""
+def parse_geocode_response(data: dict, requested_address: str = "") -> dict:
+    """Extrae coordenadas y rechaza resultados que no respetan el número."""
     status = data.get("status")
     results = data.get("results") or []
 
@@ -26,6 +27,10 @@ def parse_geocode_response(data: dict) -> dict:
         raise GeocodingError("resultados ambiguos para la dirección")
 
     result = results[0]
+    requested_number = re.search(r"\b(\d{1,5})\b", requested_address or "")
+    returned_number = re.search(r"\b(\d{1,5})\b", result.get("formatted_address", ""))
+    if requested_number and returned_number and requested_number.group(1) != returned_number.group(1):
+        raise GeocodingError("el mapa devolvió otra altura para la dirección")
     location = (result.get("geometry") or {}).get("location") or {}
     if "lat" not in location or "lng" not in location:
         raise GeocodingError("la respuesta no contiene coordenadas")
@@ -56,7 +61,7 @@ def geocode_address(address: str) -> dict:
             timeout=15,
         )
         response.raise_for_status()
-        return parse_geocode_response(response.json())
+        return parse_geocode_response(response.json(), address)
     except GeocodingError as exc:
         if str(exc) != "dirección no encontrada":
             raise
