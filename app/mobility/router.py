@@ -1486,7 +1486,6 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
-    # El aviso se despacha únicamente desde la outbox; evita duplicados y conserva event_key.
     try:
         record_trip_event(
             cur, trip_id=trip_id, actor_user_id=user["id"], actor_role="driver",
@@ -1496,13 +1495,15 @@ def driver_update_status(
         log.info("[ROUTER DIAGNOSTIC] Evento registrado en outbox para trip=%s", trip_id)
     except Exception as ev_err:
         log.error("[ROUTER DIAGNOSTIC] Error registrando evento outbox para trip=%s: %s", trip_id, str(ev_err))
+    # Aviso crítico de llegada: envío directo, sin worker separado.
+    if payload.status == "arriving":
+        try:
+            from app.voice.elevenlabs_admin import send_arrival_whatsapp
+            send_arrival_whatsapp(trip_id, cur=cur)
+            log.info("[MOBILITY ARRIVAL] aviso WhatsApp aceptado trip=%s", trip_id)
+        except Exception as arrival_error:
+            log.error("[MOBILITY ARRIVAL] fallo WhatsApp trip=%s error=%s", trip_id, str(arrival_error)[:300])
 
-    if payload.status in ("cancelled", "conflict", "lost"):
-        # Un viaje que no termina correctamente no deja historial GPS persistido.
-        cur.execute(
-            "DELETE FROM livre_trip_location_history WHERE trip_id = %s",
-            (trip_id,),
-        )
     # Cargar el viaje para decidir si hay que enviar el tracking.
     # Se carga en la transición searching/scheduled→assigned/arriving (envío principal)
     # y también en assigned→arriving para reintentar si el envío anterior falló.
