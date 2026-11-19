@@ -719,6 +719,10 @@ async def elevenlabs_quote(request: Request):
     saved_user, saved_phone = _get_saved_identity(conversation_id)
     whatsapp_user = whatsapp_user or saved_user
     whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
+    if not whatsapp_user and conversation_id:
+        existing = _get_existing_trip(conversation_id) or {}
+        whatsapp_user = str(existing.get("whatsapp_user") or "").strip()
+        whatsapp_phone = whatsapp_phone or str(existing.get("whatsapp_phone") or "").strip() or whatsapp_user
     log.info(
         "[ELEVEN QUOTE] origen=%r destino=%r whatsapp_user_fp=%s whatsapp_phone_fp=%s",
         origen, destino, _diag_identity(whatsapp_user), _diag_identity(whatsapp_phone),

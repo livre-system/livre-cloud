@@ -39,7 +39,7 @@ def geocode_address(address: str, city: str = "Bahía Blanca") -> dict:
                 "countrycodes": "ar",
             },
             headers={"User-Agent": USER_AGENT},
-            timeout=15,
+            timeout=30,
         )
         response.raise_for_status()
         results = response.json()
