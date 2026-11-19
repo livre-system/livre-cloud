@@ -1199,6 +1199,8 @@ async def elevenlabs_trip(request: Request):
 
     _response = f"Viaje registrado en Livre y buscando conductor. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")
+    if not conversation_id:
+        conversation_id = str(body.get("system__conversation_id") or parameters.get("system__conversation_id") or data.get("system__conversation_id") or "").strip()
     log.info("[ELEVEN TRACE] stage=persisted conversation_id=%s trip_id=%s whatsapp_user_fp=%s", conversation_id, trip_id, _diag_identity(whatsapp_user))
 
     # ── 6. Respuesta para ElevenLabs ──────────────────────────────────────────
@@ -1225,7 +1227,7 @@ async def elevenlabs_cancel(request: Request):
     parameters = body.get("parameters", {}) or {}
     data = body.get("data", {}) or {}
     whatsapp_user = _whatsapp_user(body, parameters, data)
-    conversation_id = str(body.get("conversation_id") or parameters.get("conversation_id") or data.get("conversation_id") or "").strip()
+    conversation_id = str(body.get("conversation_id") or parameters.get("conversation_id") or data.get("conversation_id") or body.get("system__conversation_id") or parameters.get("system__conversation_id") or data.get("system__conversation_id") or "").strip()
     if not whatsapp_user and conversation_id:
         whatsapp_user, _ = _get_saved_identity(conversation_id)
     if not whatsapp_user and conversation_id:
