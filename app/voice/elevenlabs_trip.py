@@ -456,9 +456,16 @@ def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
         return "", ""
     with get_cursor() as cur:
         cur.execute(
-            "SELECT whatsapp_user, whatsapp_phone FROM livi_whatsapp_quotes "
-            "WHERE conversation_id = %s ORDER BY created_at DESC LIMIT 1",
-            [conversation_id],
+            """SELECT whatsapp_user, whatsapp_phone FROM (
+                   SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_quotes
+                   WHERE conversation_id = %s
+                   UNION ALL
+                   SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_trips
+                   WHERE conversation_id = %s
+               ) identities
+               WHERE COALESCE(whatsapp_user, '') <> '' OR COALESCE(whatsapp_phone, '') <> ''
+               ORDER BY created_at DESC LIMIT 1""",
+            [conversation_id, conversation_id],
         )
         row = cur.fetchone() or {}
     return str(row.get("whatsapp_user") or ""), str(row.get("whatsapp_phone") or "")
@@ -1000,6 +1007,10 @@ async def elevenlabs_trip(request: Request):
     saved_user, saved_phone = _get_saved_identity(conversation_id)
     whatsapp_user = whatsapp_user or saved_user
     whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
+    if not whatsapp_user and conversation_id:
+        saved_trip = _get_existing_trip(conversation_id) or {}
+        whatsapp_user = str(saved_trip.get("whatsapp_user") or "").strip()
+        whatsapp_phone = whatsapp_phone or str(saved_trip.get("whatsapp_phone") or "").strip() or whatsapp_user
     log.info("[ELEVEN TRACE] stage=webhook_received conversation_id=%s payload=%s", conversation_id or "missing", _diag_payload(body, parameters, data))
     log.info("[ELEVEN TRACE] stage=identity_resolved conversation_id=%s whatsapp_user_fp=%s whatsapp_phone_fp=%s has_quote=%s service_type_id=%s", conversation_id or "missing", _diag_identity(whatsapp_user), _diag_identity(whatsapp_phone), bool(quote_id), service_type_id or "missing")
 
