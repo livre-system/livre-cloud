@@ -1228,6 +1228,11 @@ async def elevenlabs_cancel(request: Request):
     conversation_id = str(body.get("conversation_id") or parameters.get("conversation_id") or data.get("conversation_id") or "").strip()
     if not whatsapp_user and conversation_id:
         whatsapp_user, _ = _get_saved_identity(conversation_id)
+    if not whatsapp_user and conversation_id:
+        with get_cursor() as cur:
+            cur.execute("SELECT whatsapp_user FROM livi_trips WHERE conversation_id = %s ORDER BY created_at DESC LIMIT 1", [conversation_id])
+            row = cur.fetchone() or {}
+            whatsapp_user = str(row.get("whatsapp_user") or "").strip()
     log.info("[ELEVEN CANCEL] received conversation_id=%s whatsapp_user_fp=%s", conversation_id or "missing", _diag_identity(whatsapp_user))
     if not whatsapp_user:
         return {"result": "No pude identificar el número de WhatsApp del pasajero."}
