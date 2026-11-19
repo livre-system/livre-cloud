@@ -60,6 +60,7 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
         "template": {
             "name": TEMPLATE_NAME,
             "language": {"code": ELEVENLABS_WHATSAPP_TEMPLATE_LANGUAGE},
+            "components": [{"type": "body", "parameters": []}],
         },
     }
 
@@ -71,7 +72,7 @@ def _send_arrival_with_cursor(trip_id: int, my_cur):
             timeout=10.0
         )
         if response.is_error:
-            log.info("[ELEVEN ADMIN TRACE] stage=provider_rejected trip_id=%s status=%s", trip_id, response.status_code)
+            log.info("[ELEVEN ADMIN TRACE] stage=provider_rejected trip_id=%s status=%s body=%s", trip_id, response.status_code, response.text[:500])
             response.raise_for_status()
         result = response.json()
         conversation_id = result.get("conversation_id") or ""
