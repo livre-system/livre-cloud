@@ -1108,6 +1108,19 @@ async def handie_voice_token(
     session = cur.fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Handie cerrado o inexistente")
+    if session["trip_id"] is None:
+        cur.execute(
+            """SELECT id, origen, destino, status FROM livi_trips
+               WHERE assigned_driver_user_id = %s
+                 AND status IN ('assigned', 'arriving', 'in_progress')
+               ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 1""",
+            (user["id"],),
+        )
+        current_trip = cur.fetchone()
+        if current_trip:
+            cur.execute("UPDATE livre_handie_sessions SET trip_id = %s WHERE id = %s", (current_trip["id"], session_id))
+            session = {**session, "trip_id": current_trip["id"], "origen": current_trip["origen"], "destino": current_trip["destino"], "status": current_trip["status"]}
+
     api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
     if not api_key:
         raise HTTPException(status_code=503, detail="Asistente de voz no configurado")
