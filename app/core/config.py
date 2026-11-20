@@ -28,8 +28,8 @@ BASE_URL = os.getenv("BASE_URL")
 # Outbox: opcional hasta configurar un consumidor autorizado.
 OUTBOX_WEBHOOK_URL = os.getenv("OUTBOX_WEBHOOK_URL")
 
-# Las migraciones se ejecutan como job controlado; el arranque automático es opt-in.
-AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "false").lower() in {"1", "true", "yes"}
+# Las migraciones se ejecutan en cada arranque controlado del servicio.
+AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "true").lower() in {"1", "true", "yes"}
 
 
 def validate_runtime_config() -> None:
