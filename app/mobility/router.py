@@ -1152,6 +1152,9 @@ async def handie_voice_token(
             "trip_origin": session["origen"] or "",
             "trip_destination": session["destino"] or "",
             "trip_status": session["status"] or "sin_viaje",
+            "has_assigned_trip": bool(session["trip_id"]),
+            "driver_can_ask_about_trip": True,
+            "driver_can_reassign_by_voice_only": True,
         },
     }
 
