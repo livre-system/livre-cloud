@@ -480,13 +480,32 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
         return None
 
 
+def _save_conversation_identity(conversation_id: str, whatsapp_user: str, whatsapp_phone: str) -> None:
+    if not conversation_id or not (whatsapp_user or whatsapp_phone):
+        return
+    with get_cursor() as cur:
+        cur.execute(
+            """INSERT INTO livi_whatsapp_conversation_identity
+               (conversation_id, whatsapp_user, whatsapp_phone)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (conversation_id) DO UPDATE SET
+                 whatsapp_user = COALESCE(NULLIF(EXCLUDED.whatsapp_user, ''), livi_whatsapp_conversation_identity.whatsapp_user),
+                 whatsapp_phone = COALESCE(NULLIF(EXCLUDED.whatsapp_phone, ''), livi_whatsapp_conversation_identity.whatsapp_phone),
+                 updated_at = NOW()""",
+            (conversation_id, whatsapp_user or "", whatsapp_phone or ""),
+        )
+
+
 def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
     if not conversation_id:
         return "", ""
     with get_cursor() as cur:
         cur.execute(
             """SELECT whatsapp_user, whatsapp_phone FROM (
-                   SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_quotes
+                   SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_conversation_identity
+            WHERE conversation_id = %s
+            UNION ALL
+            SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_quotes
                    WHERE conversation_id = %s
                    UNION ALL
                    SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_trips
@@ -494,7 +513,7 @@ def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
                ) identities
                WHERE COALESCE(whatsapp_user, '') <> '' OR COALESCE(whatsapp_phone, '') <> ''
                ORDER BY created_at DESC LIMIT 1""",
-            [conversation_id, conversation_id],
+            [conversation_id, conversation_id, conversation_id],
         )
         row = cur.fetchone() or {}
     return str(row.get("whatsapp_user") or ""), str(row.get("whatsapp_phone") or "")
@@ -712,6 +731,8 @@ async def conversation_init(request: Request):
     if not caller_id and conversation_id:
         saved_user, saved_phone = _get_saved_identity(conversation_id)
         caller_id = saved_user or saved_phone
+    caller_phone = _whatsapp_phone(body, body, body)
+    _save_conversation_identity(conversation_id, caller_id, caller_phone or caller_id)
     log.info(
         "[ELEVEN TRACE] stage=conversation_init caller_fp=%s called_number=%s conversation_id=%s",
         _diag_identity(caller_id), called_number or "missing", conversation_id or "missing",
