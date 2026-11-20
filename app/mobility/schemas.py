@@ -180,6 +180,7 @@ class HandieVoiceEventCreate(BaseModel):
 class HandieReassignRequest(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
     confirmed: bool = False
+    replace_driver: bool = False
 
 
 class HandieIncidentRequest(BaseModel):

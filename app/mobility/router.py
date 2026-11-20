@@ -1100,7 +1100,9 @@ async def handie_voice_token(
 ):
     """Crea URL de voz y devuelve contexto actualizado, incluida última ubicación."""
     cur.execute(
-        """SELECT s.id, s.trip_id, t.origen, t.destino, t.status
+        """SELECT s.id, s.trip_id, t.origen, t.destino, t.status,
+                  t.fare, t.original_fare, t.final_fare, t.service_type_id,
+                  t.tracking_latitude, t.tracking_longitude, t.tracking_location_updated_at
            FROM livre_handie_sessions s
            LEFT JOIN livi_trips t ON t.id = s.trip_id
            WHERE s.id = %s AND s.driver_user_id = %s AND s.status = 'open'""",
@@ -1109,7 +1111,11 @@ async def handie_voice_token(
     session = cur.fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Handie cerrado o inexistente")
-    current_location = {}
+    current_location = {
+        "tracking_latitude": session.get("tracking_latitude"),
+        "tracking_longitude": session.get("tracking_longitude"),
+        "tracking_location_updated_at": session.get("tracking_location_updated_at"),
+    }
     if session["trip_id"] is None:
         cur.execute(
             """SELECT id, origen, destino, status FROM livi_trips
@@ -1156,6 +1162,8 @@ async def handie_voice_token(
             "trip_origin": session["origen"] or "",
             "trip_destination": session["destino"] or "",
             "trip_status": session["status"] or "sin_viaje",
+            "trip_fare": str(_driver_fare(session) or session.get("final_fare") or session.get("fare") or session.get("original_fare") or ""),
+            "trip_fare_source": "driver_fare",
             "current_latitude": current_location.get("tracking_latitude"),
             "current_longitude": current_location.get("tracking_longitude"),
             "current_location_updated_at": current_location.get("tracking_location_updated_at"),
@@ -1245,8 +1253,7 @@ def handie_reassign_trip(
         raise HTTPException(status_code=409, detail="El handie no tiene un viaje activo")
     if session["status"] not in {"assigned", "arriving", "in_progress"}:
         raise HTTPException(status_code=409, detail="El viaje no está disponible para reasignación")
-    if session["status"] == "in_progress" and not payload.replace_driver:
-        raise HTTPException(status_code=422, detail="Para un viaje en curso, Livi debe confirmar el incidente y el envío de reemplazo")
+    previous_status = session["status"]
     new_status = "scheduled" if session["scheduled_at"] is not None and session["scheduled_at"] > datetime.now(session["scheduled_at"].tzinfo) else "searching"
     cur.execute(
         """UPDATE livi_trips
@@ -1255,7 +1262,8 @@ def handie_reassign_trip(
                tracking_vehicle_model = NULL, tracking_vehicle_color = NULL,
                tracking_latitude = NULL, tracking_longitude = NULL,
                tracking_location_updated_at = NULL, updated_at = NOW()
-           WHERE id = %s AND assigned_driver_user_id = %s AND status = 'assigned'
+               WHERE id = %s AND assigned_driver_user_id = %s
+                 AND status IN ('assigned', 'arriving', 'in_progress')
            RETURNING id, status""",
         (new_status, session["trip_id"], user["id"]),
     )
@@ -1264,7 +1272,7 @@ def handie_reassign_trip(
         raise HTTPException(status_code=409, detail="El viaje ya cambió de estado")
     record_trip_event(
         cur, trip_id=session["trip_id"], actor_user_id=user["id"], actor_role="driver",
-        event_type="trip_reassigned_by_driver", previous_status="assigned",
+        event_type="trip_reassigned_by_driver", previous_status=previous_status,
         new_status=new_status, metadata={"reason": payload.reason.strip(), "source": "driver_voice"},
     )
     return {"reassigned": True, "trip_id": released["id"], "status": released["status"], "reason": payload.reason.strip()}
