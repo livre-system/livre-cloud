@@ -1162,6 +1162,7 @@ async def handie_voice_token(
             "has_assigned_trip": bool(session["trip_id"]),
             "driver_can_ask_about_trip": True,
             "driver_can_reassign_by_voice_only": True,
+            "in_progress_incident_flow": "Para auto roto u otro impedimento, preguntar motivo; usar la última ubicación GPS; confirmar envío de reemplazo; luego llamar a handle_in_progress_incident.",
         },
     }
 
@@ -1244,6 +1245,8 @@ def handie_reassign_trip(
         raise HTTPException(status_code=409, detail="El handie no tiene un viaje activo")
     if session["status"] not in {"assigned", "arriving", "in_progress"}:
         raise HTTPException(status_code=409, detail="El viaje no está disponible para reasignación")
+    if session["status"] == "in_progress" and not payload.replace_driver:
+        raise HTTPException(status_code=422, detail="Para un viaje en curso, Livi debe confirmar el incidente y el envío de reemplazo")
     new_status = "scheduled" if session["scheduled_at"] is not None and session["scheduled_at"] > datetime.now(session["scheduled_at"].tzinfo) else "searching"
     cur.execute(
         """UPDATE livi_trips
