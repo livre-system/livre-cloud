@@ -734,6 +734,13 @@ async def elevenlabs_quote(request: Request):
     except Exception as exc:
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
 
+    header_identity = {
+        "whatsapp_user": request.headers.get("x-whatsapp-user-id") or request.headers.get("x-elevenlabs-whatsapp-user-id"),
+        "whatsapp_phone": request.headers.get("x-whatsapp-phone") or request.headers.get("x-elevenlabs-whatsapp-phone"),
+        "caller_id": request.headers.get("x-caller-id") or request.headers.get("x-elevenlabs-caller-id"),
+    }
+    body = {**body, **{key: value for key, value in header_identity.items() if value}}
+
     parameters = body.get("parameters", {}) or {}
     data = body.get("data", {}) or {}
     origen = (
@@ -946,7 +953,14 @@ async def elevenlabs_trip(request: Request):
 
     # ── 2. Logs de observabilidad ────────────────────────────────────────────
     import json as _json
-    log.info(f"[ELEVEN TRIP] START")
+    log.info("[ELEVEN TRIP] START")
+    header_identity = {
+        "whatsapp_user": request.headers.get("x-whatsapp-user-id") or request.headers.get("x-elevenlabs-whatsapp-user-id"),
+        "whatsapp_phone": request.headers.get("x-whatsapp-phone") or request.headers.get("x-elevenlabs-whatsapp-phone"),
+        "caller_id": request.headers.get("x-caller-id") or request.headers.get("x-elevenlabs-caller-id"),
+    }
+    body = {**body, **{key: value for key, value in header_identity.items() if value}}
+
     log.info(f"[ELEVEN TRIP] payload={_json.dumps(body, ensure_ascii=False)[:1000]}")
 
     # ── 3. Extraer campos — múltiples ubicaciones posibles ───────────────────
