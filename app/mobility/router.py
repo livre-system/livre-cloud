@@ -1217,8 +1217,8 @@ def handie_reassign_trip(
     session = cur.fetchone()
     if not session or session["trip_id"] is None:
         raise HTTPException(status_code=409, detail="El handie no tiene un viaje activo")
-    if session["status"] != "assigned":
-        raise HTTPException(status_code=409, detail="Sólo se puede reasignar un viaje todavía asignado")
+    if session["status"] not in {"assigned", "arriving"}:
+        raise HTTPException(status_code=409, detail="Este viaje ya está en curso y no se puede reasignar automáticamente")
     new_status = "scheduled" if session["scheduled_at"] is not None and session["scheduled_at"] > datetime.now(session["scheduled_at"].tzinfo) else "searching"
     cur.execute(
         """UPDATE livi_trips
