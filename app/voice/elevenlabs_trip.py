@@ -248,8 +248,26 @@ def _whatsapp_phone(body: dict, parameters: dict | None = None, data: dict | Non
     data = data or body.get("data", {}) or {}
     candidates = [
         parameters.get("whatsapp_phone"),
+        parameters.get("phone"),
+        parameters.get("caller_id"),
+        parameters.get("system__caller_id"),
+        parameters.get("livre_whatsapp_phone"),
+        parameters.get("livre_whatsapp_user"),
+        parameters.get("passenger_id"),
         body.get("whatsapp_phone"),
+        body.get("phone"),
+        body.get("caller_id"),
+        body.get("system__caller_id"),
+        body.get("livre_whatsapp_phone"),
+        body.get("livre_whatsapp_user"),
+        body.get("passenger_id"),
         data.get("whatsapp_phone"),
+        data.get("phone"),
+        data.get("caller_id"),
+        data.get("system__caller_id"),
+        data.get("livre_whatsapp_phone"),
+        data.get("livre_whatsapp_user"),
+        data.get("passenger_id"),
     ]
     for raw in candidates:
         if not raw:
@@ -420,17 +438,28 @@ def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None
         (data.get("metadata") or {}).get("system__caller_id"),
         body.get("livre_whatsapp_user"),
         parameters.get("livre_whatsapp_user"),
+        parameters.get("livre_whatsapp_phone"),
+        body.get("livre_whatsapp_user"),
+        body.get("livre_whatsapp_phone"),
         data.get("livre_whatsapp_user"),
+        data.get("livre_whatsapp_phone"),
         body.get("passenger_id"),
         parameters.get("passenger_id"),
         data.get("passenger_id"),
+        (data.get("metadata") or {}).get("caller_id"),
+        (data.get("metadata") or {}).get("whatsapp_phone"),
     )
     phone_number_id = os.getenv("ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID", "").strip()
     for candidate in candidates:
         if not candidate:
             continue
         value = str(candidate).strip()
-        if value.startswith("user:") or (phone_number_id and value == phone_number_id):
+        if value.startswith("user:"):
+            value = value[5:].strip()
+            if _normalize_e164(value):
+                return _normalize_e164(value)
+            continue
+        if phone_number_id and value == phone_number_id:
             continue
         return value
     log.warning("[ELEVEN TRIP] no se encontró WhatsApp User ID del pasajero")
