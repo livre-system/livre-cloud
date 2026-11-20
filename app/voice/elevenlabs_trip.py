@@ -504,6 +504,7 @@ def _identity_for_conversation(conversation_id: str, whatsapp_user: str, whatsap
     saved_user, saved_phone = _get_saved_identity(conversation_id)
     user = whatsapp_user or saved_user
     phone = whatsapp_phone or saved_phone or user
+    user = user or phone
     return user, phone
 
 
@@ -762,6 +763,7 @@ async def elevenlabs_quote(request: Request):
     saved_user, saved_phone = _get_saved_identity(conversation_id)
     whatsapp_user = whatsapp_user or saved_user
     whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
+    whatsapp_user = whatsapp_user or whatsapp_phone
     if not whatsapp_user and conversation_id:
         existing = _get_existing_trip(conversation_id) or {}
         whatsapp_user = str(existing.get("whatsapp_user") or "").strip()
@@ -1050,6 +1052,7 @@ async def elevenlabs_trip(request: Request):
     saved_user, saved_phone = _get_saved_identity(conversation_id)
     whatsapp_user = whatsapp_user or saved_user
     whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
+    whatsapp_user = whatsapp_user or whatsapp_phone
     if not whatsapp_user and conversation_id:
         saved_trip = _get_existing_trip(conversation_id) or {}
         whatsapp_user = str(saved_trip.get("whatsapp_user") or "").strip()
