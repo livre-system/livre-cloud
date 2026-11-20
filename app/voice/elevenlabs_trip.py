@@ -483,16 +483,20 @@ def _get_existing_trip(conversation_id: str) -> dict | None:
 def _save_conversation_identity(conversation_id: str, whatsapp_user: str, whatsapp_phone: str) -> None:
     if not conversation_id or not (whatsapp_user or whatsapp_phone):
         return
+    identity = whatsapp_user or whatsapp_phone
+    phone = whatsapp_phone or whatsapp_user
+    identity_quote_id = f"identity:{conversation_id}"
     with get_cursor() as cur:
         cur.execute(
-            """INSERT INTO livi_whatsapp_conversation_identity
-               (conversation_id, whatsapp_user, whatsapp_phone)
-               VALUES (%s, %s, %s)
-               ON CONFLICT (conversation_id) DO UPDATE SET
-                 whatsapp_user = COALESCE(NULLIF(EXCLUDED.whatsapp_user, ''), livi_whatsapp_conversation_identity.whatsapp_user),
-                 whatsapp_phone = COALESCE(NULLIF(EXCLUDED.whatsapp_phone, ''), livi_whatsapp_conversation_identity.whatsapp_phone),
-                 updated_at = NOW()""",
-            (conversation_id, whatsapp_user or "", whatsapp_phone or ""),
+            """INSERT INTO livi_whatsapp_quotes
+               (quote_id, conversation_id, whatsapp_user, whatsapp_phone, source, origen, destino, options, expires_at)
+               VALUES (%s, %s, %s, %s, 'whatsapp', '__identity__', '__identity__', '{}'::jsonb, NOW() + INTERVAL '1 day')
+               ON CONFLICT (quote_id) DO UPDATE SET
+                 whatsapp_user = EXCLUDED.whatsapp_user,
+                 whatsapp_phone = EXCLUDED.whatsapp_phone,
+                 created_at = NOW(),
+                 expires_at = NOW() + INTERVAL '1 day'""",
+            (identity_quote_id, conversation_id, identity, phone),
         )
 
 
@@ -502,10 +506,7 @@ def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
     try:
         with get_cursor() as cur:
             cur.execute(
-                """SELECT whatsapp_user, whatsapp_phone FROM (
-                       SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_conversation_identity
-                       WHERE conversation_id = %s
-                       UNION ALL
+                """SELECT whatsapp_user, whatsapp_phone, created_at FROM (
                        SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_quotes
                        WHERE conversation_id = %s
                        UNION ALL
@@ -514,13 +515,38 @@ def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
                    ) identities
                    WHERE COALESCE(whatsapp_user, '') <> '' OR COALESCE(whatsapp_phone, '') <> ''
                    ORDER BY created_at DESC LIMIT 1""",
-                [conversation_id, conversation_id, conversation_id],
+                [conversation_id, conversation_id],
             )
             row = cur.fetchone() or {}
         return str(row.get("whatsapp_user") or ""), str(row.get("whatsapp_phone") or "")
     except Exception as exc:
         log.warning("[ELEVEN TRIP] identidad persistida no disponible error=%s", type(exc).__name__)
         return "", ""
+
+
+def _recent_single_identity() -> tuple[str, str]:
+    """Fallback acotado para conversaciones nuevas del mismo número de WhatsApp."""
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT whatsapp_user, whatsapp_phone FROM (
+                       SELECT whatsapp_user, whatsapp_phone FROM livi_whatsapp_quotes
+                       WHERE created_at > NOW() - INTERVAL '2 hours'
+                       UNION ALL
+                       SELECT whatsapp_user, whatsapp_phone FROM livi_trips
+                       WHERE created_at > NOW() - INTERVAL '2 hours'
+                   ) identities
+                   WHERE COALESCE(whatsapp_phone, '') <> ''
+                     AND whatsapp_phone <> 'web-test'
+                   LIMIT 3"""
+            )
+            rows = cur.fetchall()
+        if len(rows) == 1:
+            row = rows[0]
+            return str(row.get("whatsapp_user") or row.get("whatsapp_phone") or ""), str(row.get("whatsapp_phone") or row.get("whatsapp_user") or "")
+    except Exception as exc:
+        log.warning("[ELEVEN TRIP] fallback de identidad no disponible error=%s", type(exc).__name__)
+    return "", ""
 
 
 def _identity_for_conversation(conversation_id: str, whatsapp_user: str, whatsapp_phone: str) -> tuple[str, str]:
@@ -789,6 +815,8 @@ async def elevenlabs_quote(request: Request):
     whatsapp_user = whatsapp_user or saved_user
     whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
     whatsapp_user = whatsapp_user or whatsapp_phone
+    if not whatsapp_user and not whatsapp_phone:
+        whatsapp_user, whatsapp_phone = _recent_single_identity()
     if not whatsapp_user and conversation_id:
         existing = _get_existing_trip(conversation_id) or {}
         whatsapp_user = str(existing.get("whatsapp_user") or "").strip()
@@ -1078,6 +1106,8 @@ async def elevenlabs_trip(request: Request):
     whatsapp_user = whatsapp_user or saved_user
     whatsapp_phone = whatsapp_phone or saved_phone or whatsapp_user
     whatsapp_user = whatsapp_user or whatsapp_phone
+    if not whatsapp_user and not whatsapp_phone:
+        whatsapp_user, whatsapp_phone = _recent_single_identity()
     if not whatsapp_user and conversation_id:
         saved_trip = _get_existing_trip(conversation_id) or {}
         whatsapp_user = str(saved_trip.get("whatsapp_user") or "").strip()
