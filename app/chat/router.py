@@ -85,7 +85,7 @@ def _search_memory(user_id: str, query: str, chat_id: str | None = None) -> str:
 
 
 def _get_operational_context() -> str:
-    """Resumen acotado de la operación viva para consultas de LIVI."""
+    """Contexto amplio, seguro y de solo lectura para consultas del dashboard."""
     try:
         with get_cursor() as cur:
             cur.execute("""
@@ -99,10 +99,10 @@ def _get_operational_context() -> str:
                 SELECT id, origen, destino, status, tracking_driver_name,
                        tracking_plate, service_type_name, service_type_id,
                        payment_status, payment_method, payment_provider, paid_at,
-                       created_at, updated_at
+                       fare, original_fare, final_fare, created_at, updated_at
                 FROM livi_trips
                 ORDER BY updated_at DESC NULLS LAST
-                LIMIT 12
+                LIMIT 100
             """)
             recent = cur.fetchall()
         lines = [f"Estados de viajes: {totals or 'sin datos'}"]
@@ -116,6 +116,17 @@ def _get_operational_context() -> str:
                 f"chofer={row['tracking_driver_name'] or '—'}; patente={row['tracking_plate'] or '—'}; "
                 f"actualizado={row['updated_at'] or row['created_at']}"
             )
+            cur.execute("""
+                SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE status IN ('available','unavailable','out_of_service')) AS operational_accounts
+                FROM livre_driver_accounts
+            """)
+            driver_totals = cur.fetchone() or {}
+            cur.execute("SELECT COUNT(*) AS total FROM livre_trip_messages")
+            message_total = cur.fetchone() or {}
+            cur.execute("SELECT COUNT(*) AS total FROM livre_crm_commissions")
+            commission_total = cur.fetchone() or {}
+        lines.insert(1, f"Choferes registrados: {driver_totals.get('total', 0)}; mensajes: {message_total.get('total', 0)}; registros de comisiones: {commission_total.get('total', 0)}")
         return "\n".join(lines)
     except Exception as exc:
         import logging
