@@ -1216,6 +1216,7 @@ def handie_incident(session_id: str, payload: HandieIncidentRequest, cur=Depends
 
 
 
+@router.post("/driver/handie/{session_id}/reassign")
 def handie_reassign_trip(
     session_id: str,
     payload: HandieReassignRequest,
