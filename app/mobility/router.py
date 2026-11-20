@@ -31,6 +31,7 @@ from app.mobility.schemas import (
     DriverOperationalStatusResponse,
     DriverOperationalStatusUpdate,
     HandieMessageCreate,
+    HandieIncidentRequest,
     HandieOpenRequest,
     HandieReassignRequest,
     HandieVoiceEventCreate,
@@ -1197,7 +1198,24 @@ def save_handie_voice_event(
     return {"saved": True, "duplicate": message is None, "message_id": message["id"] if message else None}
 
 
-@router.post("/driver/handie/{session_id}/reassign")
+@router.post("/driver/handie/{session_id}/incident")
+def handie_incident(session_id: str, payload: HandieIncidentRequest, cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)):
+    if not payload.confirmed:
+        raise HTTPException(status_code=422, detail="El incidente requiere confirmación explícita")
+    cur.execute("""SELECT s.trip_id, t.status FROM livre_handie_sessions s JOIN livi_trips t ON t.id=s.trip_id WHERE s.id=%s AND s.driver_user_id=%s AND s.status='open'""", (session_id, user["id"]))
+    session = cur.fetchone()
+    if not session or session["trip_id"] is None:
+        raise HTTPException(status_code=409, detail="No hay viaje asociado a esta sesión")
+    if session["status"] != "in_progress":
+        raise HTTPException(status_code=409, detail="El protocolo de incidente sólo aplica a viajes en curso")
+    if payload.can_continue and not payload.replace_driver:
+        return {"status": "continued", "trip_id": session["trip_id"], "message": "El conductor continúa el viaje; incidente registrado."}
+    cur.execute("UPDATE livi_trips SET status='searching', assigned_driver_user_id=NULL, conflict_reason=%s, updated_at=NOW() WHERE id=%s RETURNING id,status", (f"incidente: {payload.reason}; ubicación: {payload.current_location}", session["trip_id"]))
+    released = cur.fetchone()
+    return {"status": "replacement_requested", "trip_id": released["id"], "message": "Viaje liberado y enviado a búsqueda de reemplazo."}
+
+
+
 def handie_reassign_trip(
     session_id: str,
     payload: HandieReassignRequest,
