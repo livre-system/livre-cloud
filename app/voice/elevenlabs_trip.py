@@ -499,24 +499,28 @@ def _save_conversation_identity(conversation_id: str, whatsapp_user: str, whatsa
 def _get_saved_identity(conversation_id: str) -> tuple[str, str]:
     if not conversation_id:
         return "", ""
-    with get_cursor() as cur:
-        cur.execute(
-            """SELECT whatsapp_user, whatsapp_phone FROM (
-                   SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_conversation_identity
-            WHERE conversation_id = %s
-            UNION ALL
-            SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_quotes
-                   WHERE conversation_id = %s
-                   UNION ALL
-                   SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_trips
-                   WHERE conversation_id = %s
-               ) identities
-               WHERE COALESCE(whatsapp_user, '') <> '' OR COALESCE(whatsapp_phone, '') <> ''
-               ORDER BY created_at DESC LIMIT 1""",
-            [conversation_id, conversation_id, conversation_id],
-        )
-        row = cur.fetchone() or {}
-    return str(row.get("whatsapp_user") or ""), str(row.get("whatsapp_phone") or "")
+    try:
+        with get_cursor() as cur:
+            cur.execute(
+                """SELECT whatsapp_user, whatsapp_phone FROM (
+                       SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_conversation_identity
+                       WHERE conversation_id = %s
+                       UNION ALL
+                       SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_whatsapp_quotes
+                       WHERE conversation_id = %s
+                       UNION ALL
+                       SELECT whatsapp_user, whatsapp_phone, created_at FROM livi_trips
+                       WHERE conversation_id = %s
+                   ) identities
+                   WHERE COALESCE(whatsapp_user, '') <> '' OR COALESCE(whatsapp_phone, '') <> ''
+                   ORDER BY created_at DESC LIMIT 1""",
+                [conversation_id, conversation_id, conversation_id],
+            )
+            row = cur.fetchone() or {}
+        return str(row.get("whatsapp_user") or ""), str(row.get("whatsapp_phone") or "")
+    except Exception as exc:
+        log.warning("[ELEVEN TRIP] identidad persistida no disponible error=%s", type(exc).__name__)
+        return "", ""
 
 
 def _identity_for_conversation(conversation_id: str, whatsapp_user: str, whatsapp_phone: str) -> tuple[str, str]:
