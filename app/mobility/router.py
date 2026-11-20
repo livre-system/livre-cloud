@@ -1098,7 +1098,7 @@ async def handie_voice_token(
     cur=Depends(get_cursor_dep),
     user: dict = Depends(require_driver),
 ):
-    """Creates a short-lived ElevenLabs URL without exposing the API key."""
+    """Crea URL de voz y devuelve contexto actualizado, incluida última ubicación."""
     cur.execute(
         """SELECT s.id, s.trip_id, t.origen, t.destino, t.status
            FROM livre_handie_sessions s
@@ -1109,6 +1109,7 @@ async def handie_voice_token(
     session = cur.fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Handie cerrado o inexistente")
+    current_location = {}
     if session["trip_id"] is None:
         cur.execute(
             """SELECT id, origen, destino, status FROM livi_trips
@@ -1121,6 +1122,8 @@ async def handie_voice_token(
         if current_trip:
             cur.execute("UPDATE livre_handie_sessions SET trip_id = %s WHERE id = %s", (current_trip["id"], session_id))
             session = {**session, "trip_id": current_trip["id"], "origen": current_trip["origen"], "destino": current_trip["destino"], "status": current_trip["status"]}
+        cur.execute("SELECT tracking_latitude, tracking_longitude, tracking_location_updated_at FROM livi_trips WHERE id=%s", (session["trip_id"],))
+        current_location = cur.fetchone() or {}
 
     api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
     if not api_key:
@@ -1153,6 +1156,9 @@ async def handie_voice_token(
             "trip_origin": session["origen"] or "",
             "trip_destination": session["destino"] or "",
             "trip_status": session["status"] or "sin_viaje",
+            "current_latitude": current_location.get("tracking_latitude"),
+            "current_longitude": current_location.get("tracking_longitude"),
+            "current_location_updated_at": current_location.get("tracking_location_updated_at"),
             "has_assigned_trip": bool(session["trip_id"]),
             "driver_can_ask_about_trip": True,
             "driver_can_reassign_by_voice_only": True,
