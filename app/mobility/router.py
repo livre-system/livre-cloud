@@ -3,6 +3,7 @@
 Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente.
 """
 
+import logging
 import os
 import secrets
 import uuid
@@ -32,9 +33,10 @@ from app.mobility.schemas import (
     TripRequestResponse,
 )
 from app.mobility.finance import calculate_trip_finance
-from app.voice.elevenlabs_trip import send_tracking_message
+from app.voice.elevenlabs_trip import close_whatsapp_conversation, send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
+log = logging.getLogger(__name__)
 
 
 def _active_device_session(cur, user: dict, device_id: str, *, require_fresh: bool = True):
