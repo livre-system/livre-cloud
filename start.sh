@@ -11,4 +11,4 @@ echo "→ Instalando dependencias..."
 pip install -r requirements.txt
 
 echo "→ Iniciando HASH Cloud..."
-uvicorn app.main:app --reload
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
