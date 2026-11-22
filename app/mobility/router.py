@@ -6,7 +6,7 @@ Este módulo es la frontera propia de Livre Cloud. No expone MAGIIS directamente
 import os
 import secrets
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import quote
 
@@ -31,6 +31,7 @@ from app.mobility.schemas import (
     TripRequest,
     TripRequestResponse,
 )
+from app.mobility.finance import calculate_trip_finance
 from app.voice.elevenlabs_trip import send_tracking_message
 
 router = APIRouter(prefix="/mobility", tags=["mobility"])
@@ -252,7 +253,9 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict):
                    WHEN 2 THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare
+               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
+               t.payment_method, t.payment_confirmed, t.commission_amount,
+               t.driver_net_amount, t.owner_net_amount
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         LEFT JOIN LATERAL (
@@ -290,6 +293,28 @@ def _driver_trip(trip) -> DriverTrip:
         service_type_id=trip["service_type_id"],
         service_type_name=trip["service_type_name"],
         fare=float(trip["fare"]) if trip["fare"] is not None else None,
+        payment_method=trip.get("payment_method"),
+        payment_confirmed=bool(trip.get("payment_confirmed")),
+        commission_amount=float(trip["commission_amount"]) if trip.get("commission_amount") is not None else None,
+        driver_net_amount=float(trip["driver_net_amount"]) if trip.get("driver_net_amount") is not None else None,
+        owner_net_amount=float(trip["owner_net_amount"]) if trip.get("owner_net_amount") is not None else None,
+    )
+
+
+def _persist_trip_finance(cur, trip_id: int, payload: StatusUpdate, fare):
+    """Current policy: every completed trip is cash/QR at 15%; no card flow exists."""
+    if fare is None:
+        raise HTTPException(status_code=422, detail="No hay tarifa para calcular el cierre financiero")
+    finance = calculate_trip_finance(fare, "cash_or_qr", collected_by="driver", received_by="driver")
+    cur.execute(
+        """UPDATE livi_trips
+           SET payment_method = 'cash_or_qr', payment_confirmed = FALSE,
+               payment_confirmed_at = NULL, commission_rate_percent = %s,
+               commission_amount = %s, driver_net_amount = %s,
+               owner_net_amount = %s
+           WHERE id = %s""",
+        (finance["commission_rate_percent"], finance["commission_amount"],
+         finance["driver_net_amount"], finance["owner_net_amount"], trip_id),
     )
 
 
@@ -309,6 +334,8 @@ def _closure_result(row, pdf_url: str | None = None) -> DriverShiftClosure:
         closed_at=row["closed_at"],
         trip_count=int(row["trip_count"]),
         total_revenue=float(row["total_revenue"] or 0),
+        gross_revenue=float(row.get("gross_revenue") or 0),
+        commission_total=float(row.get("commission_total") or 0),
         vehicle_id=row["vehicle_id"],
         vehicle_label=row["vehicle_label"],
         vehicle_model=row["vehicle_model"],
@@ -400,7 +427,9 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
                    WHEN 2 THEN 'Ahorro'
                    ELSE NULL
                END) AS service_type_name,
-               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare
+               COALESCE(t.fare, selected_quote.price_point_to_point) AS fare,
+               t.payment_method, t.payment_confirmed, t.commission_amount,
+               t.driver_net_amount, t.owner_net_amount
         FROM livi_trips t
         LEFT JOIN LATERAL (
             SELECT q.transport_type_id, q.price_point_to_point
@@ -432,18 +461,26 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_auth)
     return [_driver_trip(row) for row in cur.fetchall()]
 
 
-@router.get("/driver/history", response_model=DriverHistoryResponse)
-def driver_history(
-    date_from: date | None = Query(default=None),
-    date_to: date | None = Query(default=None),
-    cur=Depends(get_cursor_dep),
-    user: dict = Depends(require_auth),
-):
-    """Historial y recaudación desde livi_trips, aislado por conductor."""
-    end = date_to or date.today()
-    start = date_from or end
-    if start > end:
-        raise HTTPException(status_code=422, detail="date_from no puede ser posterior a date_to")
+def _history_bound(value: str | None, *, end: bool) -> datetime:
+    """Parse datetime-local/ISO bounds without losing same-day time filters."""
+    if not value:
+        now = datetime.now(timezone.utc)
+        return now.replace(hour=0, minute=0, second=0, microsecond=0) + (timedelta(days=1) if end else timedelta(0))
+    raw = value.strip()
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed_date = date.fromisoformat(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="date_from/date_to inválida") from exc
+        parsed = datetime.combine(parsed_date, time.max if end else time.min)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _history_rows(cur, user_id: str, start: datetime, end: datetime):
     cur.execute(
         """
         SELECT t.id, t.origen, t.destino, t.status,
@@ -451,25 +488,71 @@ def driver_history(
                t.tracking_vehicle_model, t.tracking_vehicle_color,
                t.tracking_latitude, t.tracking_longitude,
                t.tracking_location_updated_at, t.completed_at,
-               t.service_type_id, t.service_type_name, t.fare
+               t.service_type_id, t.service_type_name, t.fare,
+               t.payment_method, t.payment_confirmed, t.commission_amount,
+               t.driver_net_amount, t.owner_net_amount
         FROM livi_trips t
         WHERE t.assigned_driver_user_id = %s
           AND t.status IN ('completed', 'cancelled')
-          AND COALESCE(t.completed_at, t.updated_at) >= %s::date
-          AND COALESCE(t.completed_at, t.updated_at) < (%s::date + INTERVAL '1 day')
+          AND COALESCE(t.completed_at, t.updated_at) >= %s
+          AND COALESCE(t.completed_at, t.updated_at) < %s
         ORDER BY COALESCE(t.completed_at, t.updated_at) DESC, t.id DESC
         """,
-        (user["id"], start, end),
+        (user_id, start, end),
     )
-    rows = cur.fetchall()
+    return cur.fetchall()
+
+
+@router.get("/driver/history", response_model=DriverHistoryResponse)
+def driver_history(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    """Historial filtrado por chofer y por instante, no solo por día."""
+    start = _history_bound(date_from, end=False)
+    end = _history_bound(date_to, end=True)
+    if start >= end:
+        raise HTTPException(status_code=422, detail="date_from debe ser anterior a date_to")
+    rows = _history_rows(cur, user["id"], start, end)
     items = [_history_item(row) for row in rows]
     return DriverHistoryResponse(
         items=items,
         total=len(items),
-        total_revenue=float(sum((row["fare"] or Decimal("0")) for row in rows if row["status"] == "completed")),
+        total_revenue=float(sum(((row["driver_net_amount"] if row["driver_net_amount"] is not None else row["fare"]) or Decimal("0")) for row in rows if row["status"] == "completed")),
         date_from=start,
         date_to=end,
     )
+
+
+@router.get("/driver/history/pdf")
+def driver_history_pdf(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    cur=Depends(get_cursor_dep),
+    user: dict = Depends(require_auth),
+):
+    start = _history_bound(date_from, end=False)
+    end = _history_bound(date_to, end=True)
+    if start >= end:
+        raise HTTPException(status_code=422, detail="date_from debe ser anterior a date_to")
+    rows = _history_rows(cur, user["id"], start, end)
+    revenue = sum(((row["driver_net_amount"] if row["driver_net_amount"] is not None else row["fare"]) or Decimal("0")) for row in rows if row["status"] == "completed")
+    lines = [
+        "Livre - Historial filtrado del conductor",
+        f"Periodo: {start.isoformat()} a {end.isoformat()}",
+        f"Viajes: {len(rows)}",
+        f"Total recaudado: ARS {revenue}",
+        "Detalle:",
+    ]
+    lines.extend(
+        f"#{row['id']} {row['origen']} -> {row['destino']} | {row['status']} | ARS {row['fare'] or 0} | {row['completed_at'] or 'sin fecha'}"
+        for row in rows
+    )
+    return Response(content=_summary_pdf(lines), media_type="application/pdf", headers={
+        "Content-Disposition": 'attachment; filename="livre-historial-filtrado.pdf"',
+    })
 
 
 def _closure_query(cur, closure_id, user_id=None):
@@ -482,6 +565,7 @@ def _closure_query(cur, closure_id, user_id=None):
         f"""
         SELECT c.id, c.driver_user_id, u.name AS driver_name, c.closure_date,
                c.closed_at, c.trip_count, c.total_revenue,
+               c.gross_revenue, c.commission_total,
                c.vehicle_id, c.vehicle_label, c.vehicle_model, c.plate, c.owner_name
         FROM livre_driver_shift_closures c
         JOIN livre_users u ON u.id = c.driver_user_id
@@ -498,6 +582,7 @@ def driver_shift_closures(cur=Depends(get_cursor_dep), user: dict = Depends(requ
         """
         SELECT c.id, c.driver_user_id, u.name AS driver_name, c.closure_date,
                c.closed_at, c.trip_count, c.total_revenue,
+               c.gross_revenue, c.commission_total,
                c.vehicle_id, c.vehicle_label, c.vehicle_model, c.plate, c.owner_name
         FROM livre_driver_shift_closures c
         JOIN livre_users u ON u.id = c.driver_user_id
@@ -527,7 +612,9 @@ def close_driver_shift(
     cur.execute(
         """
         SELECT count(*) AS trip_count,
-               COALESCE(sum(CASE WHEN status = 'completed' THEN fare ELSE 0 END), 0) AS total_revenue
+               COALESCE(sum(CASE WHEN status = 'completed' THEN COALESCE(driver_net_amount, fare) ELSE 0 END), 0) AS total_revenue,
+               COALESCE(sum(CASE WHEN status = 'completed' THEN fare ELSE 0 END), 0) AS gross_revenue,
+               COALESCE(sum(CASE WHEN status = 'completed' THEN commission_amount ELSE 0 END), 0) AS commission_total
         FROM livi_trips
         WHERE assigned_driver_user_id = %s AND status IN ('completed', 'cancelled')
           AND COALESCE(completed_at, updated_at) >= %s::date
@@ -558,19 +645,23 @@ def close_driver_shift(
         """
         INSERT INTO livre_driver_shift_closures
             (driver_user_id, closure_date, trip_count, total_revenue,
-             vehicle_id, vehicle_label, vehicle_model, plate, owner_name)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, %s), %s)
+             gross_revenue, commission_total, vehicle_id, vehicle_label, vehicle_model, plate, owner_name)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, %s), %s)
         RETURNING id
         """,
         (user["id"], payload.closure_date, totals["trip_count"], totals["total_revenue"],
+         totals["gross_revenue"], totals["commission_total"],
          vehicle.get("vehicle_id"), vehicle.get("vehicle_label"), vehicle.get("vehicle_model"),
          vehicle.get("plate"), vehicle.get("effective_plate"), vehicle.get("owner_name")),
     )
     closure_id = cur.fetchone()["id"]
     cur.execute(
         """
-        INSERT INTO livre_driver_shift_closure_trips (closure_id, trip_id, fare)
-        SELECT %s, id, fare
+        INSERT INTO livre_driver_shift_closure_trips
+            (closure_id, trip_id, fare, payment_method, payment_confirmed,
+             commission_amount, driver_net_amount, owner_net_amount)
+        SELECT %s, id, fare, payment_method, payment_confirmed,
+               commission_amount, driver_net_amount, owner_net_amount
         FROM livi_trips
         WHERE assigned_driver_user_id = %s AND status IN ('completed', 'cancelled')
           AND COALESCE(completed_at, updated_at) >= %s::date
@@ -592,7 +683,8 @@ def driver_shift_closure_pdf(
     if not row:
         raise HTTPException(status_code=404, detail="Cierre no encontrado")
     cur.execute(
-        """SELECT t.id, t.origen, t.destino, ct.fare
+        """SELECT t.id, t.origen, t.destino, ct.fare,
+                      ct.commission_amount, ct.driver_net_amount
            FROM livre_driver_shift_closure_trips ct
            JOIN livi_trips t ON t.id = ct.trip_id
            WHERE ct.closure_id = %s ORDER BY t.id""",
@@ -608,10 +700,15 @@ def driver_shift_closure_pdf(
         f"Propietario: {row['owner_name'] or 'No informado'}",
         f"Fecha: {row['closure_date'].isoformat()}",
         f"Cantidad de viajes: {row['trip_count']}",
-        f"Recaudacion: ARS {row['total_revenue'] or 0}",
+        f"Recaudacion neta: ARS {row['total_revenue'] or 0}",
+        f"Recaudacion bruta: ARS {row.get('gross_revenue') or 0}",
+        f"Comision Livre: ARS {row.get('commission_total') or 0}",
         "Detalle de viajes:",
     ]
-    lines.extend(f"#{trip['id']} {trip['origen']} -> {trip['destino']} | ARS {trip['fare'] or 0}" for trip in trip_rows)
+    lines.extend(
+        f"#{trip['id']} {trip['origen']} -> {trip['destino']} | Bruto ARS {trip['fare'] or 0} | Comision ARS {trip.get('commission_amount') or 0} | Neto ARS {trip.get('driver_net_amount') or trip['fare'] or 0}"
+        for trip in trip_rows
+    )
     return Response(
         content=_summary_pdf(lines),
         media_type="application/pdf",
@@ -836,6 +933,12 @@ def driver_update_status(
             """,
             (trip_id, user["id"]),
         )
+    if payload.status == "completed":
+        _persist_trip_finance(cur, trip_id, payload, trip.get("fare"))
+        try:
+            close_whatsapp_conversation(trip)
+        except Exception as exc:
+            log.exception("[TRIP CLOSE] no se pudo cerrar la conversación trip_id=%s: %s", trip_id, exc)
     if previous_status == "assigned" and payload.status == "arriving":
         cur.execute("SELECT * FROM livi_trips WHERE id = %s", (trip_id,))
         arriving_trip = cur.fetchone()

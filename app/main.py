@@ -20,6 +20,7 @@ from app.voice.elevenlabs_memory import router as elevenlabs_memory_router
 from app.voice.elevenlabs_postcall import router as elevenlabs_postcall_router
 from app.voice.elevenlabs_debug import router as elevenlabs_debug_router
 from app.voice.elevenlabs_trip import router as elevenlabs_trip_router
+from app.voice.elevenlabs_trip import close_whatsapp_conversation
 from app.crm.router import router as crm_router
 from app.mobility.router import router as mobility_router
 @asynccontextmanager

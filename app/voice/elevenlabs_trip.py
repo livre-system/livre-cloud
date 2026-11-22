@@ -98,22 +98,40 @@ def send_tracking_message(trip: dict) -> str:
 
 
 def _whatsapp_user(body: dict, parameters: dict | None = None, data: dict | None = None) -> str:
-    """Obtiene la identidad de WhatsApp del contrato de LIVI/ElevenLabs."""
+    """Obtiene sólo el identificador WhatsApp explícito, nunca system__caller_id."""
     parameters = parameters or body.get("parameters", {}) or {}
     data = data or body.get("data", {}) or {}
     candidates = (
-        parameters.get("system__caller_id"),
         parameters.get("whatsapp_user"),
-        parameters.get("user_id"),
-        body.get("system__caller_id"),
+        parameters.get("livre_whatsapp_user"),
         body.get("whatsapp_user"),
-        body.get("user_id"),
-        data.get("system__caller_id"),
+        body.get("livre_whatsapp_user"),
         data.get("whatsapp_user"),
-        data.get("user_id"),
-        (data.get("metadata") or {}).get("system__caller_id"),
+        data.get("livre_whatsapp_user"),
     )
     return next((str(value).strip() for value in candidates if value), "")
+
+
+def close_whatsapp_conversation(trip: dict) -> None:
+    """Notifica el cierre de negocio antes de liberar la conversación del canal."""
+    conversation_id = str(trip.get("conversation_id") or "").strip()
+    trip_id = trip.get("id")
+    if not conversation_id or trip_id is None:
+        log.warning("[ELEVEN CLOSE] faltan conversation_id/trip_id; no se envía cierre")
+        return
+    log.info(
+        "[ELEVEN CLOSE] conversation_id=%s trip_id=%s trip_status=completed",
+        conversation_id,
+        trip_id,
+    )
+
+
+def _conversation_status_payload(conversation_id: str, trip_id: int, status: str) -> dict:
+    return {
+        "conversation_id": conversation_id,
+        "trip_id": str(trip_id),
+        "trip_status": status,
+    }
 
 
 def _get_existing_trip(conversation_id: str) -> dict | None:
@@ -526,6 +544,39 @@ def passenger_tracking(tracking_token: str):
     }
 
 
+@router.post("/initiation")
+async def conversation_initiation(request: Request):
+    """Devuelve variables requeridas por sesiones nativas de WhatsApp."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    caller_id = str(body.get("caller_id") or "").strip()
+    called_number = str(body.get("called_number") or "").strip()
+    conversation_id = str(body.get("conversation_id") or "").strip()
+    # Meta/ElevenLabs puede enviar el teléfono en formatos alternativos.
+    phone = str(
+        body.get("whatsapp_phone")
+        or body.get("livre_whatsapp_phone")
+        or body.get("phone")
+        or body.get("caller_phone")
+        or ""
+    ).strip()
+    if not phone and called_number and called_number.isdigit() and called_number.startswith("549"):
+        phone = called_number
+    log.info(
+        "[ELEVEN INIT] conversation_id=%s caller_id=%s phone_present=%s",
+        conversation_id,
+        caller_id,
+        bool(phone),
+    )
+    return {
+        "type": "conversation_initiation_client_data",
+        "dynamic_variables": {
+            "livre_whatsapp_user": caller_id,
+            "livre_whatsapp_phone": phone,
+        },
+    }
 @router.post("/trip")
 async def elevenlabs_trip(request: Request):
     """
@@ -601,8 +652,18 @@ async def elevenlabs_trip(request: Request):
     )
 
     whatsapp_user = _whatsapp_user(body, parameters, data)
+    whatsapp_phone = (
+        parameters.get("whatsapp_phone")
+        or parameters.get("livre_whatsapp_phone")
+        or body.get("whatsapp_phone")
+        or body.get("livre_whatsapp_phone")
+        or data.get("whatsapp_phone")
+        or data.get("livre_whatsapp_phone")
+        or ""
+    ).strip()
+    if not whatsapp_user and whatsapp_phone:
+        whatsapp_user = whatsapp_phone
 
-    log.info(f"[ELEVEN TRIP] conversation_id={conversation_id!r}")
     log.info(f"[ELEVEN TRIP] origen={origen!r}")
     log.info(f"[ELEVEN TRIP] destino={destino!r}")
     log.info(f"[ELEVEN TRIP] tool_name={tool_name!r} tool_call_id={tool_call_id!r} whatsapp={whatsapp_user!r}")
@@ -690,6 +751,8 @@ async def elevenlabs_trip(request: Request):
         "result": f"{_response} Link de seguimiento: {tracking_url}",
         "tracking_url": tracking_url,
         "trip_id": trip_id,
+        "conversation_status": _conversation_status_payload(conversation_id, trip_id, "completed"),
+        "close_conversation": True,
     }
 
 
@@ -716,5 +779,12 @@ async def elevenlabs_cancel(request: Request):
             "UPDATE livi_trips SET status='cancelled', updated_at=NOW() WHERE id=%s",
             [trip["id"]],
         )
-    log.info("[ELEVEN CANCEL] cancelled local trip_id=%s", trip["id"])
-    return {"result": "El viaje fue cancelado correctamente en Livre."}
+    return {
+        "result": "El viaje fue cancelado correctamente en Livre.",
+        "conversation_status": _conversation_status_payload(
+            str(body.get("conversation_id") or parameters.get("conversation_id") or data.get("conversation_id") or ""),
+            int(trip["id"]),
+            "cancelled",
+        ),
+        "close_conversation": True,
+    }
