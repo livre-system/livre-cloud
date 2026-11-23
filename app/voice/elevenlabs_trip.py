@@ -748,6 +748,7 @@ def _format_quote_message(options: list[dict]) -> str:
     return "\n".join(lines)
 
 
+@router.post("/initiation")
 @router.post("/conversation-init")
 async def conversation_init(request: Request):
     """Returns safe initiation data for inbound WhatsApp conversations."""
