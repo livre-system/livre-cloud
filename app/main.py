@@ -28,6 +28,7 @@ from app.crm.router import router as crm_router
 from app.mobility.router import router as mobility_router
 from app.payments.router import router as payments_router, whatsapp_router as whatsapp_payments_router
 from app.integrations.meta_webhook import router as meta_webhook_router
+from app.integrations.custom_channel import router as custom_channel_router
 from app.core.outbox import run_once
 
 @asynccontextmanager
@@ -104,6 +105,7 @@ app.include_router(mobility_router)
 app.include_router(payments_router)
 app.include_router(whatsapp_payments_router)
 app.include_router(meta_webhook_router)
+app.include_router(custom_channel_router)
 
 
 # Servir imágenes subidas al volumen
