@@ -752,6 +752,7 @@ def _operational_snapshot(cur, viewer_user_id: str | None = None):
             "driverUserId": str(row["user_id"]),
             "driverName": driver_name,
             "sessionActive": session_active,
+            "locationEligible": location_is_recent,
             "operationalStatus": operational_status,
             "operationalLabel": operational_label,
             "operationalState": effective_state,
