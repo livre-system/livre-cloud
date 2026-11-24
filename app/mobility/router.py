@@ -1131,6 +1131,18 @@ async def handie_voice_token(
         cur.execute("SELECT tracking_latitude, tracking_longitude, tracking_location_updated_at FROM livi_trips WHERE id=%s", (session["trip_id"],))
         current_location = cur.fetchone() or {}
 
+    last_cancelled = None
+    cur.execute(
+        """SELECT id, origen, destino, status, updated_at
+           FROM livi_trips
+           WHERE assigned_driver_user_id = %s
+             AND status = 'cancelled'
+           ORDER BY updated_at DESC NULLS LAST, created_at DESC
+           LIMIT 1""",
+        (user["id"],),
+    )
+    last_cancelled = cur.fetchone()
+
     api_key = os.getenv("ELEVENLABS_API_KEY", "").strip()
     if not api_key:
         raise HTTPException(status_code=503, detail="Asistente de voz no configurado")
@@ -1169,6 +1181,10 @@ async def handie_voice_token(
             "current_location_updated_at": current_location.get("tracking_location_updated_at"),
             "has_assigned_trip": bool(session["trip_id"]),
             "driver_can_ask_about_trip": True,
+            "last_cancelled_trip": {
+                "id": last_cancelled["id"], "origin": last_cancelled["origen"], "destination": last_cancelled["destino"],
+                "status": "cancelled", "explanation": "El último viaje asignado a este conductor fue cancelado y ya no está disponible.",
+            } if last_cancelled else None,
             "driver_can_reassign_by_voice_only": True,
             "in_progress_incident_flow": "Para auto roto u otro impedimento, preguntar motivo; usar la última ubicación GPS; confirmar envío de reemplazo; luego llamar a handle_in_progress_incident.",
         },
