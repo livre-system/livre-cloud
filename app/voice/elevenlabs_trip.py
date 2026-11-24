@@ -84,10 +84,7 @@ def _verify_elevenlabs_signature(raw_body: bytes, signature_header: str) -> bool
 
 router = APIRouter(prefix="/elevenlabs", tags=["elevenlabs"])
 
-TRACKING_BASE_URL = os.getenv(
-    "PASSENGER_TRACKING_BASE_URL",
-    "https://livre-pasajeros-production.up.railway.app",
-).rstrip("/")
+TRACKING_BASE_URL = os.getenv("PASSENGER_TRACKING_BASE_URL", os.getenv("PASSENGER_APP_URL", "https://livre-pasajeros-production.up.railway.app")).rstrip("/")
 ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/convai/whatsapp/outbound-message"
 ELEVENLABS_AGENT_ID = os.getenv("ELEVENLABS_AGENT_ID", "agent_3701m0dfvnmmemptqcm2jym9wdvv")
 ELEVENLABS_WHATSAPP_PHONE_NUMBER_ID = os.getenv(
