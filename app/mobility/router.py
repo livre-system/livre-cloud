@@ -228,6 +228,10 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
         "distance_km": option["routeDistance"],
         "origin": origin.get("formatted_address") or origin_text,
         "destination": destination.get("formatted_address") or destination_text,
+        "locations": {
+            "origin": {"latitude": origin["latitude"], "longitude": origin["longitude"]},
+            "destination": {"latitude": destination["latitude"], "longitude": destination["longitude"]},
+        },
         "route": geometry,
     }
 
