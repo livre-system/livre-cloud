@@ -68,6 +68,8 @@ def geocode_address(address: str, city: str = "Bahía Blanca") -> dict:
     result = results[0]
     requested_number = re.search(r"\b(\d{1,5})\b", address)
     returned_number = re.search(r"\b(\d{1,5})\b", result.get("address", {}).get("house_number", "") or result.get("display_name", ""))
+    if requested_number and not returned_number:
+        raise GeocodingError("el mapa no confirmó la altura solicitada")
     if requested_number and returned_number and requested_number.group(1) != returned_number.group(1):
         raise GeocodingError("el mapa devolvió otra altura para la dirección")
     try:

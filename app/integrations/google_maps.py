@@ -29,6 +29,8 @@ def parse_geocode_response(data: dict, requested_address: str = "") -> dict:
     result = results[0]
     requested_number = re.search(r"\b(\d{1,5})\b", requested_address or "")
     returned_number = re.search(r"\b(\d{1,5})\b", result.get("formatted_address", ""))
+    if requested_number and not returned_number:
+        raise GeocodingError("el mapa no confirmó la altura solicitada")
     if requested_number and returned_number and requested_number.group(1) != returned_number.group(1):
         raise GeocodingError("el mapa devolvió otra altura para la dirección")
     location = (result.get("geometry") or {}).get("location") or {}
