@@ -190,8 +190,12 @@ def quote_trip(payload: TripQuoteRequest, request: Request):
     destination_text = payload.destination.strip()
     distance_km = None
     try:
-        origin = geocode_address(origin_text)
-        destination = geocode_address(destination_text)
+        if all(value is not None for value in (payload.origin_latitude, payload.origin_longitude, payload.destination_latitude, payload.destination_longitude)):
+            origin = {"latitude": payload.origin_latitude, "longitude": payload.origin_longitude, "formatted_address": origin_text}
+            destination = {"latitude": payload.destination_latitude, "longitude": payload.destination_longitude, "formatted_address": destination_text}
+        else:
+            origin = geocode_address(origin_text)
+            destination = geocode_address(destination_text)
         distance_km = route_distance_km(origin, destination)
         options = historical_options(Decimal(str(distance_km)))
         option = next((item for item in options if str(item.get("transportTypeId")) == "2"), options[0])

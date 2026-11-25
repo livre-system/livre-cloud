@@ -43,6 +43,10 @@ class DriverOperationalStatusResponse(BaseModel):
 class TripQuoteRequest(BaseModel):
     origin: str = Field(min_length=3, max_length=240)
     destination: str = Field(min_length=3, max_length=240)
+    origin_latitude: float | None = None
+    origin_longitude: float | None = None
+    destination_latitude: float | None = None
+    destination_longitude: float | None = None
 
 
 class TripRequest(BaseModel):
