@@ -614,6 +614,7 @@ def _save_trip(
     payment_provider: str | None = None,
     paid_at: datetime | None = None,
     payment_reference: str | None = None,
+    coordinates: dict | None = None,
 ) -> tuple[int, str]:
     """Inserta el viaje con la distribución comercial canónica de Livre."""
     if original_fare is not None or fare is not None:
