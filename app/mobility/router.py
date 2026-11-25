@@ -948,6 +948,11 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                 )
                 AND t.status IN ('scheduled', 'searching')
                 AND t.assigned_driver_user_id IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM livre_trip_driver_exclusions excluded
+                    WHERE excluded.trip_id = t.id
+                      AND excluded.driver_user_id = %s
+                )
             )
             OR (
                 t.assigned_driver_user_id = %s
@@ -956,7 +961,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
         )
         ORDER BY t.created_at DESC
         """,
-        (user["id"], user["id"]),
+        (user["id"], user["id"], user["id"]),
     )
     return [_driver_trip(row) for row in cur.fetchall()]
 
@@ -1310,6 +1315,13 @@ def handie_reassign_trip(
         raise HTTPException(status_code=409, detail="El viaje no está disponible para reasignación")
     previous_status = session["status"]
     new_status = "scheduled" if session["scheduled_at"] is not None and session["scheduled_at"] > datetime.now(session["scheduled_at"].tzinfo) else "searching"
+    cur.execute(
+        """INSERT INTO livre_trip_driver_exclusions (trip_id, driver_user_id, reason)
+           VALUES (%s, %s, %s)
+           ON CONFLICT (trip_id, driver_user_id) DO UPDATE
+             SET reason = EXCLUDED.reason, created_at = NOW()""",
+        (session["trip_id"], user["id"], payload.reason.strip()),
+    )
     cur.execute(
         """UPDATE livi_trips
            SET status = %s, assigned_driver_user_id = NULL,
