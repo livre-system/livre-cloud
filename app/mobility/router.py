@@ -23,6 +23,7 @@ from app.core.operational_events import record_trip_event
 from app.integrations.google_maps import GeocodingError, geocode_address, route_distance_km, route_geometry
 from app.integrations.historical_quote import FARE_SOURCE_COMMERCIAL, commercial_fare, historical_options
 from app.memory.structured_ingestion import schedule_audio_transcription, schedule_conversation_message
+from app.mobility.coordinates import resolve_trip_coordinates
 from app.mobility.schemas import (
     DriverTrip,
     DriverHistoryResponse,
@@ -241,6 +242,7 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     destination = payload.destination.strip()
     if origin.casefold() == destination.casefold():
         raise HTTPException(status_code=422, detail="El origen y el destino deben ser distintos")
+    coordinates = resolve_trip_coordinates(origin, destination)
     tracking_token = secrets.token_urlsafe(32)
     financials = commercial_fare(payload.fare, service_type_id=str(payload.service_type_id))
     passenger_identity = (payload.whatsapp_user or "").strip()
@@ -256,11 +258,11 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
     cur.execute(
         """
         INSERT INTO livi_trips
-            (conversation_id, user_id, origen, destino, whatsapp_user, tracking_token,
+            (conversation_id, user_id, origen, destino, origen_latitude, origen_longitude, destino_latitude, destino_longitude, whatsapp_user, tracking_token,
              assigned_driver_user_id, tracking_driver_name, service_type_id,
              fare, original_fare, discount_percentage, discount_amount, final_fare, fare_source,
              activity_type, source, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, 'searching', NOW(), NOW())
         RETURNING id, tracking_token, status
         """,
         (
@@ -268,6 +270,10 @@ def request_trip(payload: TripRequest, request: Request, cur=Depends(get_cursor_
             user["id"] if user else None,
             origin,
             destination,
+            coordinates["origen_latitude"],
+            coordinates["origen_longitude"],
+            coordinates["destino_latitude"],
+            coordinates["destino_longitude"],
             passenger_identity,
             tracking_token,
             payload.service_type_id,

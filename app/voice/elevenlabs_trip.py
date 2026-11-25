@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from fastapi import APIRouter, Request, HTTPException
 from app.core.database import get_cursor
+from app.mobility.coordinates import resolve_trip_coordinates
 from app.integrations.google_maps import geocode_address, route_distance_km
 from app.integrations.historical_quote import (
     FARE_SOURCE_COMMERCIAL,
@@ -624,24 +625,26 @@ def _save_trip(
         discount_amount = financials["discount_amount"]
         final_fare = financials["final_fare"]
         fare_source = FARE_SOURCE_COMMERCIAL
+    coordinates = resolve_trip_coordinates(origen, destino)
     tracking_token = secrets.token_urlsafe(32)
     with get_cursor() as cur:
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, whatsapp_user, whatsapp_user_id, whatsapp_phone, tool_call_id,
+                (conversation_id, origen, destino, origen_latitude, origen_longitude, destino_latitude, destino_longitude, whatsapp_user, whatsapp_user_id, whatsapp_phone, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  activity_type, source, status, scheduled_at, payment_status, payment_method,
                  payment_provider, paid_at, payment_reference, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
                 conversation_id,
                 origen,
                 destino,
+                coordinates["origen_latitude"], coordinates["origen_longitude"], coordinates["destino_latitude"], coordinates["destino_longitude"],
                 whatsapp_user or "",
                 whatsapp_user or "",
                 whatsapp_phone or "",
