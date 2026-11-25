@@ -710,11 +710,15 @@ def _trip_status_message(trip: dict) -> str:
     return messages.get(str(trip.get("status")), "Estamos actualizando tu viaje.")
 
 
-def _run_local_quote(origen: str, destino: str) -> dict:
+def _run_local_quote(origen: str, destino: str, coordinates: dict | None = None) -> dict:
     """Cotiza con perfiles propios de Livre; no consulta proveedores externos."""
     try:
-        origin = geocode_address(origen)
-        destination = geocode_address(destino)
+        if coordinates and all(key in coordinates for key in ("origin_latitude", "origin_longitude", "destination_latitude", "destination_longitude")):
+            origin = {"latitude": float(coordinates["origin_latitude"]), "longitude": float(coordinates["origin_longitude"]), "formatted_address": origen}
+            destination = {"latitude": float(coordinates["destination_latitude"]), "longitude": float(coordinates["destination_longitude"]), "formatted_address": destino}
+        else:
+            origin = geocode_address(origen)
+            destination = geocode_address(destino)
         distance_km = route_distance_km(origin, destination)
         # WhatsApp/LIVI comunica el total bruto al pasajero. La distribución
         # 85/15 se calcula únicamente al confirmar y persistir el viaje.
@@ -831,7 +835,7 @@ async def elevenlabs_quote(request: Request):
     if not destino:
         return {"result": "Error: el destino no puede estar vacío."}
 
-    quote = _run_local_quote(origen, destino)
+    quote = _run_local_quote(origen, destino, body)
     if quote.get("error"):
         error_message = str(quote["error"])
         if "ambig" in error_message.lower():
