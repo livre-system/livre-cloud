@@ -1207,6 +1207,15 @@ async def handie_voice_token(
     }
 
 
+@router.get("/driver/handie/{session_id}/notifications")
+def handie_notifications(session_id: str, cur=Depends(get_cursor_dep), user: dict = Depends(require_driver)):
+    cur.execute("SELECT id FROM livre_handie_sessions WHERE id=%s AND driver_user_id=%s AND status='open'", (session_id, user["id"]))
+    if not cur.fetchone():
+        raise HTTPException(status_code=404, detail="Handie cerrado o inexistente")
+    cur.execute("SELECT t.id, t.origen, t.destino, t.status, t.conflict_reason, t.updated_at, e.event_type, e.actor_role, e.created_at, e.metadata FROM livi_trips t LEFT JOIN livre_trip_audit_events e ON e.trip_id=t.id WHERE t.assigned_driver_user_id=%s OR (e.actor_user_id=%s AND e.event_type='passenger_cancelled') ORDER BY COALESCE(e.created_at,t.updated_at) DESC LIMIT 50", (user["id"], user["id"]))
+    return {"notifications": [dict(row) for row in cur.fetchall()]}
+
+
 @router.post("/driver/handie/{session_id}/voice-events", status_code=201)
 def save_handie_voice_event(
     session_id: str,
