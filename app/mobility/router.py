@@ -948,11 +948,6 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                 )
                 AND t.status IN ('scheduled', 'searching')
                 AND t.assigned_driver_user_id IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM livre_trip_driver_exclusions excluded
-                    WHERE excluded.trip_id = t.id
-                      AND excluded.driver_user_id = %s
-                )
             )
             OR (
                 t.assigned_driver_user_id = %s
@@ -961,7 +956,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
         )
         ORDER BY t.created_at DESC
         """,
-        (user["id"], user["id"], user["id"]),
+        (user["id"], user["id"]),
     )
     return [_driver_trip(row) for row in cur.fetchall()]
 
