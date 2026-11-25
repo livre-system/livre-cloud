@@ -65,11 +65,11 @@ def geocode_address(address: str) -> dict:
         response.raise_for_status()
         return parse_geocode_response(response.json(), address)
     except GeocodingError as exc:
-        if str(exc) != "dirección no encontrada":
-            raise
         from app.integrations.nominatim import geocode_address as nominatim_geocode
-
-        return nominatim_geocode(address)
+        try:
+            return nominatim_geocode(address)
+        except Exception:
+            raise exc
     except Exception as exc:
         raise GeocodingError(f"no se pudo geocodificar la dirección: {exc}") from exc
 
