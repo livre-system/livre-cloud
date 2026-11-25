@@ -645,7 +645,7 @@ def _save_trip(
                 conversation_id,
                 origen,
                 destino,
-                coordinates["origen_latitude"], coordinates["origen_longitude"], coordinates["destino_latitude"], coordinates["destino_longitude"],
+                coordinates.get("origen_latitude", coordinates.get("origin_latitude")), coordinates.get("origen_longitude", coordinates.get("origin_longitude")), coordinates.get("destino_latitude", coordinates.get("destination_latitude")), coordinates.get("destino_longitude", coordinates.get("destination_longitude")),
                 whatsapp_user or "",
                 whatsapp_user or "",
                 whatsapp_phone or "",
