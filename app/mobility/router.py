@@ -406,16 +406,32 @@ def force_cancel_trip(trip_id: int, cur=Depends(get_cursor_dep)):
 def passenger_cancel_tracking(tracking_token: str, cur=Depends(get_cursor_dep)):
     """Cancela un pedido sólo mientras todavía no fue tomado por un conductor."""
     cur.execute(
+        """SELECT assigned_driver_user_id FROM livi_trips
+           WHERE tracking_token = %s AND created_at > NOW() - (%s * INTERVAL '1 hour')
+           LIMIT 1""",
+        (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
+    )
+    previous_assignment = cur.fetchone()
+    cur.execute(
         """UPDATE livi_trips
-              SET status = 'cancelled', updated_at = NOW()
+              SET status = 'cancelled', conflict_reason = COALESCE(conflict_reason, 'cancelled_by_passenger'), updated_at = NOW()
             WHERE tracking_token = %s
               AND created_at > NOW() - (%s * INTERVAL '1 hour')
               AND status IN ('pending', 'searching', 'scheduled', 'assigned', 'arriving', 'waiting', 'in_progress')
-            RETURNING id, status""",
+            RETURNING id, status, assigned_driver_user_id""",
         (tracking_token, PUBLIC_TRACKING_TOKEN_TTL_HOURS),
     )
     cancelled = cur.fetchone()
     if cancelled:
+        if previous_assignment and previous_assignment.get("assigned_driver_user_id"):
+            cur.execute("""INSERT INTO livre_trip_audit_events
+                (trip_id, actor_user_id, actor_role, event_type, new_status, event_key, metadata)
+                VALUES (%s, %s, 'passenger', 'passenger_cancelled', 'cancelled', %s, %s::jsonb)
+                ON CONFLICT (event_key) DO NOTHING""", (
+                    cancelled["id"], previous_assignment["assigned_driver_user_id"],
+                    f"passenger_cancelled:{cancelled['id']}",
+                    json.dumps({"assigned_driver_user_id": previous_assignment["assigned_driver_user_id"]}),
+                ))
         return {"trip_id": cancelled["id"], "status": cancelled["status"]}
     cur.execute("SELECT status FROM livi_trips WHERE tracking_token = %s", (tracking_token,))
     trip = cur.fetchone()
