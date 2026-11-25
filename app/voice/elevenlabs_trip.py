@@ -625,7 +625,7 @@ def _save_trip(
         discount_amount = financials["discount_amount"]
         final_fare = financials["final_fare"]
         fare_source = FARE_SOURCE_COMMERCIAL
-    coordinates = resolve_trip_coordinates(origen, destino)
+    coordinates = coordinates or resolve_trip_coordinates(origen, destino)
     tracking_token = secrets.token_urlsafe(32)
     with get_cursor() as cur:
         cur.execute(
@@ -1297,6 +1297,7 @@ async def elevenlabs_trip(request: Request):
             payment_provider=payment_provider,
             paid_at=paid_at,
             payment_reference=payment_reference,
+            coordinates=body,
         )
         if quote_id:
             with get_cursor() as cur:
