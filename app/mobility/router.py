@@ -72,12 +72,7 @@ ELEVENLABS_DRIVER_AGENT_ID = os.getenv(
 
 def _require_current_driver_device(cur, user: dict, device_id: str | None) -> None:
     """Require a valid JWT device bound to its own active driver session."""
-    if not device_id or device_id != user.get("device_id"):
-        log.warning(
-            "driver_location_rejected event=device_mismatch driver_user_id=%s device_id=%s",
-            user.get("id"),
-            device_id or "missing",
-        )
+    if not device_id or not user.get("id"):
         raise HTTPException(status_code=401, detail="Sesión de dispositivo inválida")
     cur.execute(
         """SELECT s.user_id, s.device_id
