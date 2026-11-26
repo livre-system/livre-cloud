@@ -177,6 +177,20 @@ def _backfill_public_vehicle_snapshot(cur, trip):
     return trip
 
 
+@router.get("/geocode")
+def geocode_for_dashboard(address: str):
+    """Geocodifica una dirección usando Google y valida su altura."""
+    try:
+        point = geocode_address(address.strip())
+    except GeocodingError as exc:
+        raise HTTPException(status_code=422, detail="No pudimos ubicar esa dirección exacta") from exc
+    return {
+        "latitude": point["latitude"],
+        "longitude": point["longitude"],
+        "formatted_address": point.get("formatted_address", address.strip()),
+    }
+
+
 @router.post("/quote")
 def quote_trip(payload: TripQuoteRequest, request: Request):
     """Calcula el importe con la tarifa vigente sin crear un viaje."""
