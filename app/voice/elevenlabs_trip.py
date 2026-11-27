@@ -574,6 +574,8 @@ def _save_whatsapp_quote(
 
 
 def _upsert_crm_passenger(name: str, phone: str, whatsapp_user: str) -> None:
+    if not phone.strip():
+        raise ValueError("No se recibió el número real de WhatsApp")
     parts = name.split(None, 1)
     first_name = parts[0][:80]
     last_name = (parts[1] if len(parts) > 1 else "-")[:120]
@@ -869,6 +871,8 @@ async def elevenlabs_quote(request: Request):
         or data.get("passenger_name")
         or ""
     ).strip()[:160]
+    if not passenger_name:
+        return {"result": "¿A nombre de quién registramos el viaje?"}
     option_text = _format_quote_message(options)
     quote_id = _save_whatsapp_quote(
         conversation_id=conversation_id,
