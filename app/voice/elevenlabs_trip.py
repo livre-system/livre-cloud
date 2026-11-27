@@ -246,26 +246,8 @@ def _whatsapp_phone(body: dict, parameters: dict | None = None, data: dict | Non
     data = data or body.get("data", {}) or {}
     candidates = [
         parameters.get("whatsapp_phone"),
-        parameters.get("phone"),
-        parameters.get("caller_id"),
-        parameters.get("system__caller_id"),
-        parameters.get("livre_whatsapp_phone"),
-        parameters.get("livre_whatsapp_user"),
-        parameters.get("passenger_id"),
         body.get("whatsapp_phone"),
-        body.get("phone"),
-        body.get("caller_id"),
-        body.get("system__caller_id"),
-        body.get("livre_whatsapp_phone"),
-        body.get("livre_whatsapp_user"),
-        body.get("passenger_id"),
         data.get("whatsapp_phone"),
-        data.get("phone"),
-        data.get("caller_id"),
-        data.get("system__caller_id"),
-        data.get("livre_whatsapp_phone"),
-        data.get("livre_whatsapp_user"),
-        data.get("passenger_id"),
     ]
     for raw in candidates:
         if not raw:
@@ -797,7 +779,7 @@ async def conversation_init(request: Request):
         "dynamic_variables": {
             "passenger_id": caller_id,
             "livre_whatsapp_user": caller_id,
-            "livre_whatsapp_phone": caller_id,
+            "livre_whatsapp_phone": caller_phone,
             "livre_conversation_id": conversation_id,
         },
     }
