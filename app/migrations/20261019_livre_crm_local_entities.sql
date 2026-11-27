@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS livre_crm_passengers (
 CREATE INDEX IF NOT EXISTS idx_livre_crm_passengers_search
     ON livre_crm_passengers (lower(last_name), lower(first_name), phone);
 
+ALTER TABLE livre_crm_passengers
+    ADD COLUMN IF NOT EXISTS whatsapp_user TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_livre_crm_passengers_phone
+    ON livre_crm_passengers (phone);
+
 CREATE TABLE IF NOT EXISTS livre_crm_vehicle_owners (
     id BIGSERIAL PRIMARY KEY,
     first_name TEXT NOT NULL,

@@ -558,26 +558,41 @@ def _identity_for_conversation(conversation_id: str, whatsapp_user: str, whatsap
 def _save_whatsapp_quote(
 
     *, conversation_id: str, whatsapp_user: str, whatsapp_phone: str = "",
-    origen: str, destino: str, options: list[dict], source: str = "whatsapp",
+    origen: str, destino: str, options: list[dict], passenger_name: str = "", source: str = "whatsapp",
 ) -> str:
     quote_id = str(uuid.uuid4())
     with get_cursor() as cur:
         cur.execute(
             """
             INSERT INTO livi_whatsapp_quotes
-                (quote_id, conversation_id, whatsapp_user, whatsapp_phone, source, origen, destino, options)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                (quote_id, conversation_id, whatsapp_user, whatsapp_phone, passenger_name, source, origen, destino, options)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
             """,
-            (quote_id, conversation_id, whatsapp_user, whatsapp_phone or "", source, origen, destino, json.dumps(options)),
+            (quote_id, conversation_id, whatsapp_user, whatsapp_phone or "", passenger_name or "", source, origen, destino, json.dumps(options)),
         )
     return quote_id
+
+
+def _upsert_crm_passenger(name: str, phone: str, whatsapp_user: str) -> None:
+    parts = name.split(None, 1)
+    first_name = parts[0][:80]
+    last_name = (parts[1] if len(parts) > 1 else "-")[:120]
+    with get_cursor() as cur:
+        cur.execute(
+            """INSERT INTO livre_crm_passengers (first_name, last_name, phone, whatsapp_user, raw_payload, updated_at)
+               VALUES (%s, %s, %s, %s, %s::jsonb, NOW())
+               ON CONFLICT (phone) DO UPDATE SET first_name=EXCLUDED.first_name,
+                 last_name=EXCLUDED.last_name, whatsapp_user=EXCLUDED.whatsapp_user,
+                 updated_at=NOW()""",
+            (first_name, last_name, phone, whatsapp_user, json.dumps({"source": "whatsapp"})),
+        )
 
 
 def _get_whatsapp_quote(quote_id: str, conversation_id: str, whatsapp_user: str, source: str = "whatsapp") -> dict | None:
     with get_cursor() as cur:
         cur.execute(
             """
-            SELECT quote_id, origen, destino, options
+            SELECT quote_id, origen, destino, options, passenger_name
             FROM livi_whatsapp_quotes
             WHERE quote_id = %s AND conversation_id = %s AND whatsapp_user = %s
               AND source = %s AND consumed_at IS NULL AND expires_at > NOW()
@@ -615,6 +630,7 @@ def _save_trip(
     paid_at: datetime | None = None,
     payment_reference: str | None = None,
     coordinates: dict | None = None,
+    passenger_name: str = "",
 ) -> tuple[int, str]:
     """Inserta el viaje con la distribución comercial canónica de Livre."""
     if original_fare is not None or fare is not None:
@@ -632,13 +648,13 @@ def _save_trip(
         cur.execute(
             """
             INSERT INTO livi_trips
-                (conversation_id, origen, destino, origen_latitude, origen_longitude, destino_latitude, destino_longitude, whatsapp_user, whatsapp_user_id, whatsapp_phone, tool_call_id,
+                (conversation_id, origen, destino, origen_latitude, origen_longitude, destino_latitude, destino_longitude, whatsapp_user, whatsapp_user_id, whatsapp_phone, passenger_name, tool_call_id,
                  tracking_token, assigned_driver_user_id, tracking_driver_name,
                  service_type_id, service_type_name, fare, quote_id,
                  original_fare, discount_percentage, discount_amount, final_fare, fare_source,
                  activity_type, source, status, scheduled_at, payment_status, payment_method,
                  payment_provider, paid_at, payment_reference, created_at, updated_at)
-                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id;
             """,
             (
@@ -649,6 +665,7 @@ def _save_trip(
                 whatsapp_user or "",
                 whatsapp_user or "",
                 whatsapp_phone or "",
+                passenger_name or "",
                 tool_call_id or "",
                 tracking_token,
                 service_type_id,
@@ -846,6 +863,12 @@ async def elevenlabs_quote(request: Request):
         quote.get("options", []),
         key=lambda option: {"1": 1, "2": 2}.get(str(option.get("transportTypeId")), 99),
     )[:2]]
+    passenger_name = str(
+        parameters.get("passenger_name")
+        or body.get("passenger_name")
+        or data.get("passenger_name")
+        or ""
+    ).strip()[:160]
     option_text = _format_quote_message(options)
     quote_id = _save_whatsapp_quote(
         conversation_id=conversation_id,
@@ -854,6 +877,7 @@ async def elevenlabs_quote(request: Request):
         origen=origen,
         destino=destino,
         options=options,
+        passenger_name=passenger_name,
     )
     return {
         "result": option_text,
@@ -1182,6 +1206,13 @@ async def elevenlabs_trip(request: Request):
     quote_snapshot = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user) if quote_id else None
     if quote_id and not quote_snapshot:
         return {"result": "La cotización de WhatsApp no existe, venció o ya fue usada."}
+    passenger_name = str((quote_snapshot or {}).get("passenger_name") or "").strip()[:160]
+    if not passenger_name:
+        passenger_name = str(
+            parameters.get("passenger_name") or body.get("passenger_name") or data.get("passenger_name") or ""
+        ).strip()[:160]
+    if not passenger_name:
+        return {"result": "Necesito el nombre del pasajero para registrar el viaje. ¿A nombre de quién lo registramos?"}
     service_type_id = resolve_service_type_id(
         service_type_id,
         service_type_label,
@@ -1299,7 +1330,9 @@ async def elevenlabs_trip(request: Request):
             paid_at=paid_at,
             payment_reference=payment_reference,
             coordinates=body,
+            passenger_name=passenger_name,
         )
+        _upsert_crm_passenger(passenger_name, whatsapp_phone, whatsapp_user)
         if quote_id:
             with get_cursor() as cur:
                 cur.execute(

@@ -620,7 +620,7 @@ def _driver_trip_or_404(cur, trip_id: int, user: dict, include_terminal: bool = 
                END) AS service_type_name,
                t.fare AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
-               t.final_fare, t.fare_source, t.whatsapp_user
+               t.final_fare, t.fare_source, t.whatsapp_user, t.passenger_name, t.whatsapp_phone
         FROM livi_trips t
         JOIN livre_driver_accounts a ON a.user_id = t.assigned_driver_user_id
         WHERE t.id = %s AND a.user_id = %s AND a.active = TRUE
@@ -696,6 +696,8 @@ def _driver_trip(trip) -> DriverTrip:
         final_fare=float(trip["final_fare"]) if trip["final_fare"] is not None else None,
         fare_source=trip["fare_source"],
         scheduled_at=trip.get("scheduled_at"),
+        passenger_name=trip.get("passenger_name"),
+        passenger_phone=trip.get("whatsapp_phone"),
     )
 
 
@@ -954,7 +956,7 @@ def driver_trips(cur=Depends(get_cursor_dep), user: dict = Depends(require_drive
                END) AS service_type_name,
                t.fare AS fare,
                t.original_fare, t.discount_percentage, t.discount_amount,
-               t.final_fare, t.fare_source, t.whatsapp_user
+               t.final_fare, t.fare_source, t.whatsapp_user, t.passenger_name, t.whatsapp_phone
         FROM livi_trips t
         WHERE (
             (

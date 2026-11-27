@@ -106,6 +106,8 @@ class DriverTrip(PublicTrip):
     final_fare: float | None = None
     fare_source: str | None = None
     scheduled_at: datetime | None = None
+    passenger_name: str | None = None
+    passenger_phone: str | None = None
 
 
 class DriverHistoryItem(BaseModel):

@@ -15,6 +15,12 @@ CREATE TABLE IF NOT EXISTS livi_whatsapp_quotes (
 CREATE INDEX IF NOT EXISTS idx_livi_whatsapp_quotes_conversation
     ON livi_whatsapp_quotes (conversation_id, created_at DESC);
 
+ALTER TABLE livi_whatsapp_quotes
+    ADD COLUMN IF NOT EXISTS passenger_name TEXT;
+
+ALTER TABLE livi_trips
+    ADD COLUMN IF NOT EXISTS passenger_name TEXT;
+
 ALTER TABLE livi_trips
     ADD COLUMN IF NOT EXISTS quote_id TEXT,
     ADD COLUMN IF NOT EXISTS original_fare NUMERIC(12, 2),
