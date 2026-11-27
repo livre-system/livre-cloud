@@ -79,7 +79,7 @@ def geocode_suggestions(address: str) -> list[dict]:
     if not GOOGLE_MAPS_API_KEY or not address.strip():
         return []
     import httpx
-    query = f"{address}, Buenos Aires, Argentina"
+    query = f"{address}, Bahía Blanca, Buenos Aires, Argentina"
     response = httpx.get(
         f"{GOOGLE_GEOCODING_URL}?address={quote_plus(query)}&language=es&region=ar&key={GOOGLE_MAPS_API_KEY}",
         timeout=15,
@@ -99,7 +99,7 @@ def geocode_suggestions(address: str) -> list[dict]:
     if not output:
         fallback = httpx.get(
             "https://nominatim.openstreetmap.org/search",
-            params={"q": f"{address}, Buenos Aires, Argentina", "format": "jsonv2", "limit": 5, "countrycodes": "ar"},
+            params={"q": f"{address}, Bahía Blanca, Buenos Aires, Argentina", "format": "jsonv2", "limit": 5, "countrycodes": "ar"},
             headers={"User-Agent": "LivreCloud/1.0"},
             timeout=15,
         ).json()
