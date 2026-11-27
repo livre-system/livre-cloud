@@ -96,6 +96,21 @@ def geocode_suggestions(address: str) -> list[dict]:
             "formatted_address": result.get("formatted_address", address.strip()),
             "placeId": result.get("place_id"),
         })
+    if not output:
+        fallback = httpx.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": f"{address}, Buenos Aires, Argentina", "format": "jsonv2", "limit": 5, "countrycodes": "ar"},
+            headers={"User-Agent": "LivreCloud/1.0"},
+            timeout=15,
+        ).json()
+        for result in fallback:
+            output.append({
+                "latitude": float(result["lat"]),
+                "longitude": float(result["lon"]),
+                "formatted_address": result.get("display_name", address.strip()),
+                "placeId": None,
+                "approximate": True,
+            })
     return output
 
 
