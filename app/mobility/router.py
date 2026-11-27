@@ -191,6 +191,15 @@ def geocode_for_dashboard(address: str):
     }
 
 
+@router.get("/geocode/suggestions")
+def geocode_suggestions_for_dashboard(address: str):
+    from app.integrations.google_maps import geocode_suggestions
+    try:
+        return {"suggestions": geocode_suggestions(address)}
+    except Exception:
+        return {"suggestions": []}
+
+
 @router.post("/quote")
 def quote_trip(payload: TripQuoteRequest, request: Request):
     """Calcula el importe con la tarifa vigente sin crear un viaje."""

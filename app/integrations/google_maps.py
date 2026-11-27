@@ -74,6 +74,31 @@ def geocode_address(address: str) -> dict:
         raise GeocodingError(f"no se pudo geocodificar la dirección: {exc}") from exc
 
 
+def geocode_suggestions(address: str) -> list[dict]:
+    """Devuelve candidatos de Google aunque no confirme la altura."""
+    if not GOOGLE_MAPS_API_KEY or not address.strip():
+        return []
+    import httpx
+    query = f"{address}, Buenos Aires, Argentina"
+    response = httpx.get(
+        f"{GOOGLE_GEOCODING_URL}?address={quote_plus(query)}&language=es&region=ar&key={GOOGLE_MAPS_API_KEY}",
+        timeout=15,
+    )
+    response.raise_for_status()
+    output = []
+    for result in (response.json().get("results") or [])[:5]:
+        location = (result.get("geometry") or {}).get("location") or {}
+        if "lat" not in location or "lng" not in location:
+            continue
+        output.append({
+            "latitude": float(location["lat"]),
+            "longitude": float(location["lng"]),
+            "formatted_address": result.get("formatted_address", address.strip()),
+            "placeId": result.get("place_id"),
+        })
+    return output
+
+
 def route_distance_km(origin: dict, destination: dict) -> float:
     """Obtiene distancia vial; usa OSRM si Google rechaza la solicitud."""
     if not GOOGLE_MAPS_API_KEY:
