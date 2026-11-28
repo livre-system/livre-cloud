@@ -802,6 +802,13 @@ async def conversation_init(request: Request):
             body.get("parameters", {}) or {},
             body.get("data", {}) or {},
         )
+    log.info(
+        "[ELEVEN INIT] identity_fields root=%s parameters=%s data=%s caller_phone_fp=%s",
+        sorted(str(k) for k in body.keys() if "phone" in str(k).lower() or "user" in str(k).lower() or "caller" in str(k).lower()),
+        sorted(str(k) for k in (body.get("parameters", {}) or {}).keys() if "phone" in str(k).lower() or "user" in str(k).lower() or "caller" in str(k).lower()),
+        sorted(str(k) for k in (body.get("data", {}) or {}).keys() if "phone" in str(k).lower() or "user" in str(k).lower() or "caller" in str(k).lower()),
+        _diag_identity(caller_phone),
+    )
     saved_name = ""
     if caller_phone:
         try:
