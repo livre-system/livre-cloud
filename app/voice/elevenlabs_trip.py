@@ -1339,25 +1339,42 @@ async def elevenlabs_trip(request: Request):
             coordinates=body,
             passenger_name=passenger_name,
         )
+    except Exception as e:
+        log.error(
+            "[ELEVEN TRIP] ERROR guardando viaje conversation_id=%s quote_id=%s service_type_id=%s passenger_name=%r: %s",
+            conversation_id, quote_id or "missing", service_type_id, passenger_name, e, exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="No se pudo guardar el viaje")
+
+    # El viaje ya existe: las operaciones secundarias no deben convertir una
+    # reserva válida en un error ni hacer que ElevenLabs reinicie el flujo.
+    try:
         _upsert_crm_passenger(passenger_name, whatsapp_phone, whatsapp_user)
-        if quote_id:
+    except Exception as e:
+        log.error("[ELEVEN TRIP] CRM passenger sync failed trip_id=%s: %s", trip_id, e, exc_info=True)
+
+    if quote_id:
+        try:
             with get_cursor() as cur:
                 cur.execute(
                     "UPDATE livi_whatsapp_quotes SET consumed_at = NOW() WHERE quote_id = %s",
                     (quote_id,),
                 )
-        if payment_id:
+        except Exception as e:
+            log.error("[ELEVEN TRIP] quote consume failed trip_id=%s quote_id=%s: %s", trip_id, quote_id, e, exc_info=True)
+
+    if payment_id:
+        try:
             with get_cursor() as cur:
                 cur.execute(
                     "UPDATE livi_payments SET trip_id = %s, tracking_token = %s, completed_at = NOW(), updated_at = NOW() WHERE id = %s AND trip_id IS NULL",
                     (trip_id, tracking_token, int(payment_id)),
                 )
-        log.info(f"[ELEVEN TRIP] quote consumed locally quote_id={quote_id!r}")
-        log.info("[ELEVEN TRACE] stage=persisted conversation_id=%s trip_id=%s whatsapp_user_fp=%s", conversation_id, trip_id, _diag_identity(whatsapp_user))
-        log.info(f"[ELEVEN TRIP] DB INSERT trip_id={trip_id} conversation_id={conversation_id!r} origen={origen!r} destino={destino!r}")
-    except Exception as e:
-        log.error(f"[ELEVEN TRIP] ERROR guardando viaje: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Error interno de base de datos")
+        except Exception as e:
+            log.error("[ELEVEN TRIP] payment link update failed trip_id=%s payment_id=%s: %s", trip_id, payment_id, e, exc_info=True)
+
+    log.info("[ELEVEN TRACE] stage=persisted conversation_id=%s trip_id=%s whatsapp_user_fp=%s", conversation_id, trip_id, _diag_identity(whatsapp_user))
+    log.info("[ELEVEN TRIP] DB INSERT trip_id=%s conversation_id=%r origen=%r destino=%r", trip_id, conversation_id, origen, destino)
 
     _response = f"Viaje registrado en Livre y buscando conductor. Origen: {origen} → Destino: {destino}."
     log.info(f"[ELEVEN TRIP] RESPONSE={_response!r}")
