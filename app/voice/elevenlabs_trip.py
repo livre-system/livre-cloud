@@ -578,17 +578,35 @@ def _upsert_crm_passenger(name: str, phone: str, whatsapp_user: str) -> None:
         )
 
 
-def _get_whatsapp_quote(quote_id: str, conversation_id: str, whatsapp_user: str, source: str = "whatsapp") -> dict | None:
+def _get_whatsapp_quote(quote_id: str | None, conversation_id: str, whatsapp_user: str, source: str = "whatsapp") -> dict | None:
+    """Recupera la cotización vigente; tolera quote_id ausente o cambiado por ElevenLabs."""
     with get_cursor() as cur:
+        if quote_id:
+            cur.execute(
+                """
+                SELECT quote_id, origen, destino, options, passenger_name
+                FROM livi_whatsapp_quotes
+                WHERE quote_id = %s AND conversation_id = %s AND whatsapp_user = %s
+                  AND source = %s AND consumed_at IS NULL AND expires_at > NOW()
+                FOR UPDATE
+                """,
+                (quote_id, conversation_id, whatsapp_user, source),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
         cur.execute(
             """
             SELECT quote_id, origen, destino, options, passenger_name
             FROM livi_whatsapp_quotes
-            WHERE quote_id = %s AND conversation_id = %s AND whatsapp_user = %s
+            WHERE conversation_id = %s AND whatsapp_user = %s
               AND source = %s AND consumed_at IS NULL AND expires_at > NOW()
+              AND origen <> '__identity__' AND destino <> '__identity__'
+            ORDER BY created_at DESC
+            LIMIT 1
             FOR UPDATE
             """,
-            (quote_id, conversation_id, whatsapp_user, source),
+            (conversation_id, whatsapp_user, source),
         )
         return cur.fetchone()
 
@@ -1210,9 +1228,12 @@ async def elevenlabs_trip(request: Request):
         log.warning("[ELEVEN TRIP] sin conversation_id — generando uno de fallback")
         conversation_id = f"fallback_{tool_call_id or 'unknown'}"
 
-    quote_snapshot = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user) if quote_id else None
-    if quote_id and not quote_snapshot:
-        return {"result": "La cotización de WhatsApp no existe, venció o ya fue usada."}
+    quote_snapshot = _get_whatsapp_quote(quote_id, conversation_id, whatsapp_user) if (quote_id or conversation_id) else None
+    if not quote_snapshot:
+        return {"result": "La cotización de WhatsApp no existe, venció o ya fue usada. Volvé a confirmar las opciones disponibles."}
+    # El snapshot recuperado es la fuente de verdad; puede aportar el quote_id
+    # aunque ElevenLabs lo haya omitido o cambiado en la llamada de registro.
+    quote_id = str(quote_snapshot.get("quote_id") or quote_id or "").strip() or None
     passenger_name = str((quote_snapshot or {}).get("passenger_name") or "").strip()[:160]
     if not passenger_name:
         passenger_name = str(
