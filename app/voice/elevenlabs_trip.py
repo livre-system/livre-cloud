@@ -818,8 +818,8 @@ async def conversation_init(request: Request):
                 cur.execute(
                     """SELECT TRIM(CONCAT_WS(' ', first_name, NULLIF(last_name, '-')))
                        FROM livre_crm_passengers
-                       WHERE phone IN (%s, %s) LIMIT 1""",
-                    (caller_phone, whatsapp_user),
+                       WHERE phone IN (%s, %s) OR whatsapp_user IN (%s, %s) LIMIT 1""",
+                    (caller_phone, whatsapp_user, caller_phone, whatsapp_user),
                 )
                 row = cur.fetchone()
                 if row:
