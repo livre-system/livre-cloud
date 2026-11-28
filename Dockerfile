@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y ffmpeg tesseract-ocr tesseract-ocr-spa 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && python -c "import itsdangerous; print(itsdangerous.__version__)"
 
 COPY . .
 
