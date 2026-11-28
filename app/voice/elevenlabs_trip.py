@@ -802,6 +802,8 @@ async def conversation_init(request: Request):
             body.get("parameters", {}) or {},
             body.get("data", {}) or {},
         )
+    whatsapp_user = caller_phone.removeprefix("+") if caller_phone else caller_id.removeprefix("+")
+
     log.info(
         "[ELEVEN INIT] identity_fields root=%s parameters=%s data=%s caller_phone_fp=%s",
         sorted(str(k) for k in body.keys() if "phone" in str(k).lower() or "user" in str(k).lower() or "caller" in str(k).lower()),
@@ -815,24 +817,25 @@ async def conversation_init(request: Request):
             with get_cursor() as cur:
                 cur.execute(
                     """SELECT TRIM(CONCAT_WS(' ', first_name, NULLIF(last_name, '-')))
-                       FROM livre_crm_passengers WHERE phone = %s LIMIT 1""",
-                    (caller_phone,),
+                       FROM livre_crm_passengers
+                       WHERE phone IN (%s, %s) LIMIT 1""",
+                    (caller_phone, whatsapp_user),
                 )
                 row = cur.fetchone()
                 if row:
                     saved_name = str(row[0] or "").strip()
         except Exception:
             log.exception("[ELEVEN INIT] no se pudo recuperar nombre del pasajero")
-    _save_conversation_identity(conversation_id, caller_id, caller_phone or caller_id)
+    _save_conversation_identity(conversation_id, whatsapp_user, caller_phone or whatsapp_user)
     log.info(
         "[ELEVEN TRACE] stage=conversation_init caller_fp=%s called_number=%s conversation_id=%s",
-        _diag_identity(caller_id), called_number or "missing", conversation_id or "missing",
+        _diag_identity(whatsapp_user), called_number or "missing", conversation_id or "missing",
     )
     return {
         "type": "conversation_initiation_client_data",
         "dynamic_variables": {
-            "passenger_id": caller_id,
-            "livre_whatsapp_user": caller_id,
+            "passenger_id": whatsapp_user,
+            "livre_whatsapp_user": whatsapp_user,
             "livre_whatsapp_phone": caller_phone,
             "livre_passenger_name": saved_name,
             "livre_conversation_id": conversation_id,
