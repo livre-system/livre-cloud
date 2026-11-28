@@ -787,6 +787,20 @@ async def conversation_init(request: Request):
         saved_user, saved_phone = _get_saved_identity(conversation_id)
         caller_id = saved_user or saved_phone
     caller_phone = _whatsapp_phone(body, body, body)
+    saved_name = ""
+    if caller_phone:
+        try:
+            with get_cursor() as cur:
+                cur.execute(
+                    """SELECT TRIM(CONCAT_WS(' ', first_name, NULLIF(last_name, '-')))
+                       FROM livre_crm_passengers WHERE phone = %s LIMIT 1""",
+                    (caller_phone,),
+                )
+                row = cur.fetchone()
+                if row:
+                    saved_name = str(row[0] or "").strip()
+        except Exception:
+            log.exception("[ELEVEN INIT] no se pudo recuperar nombre del pasajero")
     _save_conversation_identity(conversation_id, caller_id, caller_phone or caller_id)
     log.info(
         "[ELEVEN TRACE] stage=conversation_init caller_fp=%s called_number=%s conversation_id=%s",
@@ -797,7 +811,8 @@ async def conversation_init(request: Request):
         "dynamic_variables": {
             "passenger_id": caller_id,
             "livre_whatsapp_user": caller_id,
-            "livre_whatsapp_phone": caller_id,
+            "livre_whatsapp_phone": caller_phone,
+            "livre_passenger_name": saved_name,
             "livre_conversation_id": conversation_id,
         },
     }
