@@ -827,8 +827,14 @@ async def conversation_init(request: Request):
                        WHERE (regexp_replace(COALESCE(whatsapp_phone, ''), '[^0-9]', '', 'g') = %s
                            OR regexp_replace(COALESCE(whatsapp_user, ''), '[^0-9]', '', 'g') = %s)
                          AND passenger_name IS NOT NULL AND passenger_name <> ''
+                       UNION ALL
+                       SELECT passenger_name
+                       FROM livi_whatsapp_quotes
+                       WHERE (regexp_replace(COALESCE(whatsapp_phone, ''), '[^0-9]', '', 'g') = %s
+                           OR regexp_replace(COALESCE(whatsapp_user, ''), '[^0-9]', '', 'g') = %s)
+                         AND passenger_name IS NOT NULL AND passenger_name <> ''
                        ORDER BY passenger_name NULLS LAST LIMIT 1""",
-                    (phone_digits, phone_digits, phone_digits, phone_digits),
+                    (phone_digits, phone_digits, phone_digits, phone_digits, phone_digits, phone_digits),
                 )
                 row = cur.fetchone()
                 if row:
