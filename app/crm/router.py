@@ -302,8 +302,8 @@ def _local_page(cur, table: str, page: int, size: int, q: str = ""):
         where = f" WHERE {search}" if params else ""
         cur.execute(f"SELECT count(*) AS total FROM {table}{where}", params)
         total = int(cur.fetchone()["total"])
-        cur.execute(f"SELECT id, first_name, last_name, email, phone, country, raw_payload FROM {table}{where} ORDER BY id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
-        items = [{"id": r["id"], "raw_payload": {**(r["raw_payload"] or {}), "firstName": r["first_name"], "lastName": r["last_name"], "email": r["email"], "phone": r["phone"], "country": r["country"]}} for r in cur.fetchall()]
+        cur.execute(f"SELECT id, first_name, last_name, email, phone, whatsapp_user, country, raw_payload FROM {table}{where} ORDER BY id DESC LIMIT %s OFFSET %s", params + [size, (page - 1) * size])
+        items = [{"id": r["id"], "raw_payload": {**(r["raw_payload"] or {}), "firstName": r["first_name"], "lastName": r["last_name"], "email": r["email"], "phone": r["phone"], "whatsappUser": r["whatsapp_user"], "country": r["country"]}} for r in cur.fetchall()]
     elif table == "livre_crm_vehicle_owners":
         search = "(first_name ILIKE %s OR last_name ILIKE %s OR phone ILIKE %s OR COALESCE(email, '') ILIKE %s OR COALESCE(identification, '') ILIKE %s)"
         params = [f"%{q.strip()}%"] * 5 if q.strip() else []
@@ -1398,11 +1398,11 @@ def live_passengers(
 
 @router.get("/passengers/{passenger_id}")
 def live_passenger(passenger_id: int, user: dict = Depends(_require_crm_operator), cur=Depends(get_cursor_dep)):
-    cur.execute("SELECT id, first_name, last_name, email, phone, country, raw_payload FROM livre_crm_passengers WHERE id = %s", (passenger_id,))
+    cur.execute("SELECT id, first_name, last_name, email, phone, whatsapp_user, country, raw_payload FROM livre_crm_passengers WHERE id = %s", (passenger_id,))
     row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Cliente no encontrado en Livre Cloud")
-    return {"id": row["id"], "firstName": row["first_name"], "lastName": row["last_name"], "email": row["email"], "phone": row["phone"], "country": row["country"], **(row["raw_payload"] or {}), "source": "livre-cloud"}
+    return {"id": row["id"], "firstName": row["first_name"], "lastName": row["last_name"], "email": row["email"], "phone": row["phone"], "whatsappUser": row["whatsapp_user"], "country": row["country"], **(row["raw_payload"] or {}), "source": "livre-cloud"}
 
 
 @router.put("/travels/{travel_id}/cancel")
