@@ -246,8 +246,11 @@ def _whatsapp_phone(body: dict, parameters: dict | None = None, data: dict | Non
     data = data or body.get("data", {}) or {}
     candidates = [
         parameters.get("whatsapp_phone"),
+        parameters.get("livre_whatsapp_phone"),
         body.get("whatsapp_phone"),
+        body.get("livre_whatsapp_phone"),
         data.get("whatsapp_phone"),
+        data.get("livre_whatsapp_phone"),
         parameters.get("phone"),
         body.get("phone"),
         data.get("phone"),
@@ -793,6 +796,12 @@ async def conversation_init(request: Request):
         saved_user, saved_phone = _get_saved_identity(conversation_id)
         caller_id = saved_user or saved_phone
     caller_phone = _whatsapp_phone(body, body, body)
+    if not caller_phone:
+        caller_phone = _whatsapp_phone(
+            {"livre_whatsapp_phone": body.get("livre_whatsapp_phone") or body.get("whatsapp_phone")},
+            body.get("parameters", {}) or {},
+            body.get("data", {}) or {},
+        )
     saved_name = ""
     if caller_phone:
         try:
