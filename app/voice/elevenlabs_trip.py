@@ -565,8 +565,9 @@ def _save_whatsapp_quote(
 
 
 def _upsert_crm_passenger(name: str, phone: str, whatsapp_user: str) -> None:
-    if not phone.strip():
-        raise ValueError("No se recibió el número real de WhatsApp")
+    effective_phone = phone.strip() or whatsapp_user.strip()
+    if not effective_phone:
+        raise ValueError("No se recibió la identidad real de WhatsApp")
     parts = name.split(None, 1)
     first_name = parts[0][:80]
     last_name = (parts[1] if len(parts) > 1 else "-")[:120]
@@ -577,7 +578,7 @@ def _upsert_crm_passenger(name: str, phone: str, whatsapp_user: str) -> None:
                ON CONFLICT (phone) DO UPDATE SET first_name=EXCLUDED.first_name,
                  last_name=EXCLUDED.last_name, whatsapp_user=EXCLUDED.whatsapp_user,
                  updated_at=NOW()""",
-            (first_name, last_name, phone, whatsapp_user, json.dumps({"source": "whatsapp"})),
+            (first_name, last_name, effective_phone, whatsapp_user, json.dumps({"source": "whatsapp"})),
         )
 
 
@@ -938,6 +939,12 @@ async def elevenlabs_quote(request: Request):
         options=options,
         passenger_name=passenger_name,
     )
+    try:
+        # Persistir el nombre al cotizar garantiza reconocimiento aunque la
+        # conversación termine antes de registrar el viaje.
+        _upsert_crm_passenger(passenger_name, whatsapp_phone, whatsapp_user)
+    except Exception as exc:
+        log.error("[ELEVEN QUOTE] CRM passenger persistence failed: %s", exc, exc_info=True)
     return {
         "result": option_text,
         "options": options,
