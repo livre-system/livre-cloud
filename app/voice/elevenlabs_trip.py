@@ -815,18 +815,20 @@ async def conversation_init(request: Request):
     if caller_phone:
         try:
             with get_cursor() as cur:
+                phone_digits = re.sub(r"\D", "", caller_phone or whatsapp_user)
                 cur.execute(
                     """SELECT TRIM(CONCAT_WS(' ', first_name, NULLIF(last_name, '-'))) AS passenger_name
                        FROM livre_crm_passengers
-                       WHERE phone IN (%s, %s) OR whatsapp_user IN (%s, %s)
+                       WHERE regexp_replace(COALESCE(phone, ''), '[^0-9]', '', 'g') = %s
+                          OR regexp_replace(COALESCE(whatsapp_user, ''), '[^0-9]', '', 'g') = %s
                        UNION ALL
                        SELECT passenger_name
                        FROM livi_trips
-                       WHERE (whatsapp_phone IN (%s, %s) OR whatsapp_user IN (%s, %s))
+                       WHERE (regexp_replace(COALESCE(whatsapp_phone, ''), '[^0-9]', '', 'g') = %s
+                           OR regexp_replace(COALESCE(whatsapp_user, ''), '[^0-9]', '', 'g') = %s)
                          AND passenger_name IS NOT NULL AND passenger_name <> ''
                        ORDER BY passenger_name NULLS LAST LIMIT 1""",
-                    (caller_phone, whatsapp_user, caller_phone, whatsapp_user,
-                     caller_phone, whatsapp_user, caller_phone, whatsapp_user),
+                    (phone_digits, phone_digits, phone_digits, phone_digits),
                 )
                 row = cur.fetchone()
                 if row:
