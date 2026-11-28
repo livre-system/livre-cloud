@@ -248,6 +248,12 @@ def _whatsapp_phone(body: dict, parameters: dict | None = None, data: dict | Non
         parameters.get("whatsapp_phone"),
         body.get("whatsapp_phone"),
         data.get("whatsapp_phone"),
+        parameters.get("phone"),
+        body.get("phone"),
+        data.get("phone"),
+        parameters.get("caller_id"),
+        body.get("caller_id"),
+        data.get("caller_id"),
     ]
     for raw in candidates:
         if not raw:
